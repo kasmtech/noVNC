@@ -40,6 +40,13 @@ export default class Keyboard {
         if (down) {
             this._keyDownList[code] = keysym;
         } else {
+            // On MacOs zoom and shortcut actions are CMD based so we need to
+            // let the remote know that it should unselect the CTRL key instead
+            if (browser.isMac() && code === "MetaLeft" && this._keyDownList["ControlLeft"]) {
+                keysym = KeyTable.XK_Control_L;
+                code = "ControlLeft";
+            }
+
             // Do we really think this key is down?
             if (!(code in this._keyDownList)) {
                 return;
@@ -196,6 +203,16 @@ export default class Keyboard {
         stopEvent(e);
 
         const code = this._getKeyCode(e);
+
+        // unselect CTRL on the remote machine whenever any CMD+KEY shortcut
+        // was being pressed
+        if (browser.isMac() && code === "MetaLeft") {
+            const isAnyShortcutKeyPressed = MAC_SHORTCUT_KEYS.find(key => !!this._keyDownList[key]);
+
+            if (isAnyShortcutKeyPressed && this._keyDownList["ControlLeft"]) {
+                this._sendKeyEvent(KeyTable.XK_Control_L, "ControlLeft", false);
+            }
+        }
 
         // We can't get a release in the middle of an AltGr sequence, so
         // abort that detection

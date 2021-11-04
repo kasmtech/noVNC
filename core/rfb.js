@@ -343,7 +343,62 @@ export default class RFB extends EventTargetMixin {
     set clipboardBinary(val) { this._clipboardMode = val; }
 
     get videoQuality() { return this._videoQuality; }
-    set videoQuality(quality) { this._videoQuality = quality; }
+    set videoQuality(quality) 
+    { 
+        switch (quality === 1) {
+            case 3: // highest setting
+                this._videoQuality = quality; 
+                this._jpegVideoQuality = 8;
+                this._webpVideoQuality = 8;
+                this._treatLossless = 9;
+                this._preferBandwidth = true;
+                this._dynamicQualityMin = 7;
+                this._dynamicQualityMax = 9;
+                this._videoArea = 65;
+                this._videoTime = 5;
+                this._videoOutTime = 3;
+                this._videoScaling = 0;
+                this._frameRate = 30;
+                this._maxVideoResolutionX = 1920;
+                this._maxVideoResolutionY = 1080;
+                break;
+            case 1: // low, resolution capped at 720p keeping aspect ratio
+                this._jpegVideoQuality = 5;
+                this._webpVideoQuality = 5;
+                this._treatLossless = 7;
+                this._preferBandwidth = true;
+                this._dynamicQualityMin = 3;
+                this._dynamicQualityMax = 7;
+                this._videoArea = 65;
+                this._videoTime = 5;
+                this._videoOutTime = 3;
+                this._videoScaling = 0;
+                this._frameRate = 22;
+                this._maxVideoResolutionX = 960;
+                this._maxVideoResolutionY = 540;
+                break;
+            case 2: // medium
+            case 0: // static resolution, but same settings as medium
+            default:
+                this._jpegVideoQuality = 7;
+                this._webpVideoQuality = 7;
+                this._treatLossless = 7;
+                this._preferBandwidth = true;
+                this._dynamicQualityMin = 3;
+                this._dynamicQualityMax = 9;
+                this._videoArea = 65;
+                this._videoTime = 5;
+                this._videoOutTime = 3;
+                this._videoScaling = 0;
+                this._frameRate = 30;
+                this._maxVideoResolutionX = 960;
+                this._maxVideoResolutionY = 540;
+        }
+
+        if (this._rfbConnectionState === 'connected') {
+            this._sendEncodings();
+        }
+    }
 
     get preferBandwidth() { return this._preferBandwidth; }
     set preferBandwidth(val) { this._preferBandwidth = val; }
@@ -2198,16 +2253,6 @@ export default class RFB extends EventTargetMixin {
         var quality = 6;
         var compression = 2;
         var screensize = this._screenSize(false);
-        if (this.videoQuality == 1) {
-            if (screensize.w > 1280) {
-                quality = 8; //higher quality needed because scaling enlarges artifacts
-            } else {
-                quality = 3; //twice the compression ratio as default, but not horrible quality
-            }
-            compression = 6;
-        } else if (this.videoQuality == 3) {
-            quality = 8
-        }
         encs.push(encodings.pseudoEncodingQualityLevel0 + this._qualityLevel);
         encs.push(encodings.pseudoEncodingCompressLevel0 + this._compressionLevel);
 

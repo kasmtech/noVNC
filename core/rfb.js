@@ -345,63 +345,19 @@ export default class RFB extends EventTargetMixin {
     get videoQuality() { return this._videoQuality; }
     set videoQuality(quality) 
     { 
-        switch (quality === 1) {
-            case 3: // highest setting
-                this._videoQuality = quality; 
-                this._jpegVideoQuality = 8;
-                this._webpVideoQuality = 8;
-                this._treatLossless = 9;
-                this._preferBandwidth = true;
-                this._dynamicQualityMin = 7;
-                this._dynamicQualityMax = 9;
-                this._videoArea = 65;
-                this._videoTime = 5;
-                this._videoOutTime = 3;
-                this._videoScaling = 0;
-                this._frameRate = 30;
-                this._maxVideoResolutionX = 1920;
-                this._maxVideoResolutionY = 1080;
-                break;
-            case 1: // low, resolution capped at 720p keeping aspect ratio
-                this._jpegVideoQuality = 5;
-                this._webpVideoQuality = 5;
-                this._treatLossless = 7;
-                this._preferBandwidth = true;
-                this._dynamicQualityMin = 3;
-                this._dynamicQualityMax = 7;
-                this._videoArea = 65;
-                this._videoTime = 5;
-                this._videoOutTime = 3;
-                this._videoScaling = 0;
-                this._frameRate = 22;
-                this._maxVideoResolutionX = 960;
-                this._maxVideoResolutionY = 540;
-                break;
-            case 2: // medium
-            case 0: // static resolution, but same settings as medium
-            default:
-                this._jpegVideoQuality = 7;
-                this._webpVideoQuality = 7;
-                this._treatLossless = 7;
-                this._preferBandwidth = true;
-                this._dynamicQualityMin = 3;
-                this._dynamicQualityMax = 9;
-                this._videoArea = 65;
-                this._videoTime = 5;
-                this._videoOutTime = 3;
-                this._videoScaling = 0;
-                this._frameRate = 30;
-                this._maxVideoResolutionX = 960;
-                this._maxVideoResolutionY = 540;
+        //if changing to or from a video quality mode that uses a fixed resolution server side
+        if (this._videoQuality <= 1 || quality <= 1) {
+            this._pendingApplyResolutionChange = true;
         }
-
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
+        this._videoQuality = quality;
+        this._pendingApplyEncodingChanges = true;
     }
 
     get preferBandwidth() { return this._preferBandwidth; }
-    set preferBandwidth(val) { this._preferBandwidth = val; }
+    set preferBandwidth(val) { 
+        this._preferBandwidth = val; 
+        this._pendingApplyEncodingChanges = true;
+    }
 
     get viewOnly() { return this._viewOnly; }
     set viewOnly(viewOnly) {
@@ -466,9 +422,7 @@ export default class RFB extends EventTargetMixin {
             return;
         }
         this._enableWebP = enabled; 
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
+        this._pendingApplyEncodingChanges = true;
     }
 
     get antiAliasing() { return this._display.antiAliasing; }
@@ -488,10 +442,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._jpegVideoQuality = qualityLevel;
-
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
+        this._pendingApplyEncodingChanges = true;
     }
 
     get webpVideoQuality() { return this._webpVideoQuality; }
@@ -506,10 +457,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._webpVideoQuality = qualityLevel;
-        
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
+        this._pendingApplyEncodingChanges = true;
     }
 
     get treatLossless() { return this._treatLossless; }
@@ -524,10 +472,6 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._treatLossless = qualityLevel;
-        
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
     }
 
     get dynamicQualityMin() { return this._dynamicQualityMin; }
@@ -542,10 +486,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._dynamicQualityMin = qualityLevel;
-        
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
+        this._pendingApplyEncodingChanges = true;
     }
 
     get dynamicQualityMax() { return this._dynamicQualityMax; }
@@ -560,10 +501,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._dynamicQualityMax = qualityLevel;
-        
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
+        this._pendingApplyEncodingChanges = true;
     }
 
     get videoArea() {
@@ -580,10 +518,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._videoArea = area;
-
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
+        this._pendingApplyEncodingChanges = true;
     }
 
     get videoTime() {
@@ -600,10 +535,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._videoTime = value;
-
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
+        this._pendingApplyEncodingChanges = true;
     }
 
     get videoOutTime() {
@@ -620,10 +552,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._videoOutTime = value;
-
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
+        this._pendingApplyEncodingChanges = true;
     }
 
     get videoScaling() {
@@ -640,10 +569,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._videoScaling = value;
-
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
+        this._pendingApplyEncodingChanges = true;
     }
 
     get frameRate() { return this._frameRate; }
@@ -658,10 +584,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._frameRate = value;
-
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
+        this._pendingApplyEncodingChanges = true;
     }
 
     get maxVideoResolutionX() { return this._maxVideoResolutionX; }
@@ -676,13 +599,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._maxVideoResolutionX = value;
-
-        if (this._rfbConnectionState === 'connected') {
-            RFB.messages.setMaxVideoResolution(this._sock,
-                this._maxVideoResolutionX,
-                this._maxVideoResolutionY);
-        }
-
+        this._pendingApplyVideoRes = true;
     }
 
     get maxVideoResolutionY() { return this._maxVideoResolutionY; }
@@ -697,12 +614,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._maxVideoResolutionY = value;
-
-        if (this._rfbConnectionState === 'connected') {
-            RFB.messages.setMaxVideoResolution(this._sock,
-                this._maxVideoResolutionX,
-                this._maxVideoResolutionY);
-        }
+        this._pendingApplyVideoRes = true;
     }
 
     get qualityLevel() {
@@ -719,10 +631,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._qualityLevel = qualityLevel;
-
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
+        this._pendingApplyEncodingChanges = true;
     }
 
     get compressionLevel() {
@@ -746,6 +655,30 @@ export default class RFB extends EventTargetMixin {
     }
 
     // ===== PUBLIC METHODS =====
+
+    /*
+    This function must be called after changing any properties that effect rendering quality
+    */
+    updateConnectionSettings() {
+        if (this._rfbConnectionState === 'connected') {
+            if (this._pendingApplyEncodingChanges) {
+                this._sendEncodings();
+            }
+            
+            if (this._pendingApplyVideoRes) {
+                RFB.messages.setMaxVideoResolution(this._sock, this._maxVideoResolutionX, this._maxVideoResolutionY);
+            }
+
+            if (this._pendingApplyResolutionChange) {
+                this._requestRemoteResize();
+            }
+
+            this._pendingApplyVideoRes = false;
+            this._pendingApplyEncodingChanges = false;
+            this._pendingApplyResolutionChange = false;
+        }
+        
+    }
 
     disconnect() {
         this._updateConnectionState('disconnecting');

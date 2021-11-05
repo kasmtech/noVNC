@@ -206,6 +206,7 @@ const UI = {
         UI.initSetting('treat_lossless', 7);
         UI.initSetting('jpeg_video_quality', 5);
         UI.initSetting('webp_video_quality', 5);
+        UI.initSetting('video_quality', 2);
         UI.initSetting('anti_aliasing', 0);
         UI.initSetting('video_area', 65);
         UI.initSetting('video_time', 5);
@@ -228,14 +229,12 @@ const UI = {
         UI.initSetting('enable_perf_stats', false);
 
         if (WebUtil.isInsideKasmVDI()) {
-            UI.initSetting('video_quality', 1);
             UI.initSetting('clipboard_up', false);
             UI.initSetting('clipboard_down', false);
             UI.initSetting('clipboard_seamless', false);
             UI.initSetting('enable_webp', false);
             UI.initSetting('resize', 'off');
         } else {
-            UI.initSetting('video_quality', 3);
             UI.initSetting('clipboard_up', true);
             UI.initSetting('clipboard_down', true);
             UI.initSetting('clipboard_seamless', true);
@@ -244,6 +243,7 @@ const UI = {
         }
 
         UI.setupSettingLabels();
+        UI.updateQuality();
     },
     // Adds a link to the label elements on the corresponding input elements
     setupSettingLabels() {
@@ -430,6 +430,8 @@ const UI = {
         UI.addSettingChangeHandler('treat_lossless', UI.updateQuality);
         UI.addSettingChangeHandler('anti_aliasing');
         UI.addSettingChangeHandler('anti_aliasing', UI.updateQuality);
+        UI.addSettingChangeHandler('video_quality');
+        UI.addSettingChangeHandler('video_quality', UI.updateQuality);
         UI.addSettingChangeHandler('jpeg_video_quality');
         UI.addSettingChangeHandler('jpeg_video_quality', UI.updateQuality);
         UI.addSettingChangeHandler('webp_video_quality');
@@ -862,10 +864,14 @@ const UI = {
     },
 
     // Set the new value, update and disable form control setting
-    forceSetting(name, val) {
+    forceSetting(name, val, disable=true) {
         WebUtil.setSetting(name, val);
         UI.updateSetting(name);
-        UI.disableSetting(name);
+        if (disable) {
+            UI.disableSetting(name);
+        } else {
+            UI.enableSetting(name);
+        }
     },
 
     // Update cookie and form control setting. If value is not set, then
@@ -974,6 +980,7 @@ const UI = {
         UI.updateSetting('anti_aliasing', 0);
         UI.updateSetting('jpeg_video_quality', 5);
         UI.updateSetting('webp_video_quality', 5);
+        UI.updateSetting('video_quality', 2);
         UI.updateSetting('video_area', 65);
         UI.updateSetting('video_time', 5);
         UI.updateSetting('video_out_time', 3);
@@ -1704,9 +1711,89 @@ const UI = {
  * ------v------*/
 
     updateQuality() {
-        if (!UI.rfb) return;
+        let present_mode = parseInt(UI.getSetting('video_quality'));
 
-        if (!UI.updatingSettings) {
+        // video_quality preset values
+        switch (present_mode) {
+            case 10: //custom
+                UI.enableSetting('dynamic_quality_min');
+                UI.enableSetting('dynamic_quality_max');
+                UI.enableSetting('treat_lossless');
+                UI.enableSetting('video_time');
+                UI.enableSetting('video_area');
+                UI.enableSetting('max_video_resolution_x');
+                UI.enableSetting('max_video_resolution_y');
+                UI.enableSetting('jpeg_video_quality');
+                UI.enableSetting('webp_video_quality');
+                UI.enableSetting('framerate');
+                UI.enableSetting('video_scaling');
+                UI.enableSetting('video_out_time');
+                break;
+            case 4: //extreme
+                UI.forceSetting('dynamic_quality_min', 8);
+                UI.forceSetting('dynamic_quality_max', 9);
+                UI.forceSetting('framerate', 30);
+                UI.forceSetting('treat_lossless', 8);
+
+                // effectively disables video mode
+                UI.forceSetting('video_time', 300);
+                UI.forceSetting('video_area', 100);
+                // go ahead and set video mode settings, won't be used
+                UI.forceSetting('max_video_resolution_x', 1920);
+                UI.forceSetting('max_video_resolution_y', 1080);
+                UI.forceSetting('jpeg_video_quality', 8);
+                UI.forceSetting('webp_video_quality', 8);
+                UI.forceSetting('video_scaling', 0);
+                UI.forceSetting('video_out_time', 3);
+                break;
+            case 3: // high
+                UI.forceSetting('jpeg_video_quality', 8);
+                UI.forceSetting('webp_video_quality', 8);
+                UI.forceSetting('dynamic_quality_min', 7);
+                UI.forceSetting('dynamic_quality_max', 9);
+                UI.forceSetting('max_video_resolution_x', 1920);
+                UI.forceSetting('max_video_resolution_y', 1080);
+                UI.forceSetting('framerate', 30);
+                UI.forceSetting('treat_lossless', 8);
+                UI.forceSetting('video_time', 5);
+                UI.forceSetting('video_area', 65);
+                UI.forceSetting('video_scaling', 0);
+                UI.forceSetting('video_out_time', 3);
+                break;
+            case 1: // low, resolution capped at 720p keeping aspect ratio
+                UI.forceSetting('jpeg_video_quality', 5);
+                UI.forceSetting('webp_video_quality', 4);
+                UI.forceSetting('dynamic_quality_min', 3);
+                UI.forceSetting('dynamic_quality_max', 7);
+                UI.forceSetting('max_video_resolution_x', 960);
+                UI.forceSetting('max_video_resolution_y', 540);
+                UI.forceSetting('framerate', 22);
+                UI.forceSetting('treat_lossless', 7);
+                UI.forceSetting('video_time', 5);
+                UI.forceSetting('video_area', 65);
+                UI.forceSetting('video_scaling', 0);
+                UI.forceSetting('video_out_time', 3);
+                break;
+            case 2: // medium
+            case 0: // static resolution, but same settings as medium
+            default:
+                UI.forceSetting('jpeg_video_quality', 7);
+                UI.forceSetting('webp_video_quality', 7);
+                UI.forceSetting('dynamic_quality_min', 4);
+                UI.forceSetting('dynamic_quality_max', 9);
+                UI.forceSetting('max_video_resolution_x', 960);
+                UI.forceSetting('max_video_resolution_y', 540);
+                UI.forceSetting('framerate', 24);
+                UI.forceSetting('treat_lossless', 7);
+                UI.forceSetting('video_time', 5);
+                UI.forceSetting('video_area', 65);
+                UI.forceSetting('video_scaling', 0);
+                UI.forceSetting('video_out_time', 3);
+                break;
+        }
+
+        if (!UI.updatingSettings && UI.rfb) {
+            UI.updatingSettings = true;
             // avoid sending too many, will only apply when there are changes
             setTimeout(function() {
                 UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
@@ -1724,7 +1811,14 @@ const UI = {
                 UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
                 UI.rfb.frameRate = parseInt(UI.getSetting('framerate'));
                 UI.rfb.enableWebP = UI.getSetting('enable_webp');
+                UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
+
+                // apply changes to connection
+                UI.rfb.updateConnectionSettings();
+
                 UI.showStatus("Refresh page to apply encoding changes.");
+                console.log('Applied quality settings');
+                UI.updatingSettings = false;
             }, 2000);
 
         }

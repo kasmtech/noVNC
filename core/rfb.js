@@ -661,9 +661,6 @@ export default class RFB extends EventTargetMixin {
     */
     updateConnectionSettings() {
         if (this._rfbConnectionState === 'connected') {
-            if (this._pendingApplyEncodingChanges) {
-                this._sendEncodings();
-            }
             
             if (this._pendingApplyVideoRes) {
                 RFB.messages.setMaxVideoResolution(this._sock, this._maxVideoResolutionX, this._maxVideoResolutionY);
@@ -671,6 +668,10 @@ export default class RFB extends EventTargetMixin {
 
             if (this._pendingApplyResolutionChange) {
                 this._requestRemoteResize();
+            }
+
+            if (this._pendingApplyEncodingChanges) {
+                this._sendEncodings();
             }
 
             this._pendingApplyVideoRes = false;

@@ -886,6 +886,7 @@ const UI = {
             ctrl.checked = value;
 
         } else if (typeof ctrl.options !== 'undefined') {
+            value = String(value);
             for (let i = 0; i < ctrl.options.length; i += 1) {
                 if (ctrl.options[i].value === value) {
                     ctrl.selectedIndex = i;
@@ -1296,7 +1297,7 @@ const UI = {
         UI.rfb.compressionLevel = parseInt(UI.getSetting('compression'));
         UI.rfb.showDotCursor = UI.getSetting('show_dot');
         UI.rfb.idleDisconnect = UI.getSetting('idle_disconnect');
-        UI.rfb.videoQuality = UI.getSetting('video_quality');
+        UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
         UI.rfb.antiAliasing = UI.getSetting('anti_aliasing');
         UI.rfb.clipboardUp = UI.getSetting('clipboard_up');
         UI.rfb.clipboardDown = UI.getSetting('clipboard_down');
@@ -1402,6 +1403,7 @@ const UI = {
             return;
         }
 
+
         UI.connect(null, UI.reconnectPassword);
     },
 
@@ -1469,6 +1471,11 @@ const UI = {
 
         UI.openControlbar();
         UI.openConnectPanel();
+
+        if (UI.forceReconnect) {
+            UI.forceReconnect = false;
+            UI.connect(null, UI.reconnectPassword);
+        }
     },
 
     securityFailed(e) {
@@ -1728,15 +1735,16 @@ const UI = {
                 UI.enableSetting('framerate');
                 UI.enableSetting('video_scaling');
                 UI.enableSetting('video_out_time');
-                break;
+                UI.showStatus("Refresh or reconnect to apply changes.");
+                return;
             case 4: //extreme
-                UI.forceSetting('dynamic_quality_min', 8);
+                UI.forceSetting('dynamic_quality_min', 7);
                 UI.forceSetting('dynamic_quality_max', 9);
                 UI.forceSetting('framerate', 30);
                 UI.forceSetting('treat_lossless', 8);
 
                 // effectively disables video mode
-                UI.forceSetting('video_time', 300);
+                UI.forceSetting('video_time', 100);
                 UI.forceSetting('video_area', 100);
                 // go ahead and set video mode settings, won't be used
                 UI.forceSetting('max_video_resolution_x', 1920);
@@ -1813,10 +1821,13 @@ const UI = {
                 UI.rfb.enableWebP = UI.getSetting('enable_webp');
                 UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
 
-                // apply changes to connection
-                UI.rfb.updateConnectionSettings();
+                // USE THIS METHOD TO GRACEFULLY SEND NEW ENCODINGS, WITHOUT A RECONNECT
+                //UI.rfb.updateConnectionSettings();
 
-                UI.showStatus("Refresh page to apply encoding changes.");
+                // USE THIS METHOD TO RECONNECT TO FORCE CHANGES TO TAKE AFFECT
+                UI.forceReconnect = true;
+                UI.rfb.disconnect();
+
                 console.log('Applied quality settings');
                 UI.updatingSettings = false;
             }, 2000);

@@ -1508,7 +1508,8 @@ const UI = {
                     }
                     break;
                 case 'setvideoquality':
-                    UI.rfb.videoQuality = event.data.value;
+                    UI.forceSetting('video_quality', parseInt(event.data.value), false);
+                    UI.updateQuality();
                     break;
             }
         }
@@ -1801,37 +1802,32 @@ const UI = {
         }
 
         if (!UI.updatingSettings && UI.rfb) {
-            UI.updatingSettings = true;
-            // avoid sending too many, will only apply when there are changes
-            setTimeout(function() {
-                UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
-                UI.rfb.antiAliasing = parseInt(UI.getSetting('anti_aliasing'));
-                UI.rfb.dynamicQualityMin = parseInt(UI.getSetting('dynamic_quality_min'));
-                UI.rfb.dynamicQualityMax = parseInt(UI.getSetting('dynamic_quality_max'));
-                UI.rfb.jpegVideoQuality = parseInt(UI.getSetting('jpeg_video_quality'));
-                UI.rfb.webpVideoQuality = parseInt(UI.getSetting('webp_video_quality'));
-                UI.rfb.videoArea = parseInt(UI.getSetting('video_area'));
-                UI.rfb.videoTime = parseInt(UI.getSetting('video_time'));
-                UI.rfb.videoOutTime = parseInt(UI.getSetting('video_out_time'));
-                UI.rfb.videoScaling = parseInt(UI.getSetting('video_scaling'));
-                UI.rfb.treatLossless = parseInt(UI.getSetting('treat_lossless'));
-                UI.rfb.maxVideoResolutionX = parseInt(UI.getSetting('max_video_resolution_x'));
-                UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
-                UI.rfb.frameRate = parseInt(UI.getSetting('framerate'));
-                UI.rfb.enableWebP = UI.getSetting('enable_webp');
-                UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
+            UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
+            UI.rfb.antiAliasing = parseInt(UI.getSetting('anti_aliasing'));
+            UI.rfb.dynamicQualityMin = parseInt(UI.getSetting('dynamic_quality_min'));
+            UI.rfb.dynamicQualityMax = parseInt(UI.getSetting('dynamic_quality_max'));
+            UI.rfb.jpegVideoQuality = parseInt(UI.getSetting('jpeg_video_quality'));
+            UI.rfb.webpVideoQuality = parseInt(UI.getSetting('webp_video_quality'));
+            UI.rfb.videoArea = parseInt(UI.getSetting('video_area'));
+            UI.rfb.videoTime = parseInt(UI.getSetting('video_time'));
+            UI.rfb.videoOutTime = parseInt(UI.getSetting('video_out_time'));
+            UI.rfb.videoScaling = parseInt(UI.getSetting('video_scaling'));
+            UI.rfb.treatLossless = parseInt(UI.getSetting('treat_lossless'));
+            UI.rfb.maxVideoResolutionX = parseInt(UI.getSetting('max_video_resolution_x'));
+            UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
+            UI.rfb.frameRate = parseInt(UI.getSetting('framerate'));
+            UI.rfb.enableWebP = UI.getSetting('enable_webp');
+            UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
 
-                // USE THIS METHOD TO GRACEFULLY SEND NEW ENCODINGS, WITHOUT A RECONNECT
-                //UI.rfb.updateConnectionSettings();
+            // USE THIS METHOD TO GRACEFULLY SEND NEW ENCODINGS, WITHOUT A RECONNECT
+            UI.rfb.updateConnectionSettings();
 
-                // USE THIS METHOD TO RECONNECT TO FORCE CHANGES TO TAKE AFFECT
-                UI.forceReconnect = true;
-                UI.rfb.disconnect();
+            // USE THIS METHOD TO RECONNECT TO FORCE CHANGES TO TAKE AFFECT
+            //UI.forceReconnect = true;
+            //UI.rfb.disconnect();
 
-                console.log('Applied quality settings');
-                UI.updatingSettings = false;
-            }, 2000);
-
+            console.log('Applied quality settings');
+            UI.updatingSettings = false;
         }
     },
 

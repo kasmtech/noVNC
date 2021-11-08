@@ -1067,15 +1067,17 @@ export default class RFB extends EventTargetMixin {
             else if (limited && this.videoQuality == 0){
                 x = 1280;
                 y = 720;
-            } else if (this._display.antiAliasing === 0 && window.devicePixelRatio > 2 && x < 1000) {
-                // small device with high resolution, browser is essentially zooming greater than 200% 
-                let targetDevicePixelRatio = 2;
+            } else if (this._display.antiAliasing === 0 && window.devicePixelRatio > 1 && x < 800 && x > 0) {
+                // small device with high resolution, browser is essentially zooming greater than 200%
+                Log.Info('Device Pixel ratio: ' + window.devicePixelRatio + ' Reported Resolution: ' + x + 'x' + y); 
+                let targetDevicePixelRatio = 1.5;
+                if (window.devicePixelRatio > 2) { targetDevicePixelRatio = 2; }
                 let scaledWidth = (x * window.devicePixelRatio) * (1 / targetDevicePixelRatio);
                 let scaleRatio = scaledWidth / x;
                 x = x * scaleRatio;
                 y = y * scaleRatio;
                 scale = 1 / scaleRatio;
-                Log.Info('Small device with hDPI screen detected, auto scaling at ' + scaleRatio);
+                Log.Info('Small device with hDPI screen detected, auto scaling at ' + scaleRatio + ' to ' + x + 'x' + y);
             }
         } catch (err) {
             Log.Debug(err);

@@ -1067,7 +1067,7 @@ export default class RFB extends EventTargetMixin {
             else if (limited && this.videoQuality == 0){
                 x = 1280;
                 y = 720;
-            } else if (this._display.antiAliasing === 0 && window.devicePixelRatio > 1 && x < 800 && x > 0) {
+            } else if (this._display.antiAliasing === 0 && window.devicePixelRatio > 1 && x < 1000 && x > 0) {
                 // small device with high resolution, browser is essentially zooming greater than 200%
                 Log.Info('Device Pixel ratio: ' + window.devicePixelRatio + ' Reported Resolution: ' + x + 'x' + y); 
                 let targetDevicePixelRatio = 1.5;

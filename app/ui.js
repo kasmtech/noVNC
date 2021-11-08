@@ -1739,7 +1739,7 @@ const UI = {
                 UI.showStatus("Refresh or reconnect to apply changes.");
                 return;
             case 4: //extreme
-                UI.forceSetting('dynamic_quality_min', 7);
+                UI.forceSetting('dynamic_quality_min', 8);
                 UI.forceSetting('dynamic_quality_max', 9);
                 UI.forceSetting('framerate', 30);
                 UI.forceSetting('treat_lossless', 8);
@@ -1801,7 +1801,7 @@ const UI = {
                 break;
         }
 
-        if (!UI.updatingSettings && UI.rfb) {
+        if (UI.rfb) {
             UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
             UI.rfb.antiAliasing = parseInt(UI.getSetting('anti_aliasing'));
             UI.rfb.dynamicQualityMin = parseInt(UI.getSetting('dynamic_quality_min'));
@@ -1819,15 +1819,8 @@ const UI = {
             UI.rfb.enableWebP = UI.getSetting('enable_webp');
             UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
 
-            // USE THIS METHOD TO GRACEFULLY SEND NEW ENCODINGS, WITHOUT A RECONNECT
+            // Gracefully update settings server side
             UI.rfb.updateConnectionSettings();
-
-            // USE THIS METHOD TO RECONNECT TO FORCE CHANGES TO TAKE AFFECT
-            //UI.forceReconnect = true;
-            //UI.rfb.disconnect();
-
-            console.log('Applied quality settings');
-            UI.updatingSettings = false;
         }
     },
 

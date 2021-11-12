@@ -411,7 +411,12 @@ export default class Display {
 
     drawImage(img, x, y, w, h) {
 	if (img.width != w || img.height != h) {
-            this._drawCtx.drawImage(img, x, y, w, h);
+            try {
+                this._drawCtx.drawImage(img, x, y, w, h);
+	    } catch (err) {
+                Log.Error('Invalid Image Recieved');
+                return;
+	    }
         } else {
             this._drawCtx.drawImage(img, x, y);
         }

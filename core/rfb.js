@@ -996,13 +996,6 @@ export default class RFB extends EventTargetMixin {
             this._updateScale();
         });
 
-        const size = this._screenSize();
-        this._display.viewportChangeSize(size.w, size.h);
-        RFB.messages.setDesktopSize(this._sock,
-                                    Math.floor(size.w), Math.floor(size.h),
-                                    this._screenID, this._screenFlags);
-
-        /*
         if (this._resizeSession) {
             // Request changing the resolution of the remote display to
             // the size of the local browser viewport.
@@ -1010,8 +1003,8 @@ export default class RFB extends EventTargetMixin {
             // In order to not send multiple requests before the browser-resize
             // is finished we wait 0.5 seconds before sending the request.
             clearTimeout(this._resizeTimeout);
-            this._resizeTimeout = setTimeout(this._requestRemoteResize.bind(this), 10);
-        }*/
+            this._resizeTimeout = setTimeout(this._requestRemoteResize.bind(this), 500);
+        }
     }
 
     // Update state of clipping in Display object, and make sure the

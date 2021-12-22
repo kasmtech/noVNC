@@ -15,9 +15,9 @@ export function toSigned32bit(toConvert) {
 }
 
 /*
- * Converts a signed 32bit integer to a signed 16bit int
- * Uses second most significant bit to represent it is relative
- */
+* Converts a signed 32bit integer to a signed 16bit int
+* Uses second most significant bit to represent it is relative
+*/
 export function toSignedRelative16bit(toConvert) {
     // TODO: move these so they are not computed with every func call
     var negmask16 = 1 << 15;
@@ -42,4 +42,13 @@ export function toSignedRelative16bit(toConvert) {
     }
 
     return converted16;
+}
+
+/* Fast hashing function with low entropy  */
+export function hashUInt8Array(data) {
+    let h;
+    for (let i = 0; i < data.length; i++) {
+        h = Math.imul(31, h) + data[i] | 0;
+    }
+    return h;
 }

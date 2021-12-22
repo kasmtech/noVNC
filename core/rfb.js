@@ -10,7 +10,8 @@
 import { toUnsigned32bit, toSigned32bit } from './util/int.js';
 import * as Log from './util/logging.js';
 import { encodeUTF8, decodeUTF8 } from './util/strings.js';
-import { dragThreshold, supportsCursorURIs, isTouchDevice } from './util/browser.js';
+import { hashUInt8Array } from './util/int.js';
+import { dragThreshold, supportsCursorURIs, isTouchDevice, isWindows, isMac, isIOS } from './util/browser.js';
 import { clientToElement } from './util/element.js';
 import { setCapture } from './util/events.js';
 import EventTargetMixin from './util/eventtarget.js';
@@ -45,8 +46,7 @@ var _enableWebP = false;
 const MOUSE_MOVE_DELAY = 17; 
 
 // Wheel thresholds
-const WHEEL_STEP = 50; // Pixels needed for one step
-const WHEEL_LINE_HEIGHT = 19; // Assumed pixels for one line step
+let WHEEL_LINE_HEIGHT = 19; // Pixels for one line step (on Windows)
 
 // Gesture thresholds
 const GESTURE_ZOOMSENS = 75;
@@ -142,6 +142,9 @@ export default class RFB extends EventTargetMixin {
         this._frameRate = 30;
         this._maxVideoResolutionX = 960;
         this._maxVideoResolutionY = 540;
+        this._clipboardBinary = true;
+
+        this._trackFrameStats = false;
 
         this._clipboardText = null;
         this._clipboardServerCapabilitiesActions = {};
@@ -178,6 +181,7 @@ export default class RFB extends EventTargetMixin {
         this._pointerLock = false;
         this._pointerLockPos = { x: 0, y: 0 };
         this._pointerRelativeEnabled = false;
+        this._mouseLastPinchAndZoomTime = 0;
         this._viewportDragging = false;
         this._viewportDragPos = {};
         this._viewportHasMoved = false;
@@ -192,6 +196,7 @@ export default class RFB extends EventTargetMixin {
 
         // Bound event handlers
         this._eventHandlers = {
+            updateHiddenKeyboard: this._updateHiddenKeyboard.bind(this),
             focusCanvas: this._focusCanvas.bind(this),
             windowResize: this._windowResize.bind(this),
             handleMouse: this._handleMouse.bind(this),
@@ -336,12 +341,10 @@ export default class RFB extends EventTargetMixin {
 
         this._qualityLevel = 6;
         this._compressionLevel = 2;
+        this._clipHash = 0;
     }
 
     // ===== PROPERTIES =====
-
-    get videoQuality() { return this._videoQuality; }
-    set videoQuality(quality) { this._videoQuality = quality; }
 
     get pointerRelative() { return this._pointerRelativeEnabled; }
     set pointerRelative(value) 
@@ -357,47 +360,25 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    get enableWebP() { return this._enableWebP; }
-    set enableWebP(enabled) { this._enableWebP = enabled; }
+    get clipboardBinary() { return this._clipboardMode; }
+    set clipboardBinary(val) { this._clipboardMode = val; }
 
-    get jpegVideoQuality() { return this._jpegVideoQuality; }
-    set jpegVideoQuality(val) { this._jpegVideoQuality = val; }
-
-    get webpVideoQuality() { return this._webpVideoQuality; }
-    set webpVideoQuality(val) { this._webpVideoQuality = val; }
-
-    get treatLossless() { return this._treatLossless; }
-    set treatLossless(val) { this._treatLossless = val; }
+    get videoQuality() { return this._videoQuality; }
+    set videoQuality(quality) 
+    { 
+        //if changing to or from a video quality mode that uses a fixed resolution server side
+        if (this._videoQuality <= 1 || quality <= 1) {
+            this._pendingApplyResolutionChange = true;
+        }
+        this._videoQuality = quality;
+        this._pendingApplyEncodingChanges = true;
+    }
 
     get preferBandwidth() { return this._preferBandwidth; }
-    set preferBandwidth(val) { this._preferBandwidth = val; }
-
-    get dynamicQualityMin() { return this._dynamicQualityMin; }
-    set dynamicQualityMin(val) { this._dynamicQualityMin = val; }
-
-    get dynamicQualityMax() { return this._dynamicQualityMax; }
-    set dynamicQualityMax(val) { this._dynamicQualityMax = val; }
-
-    get videoArea() { return this._videoArea; }
-    set videoArea(val) { this._videoArea = val; }
-
-    get videoTime() { return this._videoTime; }
-    set videoTime(val) { this._videoTime = val; }
-
-    get videoOutTime() { return this._videoOutTime; }
-    set videoOutTime(val) { this._videoOutTime = val; }
-
-    get videoScaling() { return this._videoScaling; }
-    set videoScaling(val) { this._videoScaling = val; }
-
-    get frameRate() { return this._frameRate; }
-    set frameRate(val) { this._frameRate = val; }
-
-    get maxVideoResolutionX() { return this._maxVideoResolutionX; }
-    set maxVideoResolutionX(val) { this._maxVideoResolutionX = val; }
-
-    get maxVideoResolutionY() { return this._maxVideoResolutionY; }
-    set maxVideoResolutionY(val) { this._maxVideoResolutionY = val; }
+    set preferBandwidth(val) { 
+        this._preferBandwidth = val; 
+        this._pendingApplyEncodingChanges = true;
+    }
 
     get viewOnly() { return this._viewOnly; }
     set viewOnly(viewOnly) {
@@ -456,6 +437,207 @@ export default class RFB extends EventTargetMixin {
     get background() { return this._screen.style.background; }
     set background(cssValue) { this._screen.style.background = cssValue; }
 
+    get enableWebP() { return this._enableWebP; }
+    set enableWebP(enabled) { 
+        if (this._enableWebP === enabled) {
+            return;
+        }
+        this._enableWebP = enabled; 
+        this._pendingApplyEncodingChanges = true;
+    }
+
+    get antiAliasing() { return this._display.antiAliasing; }
+    set antiAliasing(value) {
+       this._display.antiAliasing = value;
+    }
+
+    get jpegVideoQuality() { return this._jpegVideoQuality; }
+    set jpegVideoQuality(qualityLevel) {
+        if (!Number.isInteger(qualityLevel) || qualityLevel < 0 || qualityLevel > 9) {
+            Log.Error("qualityLevel must be an integer between 0 and 9");
+            return;
+        }
+
+        if (this._jpegVideoQuality === qualityLevel) {
+            return;
+        }
+
+        this._jpegVideoQuality = qualityLevel;
+        this._pendingApplyEncodingChanges = true;
+    }
+
+    get webpVideoQuality() { return this._webpVideoQuality; }
+    set webpVideoQuality(qualityLevel) {
+        if (!Number.isInteger(qualityLevel) || qualityLevel < 0 || qualityLevel > 9) {
+            Log.Error("qualityLevel must be an integer between 0 and 9");
+            return;
+        }
+
+        if (this._webpVideoQuality === qualityLevel) {
+            return;
+        }
+
+        this._webpVideoQuality = qualityLevel;
+        this._pendingApplyEncodingChanges = true;
+    }
+
+    get treatLossless() { return this._treatLossless; }
+    set treatLossless(qualityLevel) {
+        if (!Number.isInteger(qualityLevel) || qualityLevel < 0 || qualityLevel > 9) {
+            Log.Error("qualityLevel must be an integer between 0 and 9");
+            return;
+        }
+
+        if (this._treatLossless === qualityLevel) {
+            return;
+        }
+
+        this._treatLossless = qualityLevel;
+    }
+
+    get dynamicQualityMin() { return this._dynamicQualityMin; }
+    set dynamicQualityMin(qualityLevel) {
+        if (!Number.isInteger(qualityLevel) || qualityLevel < 0 || qualityLevel > 9) {
+            Log.Error("qualityLevel must be an integer between 0 and 9");
+            return;
+        }
+
+        if (this._dynamicQualityMin === qualityLevel) {
+            return;
+        }
+
+        this._dynamicQualityMin = qualityLevel;
+        this._pendingApplyEncodingChanges = true;
+    }
+
+    get dynamicQualityMax() { return this._dynamicQualityMax; }
+    set dynamicQualityMax(qualityLevel) {
+        if (!Number.isInteger(qualityLevel) || qualityLevel < 0 || qualityLevel > 9) {
+            Log.Error("qualityLevel must be an integer between 0 and 9");
+            return;
+        }
+
+        if (this._dynamicQualityMax === qualityLevel) {
+            return;
+        }
+
+        this._dynamicQualityMax = qualityLevel;
+        this._pendingApplyEncodingChanges = true;
+    }
+
+    get videoArea() {
+        return this._videoArea;
+    }
+    set videoArea(area) {
+        if (!Number.isInteger(area) || area < 0 || area > 100) {
+            Log.Error("video area must be an integer between 0 and 100");
+            return;
+        }
+
+        if (this._videoArea === area) {
+            return;
+        }
+
+        this._videoArea = area;
+        this._pendingApplyEncodingChanges = true;
+    }
+
+    get videoTime() {
+        return this._videoTime;
+    }
+    set videoTime(value) {
+        if (!Number.isInteger(value) || value < 0 || value > 100) {
+            Log.Error("video time must be an integer between 0 and 100");
+            return;
+        }
+
+        if (this._videoTime === value) {
+            return;
+        }
+
+        this._videoTime = value;
+        this._pendingApplyEncodingChanges = true;
+    }
+
+    get videoOutTime() {
+        return this._videoOutTime;
+    }
+    set videoOutTime(value) {
+        if (!Number.isInteger(value) || value < 0 || value > 100) {
+            Log.Error("video out time must be an integer between 0 and 100");
+            return;
+        }
+
+        if (this._videoOutTime === value) {
+            return;
+        }
+
+        this._videoOutTime = value;
+        this._pendingApplyEncodingChanges = true;
+    }
+
+    get videoScaling() {
+        return this._videoScaling;
+    }
+    set videoScaling(value) {
+        if (!Number.isInteger(value) || value < 0 || value > 2) {
+            Log.Error("video scaling must be an integer between 0 and 2");
+            return;
+        }
+
+        if (this._videoScaling === value) {
+            return;
+        }
+
+        this._videoScaling = value;
+        this._pendingApplyEncodingChanges = true;
+    }
+
+    get frameRate() { return this._frameRate; }
+    set frameRate(value) {
+        if (!Number.isInteger(value) || value < 1 || value > 120) {
+            Log.Error("frame rate must be an integer between 1 and 120");
+            return;
+        }
+
+        if (this._frameRate === value) {
+            return;
+        }
+
+        this._frameRate = value;
+        this._pendingApplyEncodingChanges = true;
+    }
+
+    get maxVideoResolutionX() { return this._maxVideoResolutionX; }
+    set maxVideoResolutionX(value) {
+        if (!Number.isInteger(value) || value < 100 ) {
+            Log.Error("max video resolution must be an integer greater than 100");
+            return;
+        }
+
+        if (this._maxVideoResolutionX === value) {
+            return;
+        }
+
+        this._maxVideoResolutionX = value;
+        this._pendingApplyVideoRes = true;
+    }
+
+    get maxVideoResolutionY() { return this._maxVideoResolutionY; }
+    set maxVideoResolutionY(value) {
+        if (!Number.isInteger(value) || value < 100 ) {
+            Log.Error("max video resolution must be an integer greater than 100");
+            return;
+        }
+
+        if (this._maxVideoResolutionY === value) {
+            return;
+        }
+
+        this._maxVideoResolutionY = value;
+        this._pendingApplyVideoRes = true;
+    }
+
     get qualityLevel() {
         return this._qualityLevel;
     }
@@ -470,10 +652,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._qualityLevel = qualityLevel;
-
-        if (this._rfbConnectionState === 'connected') {
-            this._sendEncodings();
-        }
+        this._pendingApplyEncodingChanges = true;
     }
 
     get compressionLevel() {
@@ -497,6 +676,31 @@ export default class RFB extends EventTargetMixin {
     }
 
     // ===== PUBLIC METHODS =====
+
+    /*
+    This function must be called after changing any properties that effect rendering quality
+    */
+    updateConnectionSettings() {
+        if (this._rfbConnectionState === 'connected') {
+            
+            if (this._pendingApplyVideoRes) {
+                RFB.messages.setMaxVideoResolution(this._sock, this._maxVideoResolutionX, this._maxVideoResolutionY);
+            }
+
+            if (this._pendingApplyResolutionChange) {
+                this._requestRemoteResize();
+            }
+
+            if (this._pendingApplyEncodingChanges) {
+                this._sendEncodings();
+            }
+
+            this._pendingApplyVideoRes = false;
+            this._pendingApplyEncodingChanges = false;
+            this._pendingApplyResolutionChange = false;
+        }
+        
+    }
 
     disconnect() {
         this._updateConnectionState('disconnecting');
@@ -593,21 +797,94 @@ export default class RFB extends EventTargetMixin {
 
     clipboardPasteFrom(text) {
         if (this._rfbConnectionState !== 'connected' || this._viewOnly) { return; }
+        if (!(typeof text === 'string' && text.length > 0)) { return; }
+
         this.sentEventsCounter+=1;
-        if (this._clipboardServerCapabilitiesFormats[extendedClipboardFormatText] &&
-            this._clipboardServerCapabilitiesActions[extendedClipboardActionNotify]) {
 
-            this._clipboardText = text;
-            RFB.messages.extendedClipboardNotify(this._sock, [extendedClipboardFormatText]);
-        } else {
-            let data = new Uint8Array(text.length);
-            for (let i = 0; i < text.length; i++) {
-                // FIXME: text can have values outside of Latin1/Uint8
-                data[i] = text.charCodeAt(i);
-            }
-
-            RFB.messages.clientCutText(this._sock, data);
+        let data = new Uint8Array(text.length);
+        for (let i = 0; i < text.length; i++) {
+            data[i] = text.charCodeAt(i);
         }
+
+        let h = hashUInt8Array(data);
+        if (h === this._clipHash) {
+            Log.Debug('No clipboard changes');
+            return;
+        } else {
+            this._clipHash = h;
+        }
+
+        let dataset = [];
+        let mimes = [ 'text/plain' ];
+        dataset.push(data);
+
+        RFB.messages.sendBinaryClipboard(this._sock, dataset, mimes);
+    }
+
+    async clipboardPasteDataFrom(clipdata) {
+        if (this._rfbConnectionState !== 'connected' || this._viewOnly) { return; }
+        this.sentEventsCounter+=1;
+
+        let dataset = [];
+        let mimes = [];
+        let h = 0;
+        for (let i = 0; i < clipdata.length; i++) {
+            for (let ti = 0; ti < clipdata[i].types.length; ti++) {
+                let mime = clipdata[i].types[ti];
+
+                switch (mime) {
+                    case 'image/png':
+                    case 'text/plain':
+                    case 'text/html':
+                        let blob = await clipdata[i].getType(mime);
+                        if (!blob) {
+                            continue;
+                        }
+                        let buff = await blob.arrayBuffer();
+                        let data = new Uint8Array(buff);
+
+                        if (!h) {
+                            h = hashUInt8Array(data);
+                            if (h === this._clipHash) {
+                                Log.Debug('No clipboard changes');
+                                return;
+                            } else {
+                                this._clipHash = h;
+                            }
+                        }
+
+                        if (mimes.includes(mime)) {
+                            continue;
+                        }
+
+                        mimes.push(mime);
+                        dataset.push(data);
+                        Log.Debug('Sending mime type: ' + mime);
+                        break;
+                    default:
+                        Log.Info('skipping clip send mime type: ' + mime)
+                }
+
+            }
+        }
+
+        //if png is present and  text/plain is not, remove other variations of images to save bandwidth
+        //if png is present with text/plain, then remove png. Word will put in a png of copied text
+        if (mimes.includes('image/png') && !mimes.includes('text/plain')) {
+            let i = mimes.indexOf('image/png');
+            mimes = mimes.slice(i, i+1);
+            dataset = dataset.slice(i, i+1);
+        } else if (mimes.includes('image/png') && mimes.includes('text/plain')) {
+            let i = mimes.indexOf('image/png');
+            mimes.splice(i, 1);
+            dataset.splice(i, 1);
+        }
+
+
+        if (dataset.length > 0) {
+            RFB.messages.sendBinaryClipboard(this._sock, dataset, mimes);
+        }
+        
     }
 
     requestBottleneckStats() {
@@ -655,6 +932,15 @@ export default class RFB extends EventTargetMixin {
         // Always grab focus on some kind of click event
         this._canvas.addEventListener("mousedown", this._eventHandlers.focusCanvas);
         this._canvas.addEventListener("touchstart", this._eventHandlers.focusCanvas);
+
+        // In order for the keyboard to not occlude the input being edited
+        // we move the hidden input we use for triggering the keyboard to the last click
+        // position which should trigger a page being moved down enough
+        // to show the input. On Android the whole website gets resized so we don't
+        // have to do anything.
+        if (isIOS()) {
+            this._canvas.addEventListener("touchend", this._eventHandlers.updateHiddenKeyboard);
+        }
 
         // Mouse events
         this._canvas.addEventListener('mousedown', this._eventHandlers.handleMouse);
@@ -726,7 +1012,23 @@ export default class RFB extends EventTargetMixin {
         Log.Debug("<< RFB.disconnect");
     }
 
+    _updateHiddenKeyboard(event) {
+        // On iOS 15 the navigation bar is at the bottom so we need to account for it
+        const y = Math.max(0, event.pageY - 50);
+        document.querySelector("#noVNC_keyboardinput").style.top = `${y}px`;
+    }
+
     _focusCanvas(event) {
+        // Hack:
+        // On most mobile phones it's possible to play audio
+        // only if it's triggered by user action. It's also
+        // impossible to listen for touch events on child frames (on mobile phones)
+        // so we catch those events here but forward the audio unlocking to the parent window
+        window.parent.postMessage({
+            action: "enable_audio",
+            value: null
+        }, "*");
+
         if (!this.focusOnClick) {
             return;
         }
@@ -789,7 +1091,7 @@ export default class RFB extends EventTargetMixin {
             this._display.scale = 1.0;
         } else {
             const size = this._screenSize(false);
-            this._display.autoscale(size.w, size.h);
+            this._display.autoscale(size.w, size.h, size.scale);
         }
         this._fixScrollbars();
     }
@@ -823,23 +1125,36 @@ export default class RFB extends EventTargetMixin {
         }
         var x = this._screen.offsetWidth;
         var y = this._screen.offsetHeight;
+        var scale = 0; // 0=auto
         try {
             if (x > 1280 && limited && this.videoQuality == 1) {
                 var ratio = y / x;
-                console.log(ratio);
+                Log.Debug(ratio);
                 x = 1280;
                 y = x * ratio;
             }
             else if (limited && this.videoQuality == 0){
                 x = 1280;
                 y = 720;
+            } else if (this._display.antiAliasing === 0 && window.devicePixelRatio > 1 && x < 1000 && x > 0) {
+                // small device with high resolution, browser is essentially zooming greater than 200%
+                Log.Info('Device Pixel ratio: ' + window.devicePixelRatio + ' Reported Resolution: ' + x + 'x' + y); 
+                let targetDevicePixelRatio = 1.5;
+                if (window.devicePixelRatio > 2) { targetDevicePixelRatio = 2; }
+                let scaledWidth = (x * window.devicePixelRatio) * (1 / targetDevicePixelRatio);
+                let scaleRatio = scaledWidth / x;
+                x = x * scaleRatio;
+                y = y * scaleRatio;
+                scale = 1 / scaleRatio;
+                Log.Info('Small device with hDPI screen detected, auto scaling at ' + scaleRatio + ' to ' + x + 'x' + y);
             }
         } catch (err) {
-            console.log(err);
+            Log.Debug(err);
         }
 
         return { w: x,
-                 h: y };
+                 h: y,
+                 scale: scale };
     }
 
     _fixScrollbars() {
@@ -1079,6 +1394,18 @@ export default class RFB extends EventTargetMixin {
         switch (ev.type) {
             case 'mousedown':
                 setCapture(this._canvas);
+
+                // Translate CMD+Click into CTRL+click on MacOs
+                if (
+                    isMac() &&
+                    ev.metaKey &&
+                    (this._keyboard._keyDownList["MetaLeft"] || this._keyboard._keyDownList["MetaRight"])
+                ) {
+                    this._keyboard._sendKeyEvent(this._keyboard._keyDownList["MetaLeft"], "MetaLeft", false);
+                    this._keyboard._sendKeyEvent(this._keyboard._keyDownList["MetaRight"], "MetaRight", false);
+                    this._keyboard._sendKeyEvent(KeyTable.XK_Control_L, "ControlLeft", true);
+                }
+
                 this._handleMouseButton(pos.x, pos.y,
                                         true, 1 << ev.button);
                 break;
@@ -1226,6 +1553,13 @@ export default class RFB extends EventTargetMixin {
         
     }
 
+    _sendScroll(x, y, dX, dY) {
+        if (this._rfbConnectionState !== 'connected') { return; }
+        if (this._viewOnly) { return; } // View only, skip mouse events
+
+        RFB.messages.pointerEvent(this._sock, this._display.absX(x), this._display.absY(y), 0, dX, dY);
+    }
+
     _handleWheel(ev) {
         if (this._rfbConnectionState !== 'connected') { return; }
         if (this._viewOnly) { return; } // View only, skip mouse events
@@ -1233,52 +1567,50 @@ export default class RFB extends EventTargetMixin {
         ev.stopPropagation();
         ev.preventDefault();
 
-        let pos = clientToElement(ev.clientX, ev.clientY,
-                                  this._canvas);
+        // On MacOs we need to translate zooming CMD+wheel to CTRL+wheel
+        if (isMac() && (this._keyboard._keyDownList["MetaLeft"] || this._keyboard._keyDownList["MetaRight"])) {
+            this._keyboard._sendKeyEvent(this._keyboard._keyDownList["MetaLeft"], "MetaLeft", false);
+            this._keyboard._sendKeyEvent(this._keyboard._keyDownList["MetaRight"], "MetaRight", false);
+            this._keyboard._sendKeyEvent(KeyTable.XK_Control_L, "ControlLeft", true);
+        }
 
-        let dX = ev.deltaX;
-        let dY = ev.deltaY;
+        // In a pinch and zoom gesture we're sending only a wheel event so we need
+        // to make sure a CTRL press event is sent alongside it if we want to trigger zooming.
+        // Moreover, we don't have a way to know that the gesture has stopped so we
+        // need to check manually every now and then and "unpress" the CTRL key when it ends.
+        if (ev.ctrlKey && !this._keyboard._keyDownList["ControlLeft"]) {
+            this._keyboard._sendKeyEvent(KeyTable.XK_Control_L, "ControlLeft", true);
+
+            this._watchForPinchAndZoom = this._watchForPinchAndZoom || setInterval(() => {
+                const timeSinceLastPinchAndZoom = +new Date() - this._mouseLastPinchAndZoomTime;
+                if (timeSinceLastPinchAndZoom > 250) {
+                    clearInterval(this._watchForPinchAndZoom);
+                    this._keyboard._sendKeyEvent(KeyTable.XK_Control_L, "ControlLeft", false);
+                    this._watchForPinchAndZoom = null;
+                    this._mouseLastPinchAndZoomTime = 0;
+                }
+            }, 10);
+        }
+
+        if (this._watchForPinchAndZoom) {
+            this._mouseLastPinchAndZoomTime = +new Date();
+        }
 
         // Pixel units unless it's non-zero.
         // Note that if deltamode is line or page won't matter since we aren't
         // sending the mouse wheel delta to the server anyway.
         // The difference between pixel and line can be important however since
         // we have a threshold that can be smaller than the line height.
+        let dX = ev.deltaX;
+        let dY = ev.deltaY;
+
         if (ev.deltaMode !== 0) {
             dX *= WHEEL_LINE_HEIGHT;
             dY *= WHEEL_LINE_HEIGHT;
         }
 
-        // Mouse wheel events are sent in steps over VNC. This means that the VNC
-        // protocol can't handle a wheel event with specific distance or speed.
-        // Therefor, if we get a lot of small mouse wheel events we combine them.
-        this._accumulatedWheelDeltaX += dX;
-        this._accumulatedWheelDeltaY += dY;
-
-        // Generate a mouse wheel step event when the accumulated delta
-        // for one of the axes is large enough.
-        if (Math.abs(this._accumulatedWheelDeltaX) >= WHEEL_STEP) {
-            if (this._accumulatedWheelDeltaX < 0) {
-                this._handleMouseButton(pos.x, pos.y, true, 1 << 5);
-                this._handleMouseButton(pos.x, pos.y, false, 1 << 5);
-            } else if (this._accumulatedWheelDeltaX > 0) {
-                this._handleMouseButton(pos.x, pos.y, true, 1 << 6);
-                this._handleMouseButton(pos.x, pos.y, false, 1 << 6);
-            }
-
-            this._accumulatedWheelDeltaX = 0;
-        }
-        if (Math.abs(this._accumulatedWheelDeltaY) >= WHEEL_STEP) {
-            if (this._accumulatedWheelDeltaY < 0) {
-                this._handleMouseButton(pos.x, pos.y, true, 1 << 3);
-                this._handleMouseButton(pos.x, pos.y, false, 1 << 3);
-            } else if (this._accumulatedWheelDeltaY > 0) {
-                this._handleMouseButton(pos.x, pos.y, true, 1 << 4);
-                this._handleMouseButton(pos.x, pos.y, false, 1 << 4);
-            }
-
-            this._accumulatedWheelDeltaY = 0;
-        }
+        const pointer = clientToElement(ev.clientX, ev.clientY, this._canvas);
+        this._sendScroll(pointer.x, pointer.y, dX, dY);
     }
 
     _fakeMouseMove(ev, elementX, elementY) {
@@ -1996,7 +2328,6 @@ export default class RFB extends EventTargetMixin {
 
     _sendEncodings() {
         const encs = [];
-        var hasWebp;
 
         // In preference order
         encs.push(encodings.encodingCopyRect);
@@ -2013,16 +2344,6 @@ export default class RFB extends EventTargetMixin {
         var quality = 6;
         var compression = 2;
         var screensize = this._screenSize(false);
-        if (this.videoQuality == 1) {
-            if (screensize.w > 1280) {
-                quality = 8; //higher quality needed because scaling enlarges artifacts
-            } else {
-                quality = 3; //twice the compression ratio as default, but not horrible quality
-            }
-            compression = 6;
-        } else if (this.videoQuality == 3) {
-            quality = 8
-        }
         encs.push(encodings.pseudoEncodingQualityLevel0 + this._qualityLevel);
         encs.push(encodings.pseudoEncodingCompressLevel0 + this._compressionLevel);
 
@@ -2050,7 +2371,8 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingVideoScalingLevel0 + this.videoScaling);
         encs.push(encodings.pseudoEncodingFrameRateLevel10 + this.frameRate - 10);
         encs.push(encodings.pseudoEncodingMaxVideoResolution);
-
+        
+	// preferBandwidth choses preset settings. Since we expose all the settings, lets not pass this
         if (this.preferBandwidth) // must be last - server processes in reverse order
             encs.push(encodings.pseudoEncodingPreferBandwidth);
 
@@ -2276,6 +2598,100 @@ export default class RFB extends EventTargetMixin {
         return true;
     }
 
+    _handleBinaryClipboard() {
+        Log.Debug("HandleBinaryClipboard");
+
+        if (this._sock.rQwait("Binary Clipboard header", 2, 1)) { return false; }
+
+        let num = this._sock.rQshift8(); // how many different mime types
+        let mimes = [];
+        let clipItemData = {};
+        let buffByteLen = 2;
+        let textdata = '';
+        Log.Info(num + ' Clipboard items recieved.');
+	    Log.Debug('Started clipbooard processing with Client sockjs buffer size ' + this._sock.rQlen);
+
+        
+
+        for (let i = 0; i < num; i++) {
+            if (this._sock.rQwait("Binary Clipboard mimelen", 1, buffByteLen)) { return false; }
+            buffByteLen++;
+            let mimelen = this._sock.rQshift8();
+
+            if (this._sock.rQwait("Binary Clipboard mime", Math.abs(mimelen), buffByteLen)) { return false; }
+            buffByteLen+=mimelen;
+            let mime = this._sock.rQshiftStr(mimelen);
+
+            if (this._sock.rQwait("Binary Clipboard data len", 4, buffByteLen)) { return false; }
+            buffByteLen+=4;
+            let len = this._sock.rQshift32();
+
+            if (this._sock.rQwait("Binary Clipboard data", Math.abs(len), buffByteLen)) { return false; }
+            let data = this._sock.rQshiftBytes(len);
+            buffByteLen+=len;
+            
+            switch(mime) {
+                case "image/png":
+                case "text/html":
+                case "text/plain":
+                    mimes.push(mime);
+
+                        if (mime == "text/plain") {
+
+                            //textdata = new TextDecoder().decode(data);
+                            for (let i = 0; i < data.length; i++) {
+                                textdata+=String.fromCharCode(data[i]);
+                            }
+
+                            if ((textdata.length > 0) && "\0" === textdata.charAt(textdata.length - 1)) {
+                                textdata = textdata.slice(0, -1);
+                            }
+
+                            Log.Debug("Plain text clipboard recieved and placed in text element, size: " + textdata.length);
+                            this.dispatchEvent(new CustomEvent(
+                                "clipboard",
+                                { detail: { text: textdata } })
+                            );
+                        }
+
+                    if (!this.clipboardBinary) { continue; }
+                    
+                    Log.Info("Processed binary clipboard of MIME " + mime + " of length " + len);
+
+                    clipItemData[mime] = new Blob([data], { type: mime });
+                    break;
+                default:
+                    Log.Debug('Mime type skipped: ' + mime);
+                    break;
+            }
+        }
+
+        Log.Debug('Finished processing binary clipboard with client sockjs buffer size ' + this._sock.rQlen);
+
+        if (Object.keys(clipItemData).length > 0) {
+            if (this.clipboardBinary) {
+                this._clipHash = 0;
+                navigator.clipboard.write([new ClipboardItem(clipItemData)]).then(
+                    function() {},
+                    function(err) { 
+                        Log.Error("Error writing to client clipboard: " + err);
+                        // Lets try writeText
+                        if (textdata.length > 0) {
+                            navigator.clipboard.writeText(textdata).then(
+                                function() {},
+                                function(err2) {
+                                    Log.Error("Error writing text to client clipboard: " + err2);
+                                }
+                            );
+                        }
+                    }
+                );
+            }
+        }
+
+        return true;
+    }
+
     _handle_server_stats_msg() {
         this._sock.rQskipBytes(3);  // Padding
         const length = this._sock.rQshift32();
@@ -2283,8 +2699,8 @@ export default class RFB extends EventTargetMixin {
 
         const text = this._sock.rQshiftStr(length);
 
-        console.log("Received KASM bottleneck stats:");
-        console.log(text);
+        Log.Debug("Received KASM bottleneck stats:");
+        Log.Debug(text);
         this.dispatchEvent(new CustomEvent(
             "bottleneck_stats",
             { detail: { text: text } }));
@@ -2368,10 +2784,17 @@ export default class RFB extends EventTargetMixin {
         let first, ret;
         switch (msgType) {
             case 0:  // FramebufferUpdate
+                let before = performance.now();
+                this._display.renderMs = 0;
                 ret = this._framebufferUpdate();
                 if (ret && !this._enabledContinuousUpdates) {
                     RFB.messages.fbUpdateRequest(this._sock, true, 0, 0,
                                                  this._fbWidth, this._fbHeight);
+                }
+                let elapsed = performance.now() - before;
+                if (this._trackFrameStats) {
+                    RFB.messages.sendFrameStats(this._sock, elapsed, this._display.renderMs);
+                    this._trackFrameStats = false;
                 }
                 return ret;
 
@@ -2404,6 +2827,13 @@ export default class RFB extends EventTargetMixin {
 
             case 178: // KASM bottleneck stats
                 return this._handle_server_stats_msg();
+
+            case 179: // KASM requesting frame stats
+                this._trackFrameStats = true;
+                return true;
+
+            case 180: // KASM binary clipboard
+                return this._handleBinaryClipboard();
 
             case 248: // ServerFence
                 return this._handleServerFenceMsg();
@@ -2918,7 +3348,7 @@ RFB.messages = {
         sock.flush();
     },
 
-    pointerEvent(sock, x, y, mask) {
+    pointerEvent(sock, x, y, mask, dX = 0, dY = 0) {
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
@@ -2932,7 +3362,13 @@ RFB.messages = {
         buff[offset + 4] = y >> 8;
         buff[offset + 5] = y;
 
-        sock._sQlen += 6;
+        buff[offset + 6] = dX >> 8;
+        buff[offset + 7] = dX;
+
+        buff[offset + 8] = dY >> 8;
+        buff[offset + 9] = dY;
+
+        sock._sQlen += 10;
         sock.flush();
     },
 
@@ -3076,6 +3512,61 @@ RFB.messages = {
 
     },
 
+    sendBinaryClipboard(sock, dataset, mimes) {
+
+        
+        const buff = sock._sQ;
+        let offset = sock._sQlen;
+
+        buff[offset] = 180; // msg-type
+        buff[offset + 1] = dataset.length; // how many mime types
+        sock._sQlen += 2;
+        offset += 2;
+
+        for (let i=0; i < dataset.length; i++) {
+            let mime = mimes[i];
+            let data = dataset[i];
+
+            buff[offset++] = mime.length;
+
+            for (let i = 0; i < mime.length; i++) {
+                buff[offset++] = mime.charCodeAt(i); // change to [] if not a string
+            }
+
+            let length = data.length;
+
+            Log.Info('Clipboard data sent mime type ' + mime + ' len ' + length);
+
+            buff[offset++] = length >> 24;
+            buff[offset++] = length >> 16;
+            buff[offset++] = length >> 8;
+            buff[offset++] = length;
+
+            sock._sQlen += 1 + mime.length + 4;
+
+            // We have to keep track of from where in the data we begin creating the
+            // buffer for the flush in the next iteration.
+            let dataOffset = 0;
+
+            let remaining = data.length;
+            while (remaining > 0) {
+
+                let flushSize = Math.min(remaining, (sock._sQbufferSize - sock._sQlen));
+                for (let i = 0; i < flushSize; i++) {
+                    buff[sock._sQlen + i] = data[dataOffset + i];
+                }
+
+                sock._sQlen += flushSize;
+                sock.flush();
+
+                remaining -= flushSize;
+                dataOffset += flushSize;
+            }
+
+            offset = sock._sQlen;
+        }
+    },
+
     setDesktopSize(sock, width, height, id, flags) {
         const buff = sock._sQ;
         const offset = sock._sQlen;
@@ -3166,6 +3657,32 @@ RFB.messages = {
         buff[offset + 3] = 0; // padding
 
         sock._sQlen += 4;
+        sock.flush();
+    },
+
+    sendFrameStats(sock, allMs, renderMs) {
+        const buff = sock._sQ;
+        const offset = sock._sQlen;
+
+	if (buff == null) { return; }
+
+        buff[offset] = 179; // msg-type
+
+        buff[offset + 1] = 0; // padding
+        buff[offset + 2] = 0; // padding
+        buff[offset + 3] = 0; // padding
+
+        buff[offset + 4] = allMs >> 24;
+        buff[offset + 5] = allMs >> 16;
+        buff[offset + 6] = allMs >> 8;
+        buff[offset + 7] = allMs;
+
+        buff[offset + 8] = renderMs >> 24;
+        buff[offset + 9] = renderMs >> 16;
+        buff[offset + 10] = renderMs >> 8;
+        buff[offset + 11] = renderMs;
+
+        sock._sQlen += 12;
         sock.flush();
     },
 

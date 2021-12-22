@@ -20,9 +20,21 @@ window.addEventListener("load", function() {
     }
 });
 
+window.updateSetting = (name, value) => {
+    WebUtil.writeSetting(name, value);
+
+    switch (name) {
+        case "translate_shortcuts":
+            UI.updateShortcutTranslation();
+        break;
+    }
+}
+
+import "core-js/stable";
+import "regenerator-runtime/runtime";
 import * as Log from '../core/util/logging.js';
 import _, { l10n } from './localization.js';
-import { isTouchDevice, isSafari, hasScrollbarGutter, dragThreshold }
+import { isTouchDevice, isSafari, hasScrollbarGutter, dragThreshold, supportsBinaryClipboard, isFirefox, isWindows, isIOS }
     from '../core/util/browser.js';
 import { setCapture, getPointerEvent } from '../core/util/events.js';
 import KeyTable from "../core/input/keysym.js";
@@ -113,6 +125,7 @@ const UI = {
         UI.initFullscreen();
 
         // Setup event handlers
+        UI.addKeyboardControlsPanelHandlers();
         UI.addControlbarHandlers();
         UI.addTouchSpecificHandlers();
         UI.addExtraKeysHandlers();
@@ -141,6 +154,23 @@ const UI = {
             // Show the connect panel on first load unless autoconnecting
             UI.openConnectPanel();
         }
+
+        window.parent.postMessage({
+            action: "noVNC_initialized",
+            value: null
+        }, "*");
+
+        window.addEventListener("message", (e) => {
+            if (typeof e.data !== "object" || !e.data.action) {
+                return;
+            }
+
+            if (e.data.action === "show_keyboard_controls") {
+                UI.showKeyboardControls();
+            } else if (e.data.action === "hide_keyboard_controls") {
+                UI.hideKeyboardControls();
+            }
+        });
 
         return Promise.resolve(UI.rfb);
     },
@@ -188,6 +218,21 @@ const UI = {
         UI.initSetting('view_clip', false);
         /* UI.initSetting('resize', 'off'); */
         UI.initSetting('quality', 6);
+        UI.initSetting('dynamic_quality_min', 3);
+        UI.initSetting('dynamic_quality_max', 9);
+        UI.initSetting('translate_shortcuts', true);
+        UI.initSetting('treat_lossless', 7);
+        UI.initSetting('jpeg_video_quality', 5);
+        UI.initSetting('webp_video_quality', 5);
+        UI.initSetting('video_quality', 2);
+        UI.initSetting('anti_aliasing', 0);
+        UI.initSetting('video_area', 65);
+        UI.initSetting('video_time', 5);
+        UI.initSetting('video_out_time', 3);
+        UI.initSetting('video_scaling', 2);
+        UI.initSetting('max_video_resolution_x', 960);
+        UI.initSetting('max_video_resolution_y', 540);
+        UI.initSetting('framerate', 30);
         UI.initSetting('compression', 2);
         UI.initSetting('shared', true);
         UI.initSetting('view_only', false);
@@ -203,14 +248,12 @@ const UI = {
         UI.initSetting('pointer_relative', false); 
 
         if (WebUtil.isInsideKasmVDI()) {
-            UI.initSetting('video_quality', 1);
             UI.initSetting('clipboard_up', false);
             UI.initSetting('clipboard_down', false);
             UI.initSetting('clipboard_seamless', false);
             UI.initSetting('enable_webp', false);
             UI.initSetting('resize', 'off');
         } else {
-            UI.initSetting('video_quality', 3);
             UI.initSetting('clipboard_up', true);
             UI.initSetting('clipboard_down', true);
             UI.initSetting('clipboard_seamless', true);
@@ -219,6 +262,7 @@ const UI = {
         }
 
         UI.setupSettingLabels();
+        UI.updateQuality();
     },
     // Adds a link to the label elements on the corresponding input elements
     setupSettingLabels() {
@@ -246,6 +290,51 @@ const UI = {
 * ==============
 * EVENT HANDLERS
 * ------v------*/
+
+    addKeyboardControlsPanelHandlers() {
+        // panel dragging
+        interact(".keyboard-controls").draggable({
+            allowFrom: ".handle",
+            listeners: {
+                move: (e) => {
+                    const target = e.target;
+                    const x = (parseFloat(target.getAttribute("data-x")) || 0) + e.dx;
+                    const y = (parseFloat(target.getAttribute("data-y")) || 0) + e.dy;
+                    target.style.transform = `translate(${x}px, ${y}px)`;
+                    target.setAttribute("data-x", x);
+                    target.setAttribute("data-y", y);
+                },
+            },
+        });
+
+        // panel expanding
+        interact(".keyboard-controls .handle")
+        .pointerEvents({ holdDuration: 350 })
+        .on("hold", (e) => {
+            const buttonsEl = document.querySelector(".keyboard-controls");
+    
+            const isOpen = buttonsEl.classList.contains("is-open");
+            buttonsEl.classList.toggle("was-open", isOpen);
+            buttonsEl.classList.toggle("is-open", !isOpen);
+
+            setTimeout(() => buttonsEl.classList.remove("was-open"), 500);
+        });
+
+        // keyboard showing
+        interact(".keyboard-controls .handle").on("tap", (e) => {
+            if (e.dt < 150) {
+                UI.toggleVirtualKeyboard();
+            }
+        });
+
+        // panel buttons
+        interact(".keyboard-controls .button.ctrl").on("tap", UI.toggleCtrl);
+        interact(".keyboard-controls .button.alt").on("tap", UI.toggleAlt);
+        interact(".keyboard-controls .button.windows").on("tap", UI.toggleWindows);
+        interact(".keyboard-controls .button.tab").on("tap", UI.sendTab);
+        interact(".keyboard-controls .button.escape").on("tap", UI.sendEsc);
+        interact(".keyboard-controls .button.ctrlaltdel").on("tap", UI.sendCtrlAltDel);
+    },
 
     addControlbarHandlers() {
         document.getElementById("noVNC_control_bar")
@@ -402,6 +491,36 @@ const UI = {
         UI.addSettingChangeHandler('resize', UI.updateViewClip);
         UI.addSettingChangeHandler('quality');
         UI.addSettingChangeHandler('quality', UI.updateQuality);
+        UI.addSettingChangeHandler('dynamic_quality_min');
+        UI.addSettingChangeHandler('dynamic_quality_min', UI.updateQuality);
+        UI.addSettingChangeHandler('dynamic_quality_max');
+        UI.addSettingChangeHandler('dynamic_quality_max', UI.updateQuality);
+        UI.addSettingChangeHandler('translate_shortcuts');
+        UI.addSettingChangeHandler('translate_shortcuts', UI.updateShortcutTranslation);
+        UI.addSettingChangeHandler('treat_lossless');
+        UI.addSettingChangeHandler('treat_lossless', UI.updateQuality);
+        UI.addSettingChangeHandler('anti_aliasing');
+        UI.addSettingChangeHandler('anti_aliasing', UI.updateQuality);
+        UI.addSettingChangeHandler('video_quality');
+        UI.addSettingChangeHandler('video_quality', UI.updateQuality);
+        UI.addSettingChangeHandler('jpeg_video_quality');
+        UI.addSettingChangeHandler('jpeg_video_quality', UI.updateQuality);
+        UI.addSettingChangeHandler('webp_video_quality');
+        UI.addSettingChangeHandler('webp_video_quality', UI.updateQuality);
+        UI.addSettingChangeHandler('video_area');
+        UI.addSettingChangeHandler('video_area', UI.updateQuality);
+        UI.addSettingChangeHandler('video_time');
+        UI.addSettingChangeHandler('video_time', UI.updateQuality);
+        UI.addSettingChangeHandler('video_out_time');
+        UI.addSettingChangeHandler('video_out_time', UI.updateQuality);
+        UI.addSettingChangeHandler('video_scaling');
+        UI.addSettingChangeHandler('video_scaling', UI.updateQuality);
+        UI.addSettingChangeHandler('max_video_resolution_x');
+        UI.addSettingChangeHandler('max_video_resolution_x', UI.updateQuality);
+        UI.addSettingChangeHandler('max_video_resolution_y');
+        UI.addSettingChangeHandler('max_video_resolution_y', UI.updateQuality);
+        UI.addSettingChangeHandler('framerate');
+        UI.addSettingChangeHandler('framerate', UI.updateQuality);
         UI.addSettingChangeHandler('compression');
         UI.addSettingChangeHandler('compression', UI.updateCompression);
         UI.addSettingChangeHandler('view_clip');
@@ -822,10 +941,14 @@ const UI = {
     },
 
     // Set the new value, update and disable form control setting
-    forceSetting(name, val) {
+    forceSetting(name, val, disable=true) {
         WebUtil.setSetting(name, val);
         UI.updateSetting(name);
-        UI.disableSetting(name);
+        if (disable) {
+            UI.disableSetting(name);
+        } else {
+            UI.enableSetting(name);
+        }
     },
 
     // Update cookie and form control setting. If value is not set, then
@@ -840,6 +963,7 @@ const UI = {
             ctrl.checked = value;
 
         } else if (typeof ctrl.options !== 'undefined') {
+            value = String(value);
             for (let i = 0; i < ctrl.options.length; i += 1) {
                 if (ctrl.options[i].value === value) {
                     ctrl.selectedIndex = i;
@@ -847,7 +971,11 @@ const UI = {
                 }
             }
         } else {
+            let value_label = document.getElementById('noVNC_setting_' + name + '_output');
             ctrl.value = value;
+            if (value_label) {
+                value_label.value = value;
+            }
         }
     },
 
@@ -924,6 +1052,20 @@ const UI = {
         UI.updateSetting('view_clip');
         UI.updateSetting('resize');
         UI.updateSetting('quality');
+        UI.updateSetting('dynamic_quality_min', 3);
+        UI.updateSetting('dynamic_quality_max', 9);
+        UI.updateSetting('treat_lossless', 7);
+        UI.updateSetting('anti_aliasing', 0);
+        UI.updateSetting('jpeg_video_quality', 5);
+        UI.updateSetting('webp_video_quality', 5);
+        UI.updateSetting('video_quality', 2);
+        UI.updateSetting('video_area', 65);
+        UI.updateSetting('video_time', 5);
+        UI.updateSetting('video_out_time', 3);
+        UI.updateSetting('video_scaling', 2);
+        UI.updateSetting('max_video_resolution_x', 960);
+        UI.updateSetting('max_video_resolution_y', 540);
+        UI.updateSetting('framerate', 30);
         UI.updateSetting('compression');
         UI.updateSetting('shared');
         UI.updateSetting('view_only');
@@ -1045,20 +1187,12 @@ const UI = {
       },
 
     clipboardReceive(e) {
-        if (UI.rfb.clipboardDown && UI.rfb.clipboardSeamless ) {
+        if (UI.rfb.clipboardDown) {
            var curvalue = document.getElementById('noVNC_clipboard_text').value;
            if (curvalue != e.detail.text) {
                Log.Debug(">> UI.clipboardReceive: " + e.detail.text.substr(0, 40) + "...");
                document.getElementById('noVNC_clipboard_text').value = e.detail.text;
                Log.Debug("<< UI.clipboardReceive");
-               if (navigator.clipboard && navigator.clipboard.writeText){
-                   navigator.clipboard.writeText(e.detail.text)
-                   .then(function () {
-                       //UI.popupMessage("Selection Copied");
-                   }, function () {
-                       console.error("Failed to write system clipboard (trying to copy from NoVNC clipboard)")
-                   });
-               }
            }
        }
     },
@@ -1078,60 +1212,24 @@ const UI = {
     setTimeout(UI.showOverlay.bind(this, msg, secs), 200);
     },
 
-    // Enter and focus events come when we return to NoVNC.
-    // In both cases, check the local clipboard to see if it changed.
-    focusVNC: function() {
-    UI.copyFromLocalClipboard();
-    },
-    enterVNC: function() {
-    UI.copyFromLocalClipboard();
-    },
     copyFromLocalClipboard: function copyFromLocalClipboard() {
-        if (UI.rfb && UI.rfb.clipboardUp && UI.rfb.clipboardSeamless) {
-            UI.readClipboard(function (text) {
-                var maximumBufferSize = 10000;
-                var clipVal = document.getElementById('noVNC_clipboard_text').value;
-
-                if (clipVal != text) {
-                    document.getElementById('noVNC_clipboard_text').value = text; // The websocket has a maximum buffer array size
-
-                    if (text.length > maximumBufferSize) {
-                        UI.popupMessage("Clipboard contents too large. Data truncated", 2000);
-                        UI.rfb.clipboardPasteFrom(text.slice(0, maximumBufferSize));
-                    } else {
-                        //UI.popupMessage("Copied from Local Clipboard");
-                        UI.rfb.clipboardPasteFrom(text);
-                    }
-                } // Reset flag to prevent checking too often
-
-
-                UI.needToCheckClipboardChange = false;
-            });
+        if (!document.hasFocus()) {
+            Log.Debug("window does not have focus");
+            return;
         }
-    },
+        if (UI.rfb && UI.rfb.clipboardUp && UI.rfb.clipboardSeamless) {
 
-    // These 3 events indicate the focus has gone outside the NoVNC.
-    // When outside the NoVNC, the system clipboard could change.
-    leaveVNC: function() {
-    UI.needToCheckClipboardChange = true;
-    },
-    blurVNC: function() {
-    UI.needToCheckClipboardChange = true;
-    },
-    focusoutVNC: function() {
-    UI.needToCheckClipboardChange = true;
-    },
-
-    // On these 2 events, check if we need to look at clipboard.
-    mouseMoveVNC: function() {
-    if ( UI.needToCheckClipboardChange ) {
-        UI.copyFromLocalClipboard();
-    }
-    },
-    mouseDownVNC: function() {
-    if ( UI.needToCheckClipboardChange ) {
-        UI.copyFromLocalClipboard();
-    }
+            if (UI.rfb.clipboardBinary) {
+                navigator.clipboard.read().then((data) => {
+                    if (UI.rfb) {
+                        UI.rfb.clipboardPasteDataFrom(data);
+                    }
+                    UI.needToCheckClipboardChange = false;
+                }, (err) => {
+                    Log.Debug("No data in clipboard");
+                }); 
+            }
+        }
     },
 
     clipboardClear() {
@@ -1215,29 +1313,42 @@ const UI = {
         UI.rfb.addEventListener("capabilities", UI.updatePowerButton);
         UI.rfb.addEventListener("clipboard", UI.clipboardReceive);
         UI.rfb.addEventListener("bottleneck_stats", UI.bottleneckStatsRecieve);
-        document.addEventListener('mouseenter', UI.enterVNC);
-        document.addEventListener('mouseleave', UI.leaveVNC);
-        document.addEventListener('blur', UI.blurVNC);
-        document.addEventListener('focus', UI.focusVNC);
-        document.addEventListener('focusout', UI.focusoutVNC);
-        document.addEventListener('mousemove', UI.mouseMoveVNC);
-        document.addEventListener('mousedown', UI.mouseDownVNC);
         UI.rfb.addEventListener("bell", UI.bell);
         UI.rfb.addEventListener("desktopname", UI.updateDesktopName);
         UI.rfb.addEventListener("inputlock", UI.inputLockChanged);
+        UI.rfb.translateShortcuts = UI.getSetting('translate_shortcuts');
         UI.rfb.clipViewport = UI.getSetting('view_clip');
         UI.rfb.scaleViewport = UI.getSetting('resize') === 'scale';
         UI.rfb.resizeSession = UI.getSetting('resize') === 'remote';
         UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
+        UI.rfb.dynamicQualityMin = parseInt(UI.getSetting('dynamic_quality_min'));
+        UI.rfb.dynamicQualityMax = parseInt(UI.getSetting('dynamic_quality_max'));
+        UI.rfb.jpegVideoQuality = parseInt(UI.getSetting('jpeg_video_quality'));
+        UI.rfb.webpVideoQuality = parseInt(UI.getSetting('webp_video_quality'));
+        UI.rfb.videoArea = parseInt(UI.getSetting('video_area'));
+        UI.rfb.videoTime = parseInt(UI.getSetting('video_time'));
+        UI.rfb.videoOutTime = parseInt(UI.getSetting('video_out_time'));
+        UI.rfb.videoScaling = parseInt(UI.getSetting('video_scaling'));
+        UI.rfb.treatLossless = parseInt(UI.getSetting('treat_lossless'));
+        UI.rfb.maxVideoResolutionX = parseInt(UI.getSetting('max_video_resolution_x'));
+        UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
+        UI.rfb.frameRate = parseInt(UI.getSetting('framerate'));
         UI.rfb.compressionLevel = parseInt(UI.getSetting('compression'));
         UI.rfb.showDotCursor = UI.getSetting('show_dot');
         UI.rfb.idleDisconnect = UI.getSetting('idle_disconnect');
-        UI.rfb.videoQuality = UI.getSetting('video_quality');
         UI.rfb.pointerRelative = UI.getSetting('pointer_relative');
-
+        UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
+        UI.rfb.antiAliasing = UI.getSetting('anti_aliasing');
         UI.rfb.clipboardUp = UI.getSetting('clipboard_up');
         UI.rfb.clipboardDown = UI.getSetting('clipboard_down');
         UI.rfb.clipboardSeamless = UI.getSetting('clipboard_seamless');
+        UI.rfb.clipboardBinary = supportsBinaryClipboard() && UI.rfb.clipboardSeamless;
+
+        //Only explicitly request permission to clipboard on browsers that support binary clipboard access
+        if (supportsBinaryClipboard()) {
+            // explicitly request permission to the clipboard
+            navigator.permissions.query({ name: "clipboard-read" }).then((result) => { Log.Debug('binary clipboard enabled') });
+        }
         // KASM-960 workaround, disable seamless on Safari
         if (/^((?!chrome|android).)*safari/i.test(navigator.userAgent)) 
         { 
@@ -1288,6 +1399,8 @@ const UI = {
                  }
              }
              }, 30000);
+         } else {
+            document.getElementById('noVNC_status').style.visibility = "visible";
          }
 
          // Send an event to the parent document (kasm app) to toggle the control panel when ctl is double clicked
@@ -1329,6 +1442,7 @@ const UI = {
         if (UI.inhibitReconnect) {
             return;
         }
+
 
         UI.connect(null, UI.reconnectPassword);
     },
@@ -1397,6 +1511,11 @@ const UI = {
 
         UI.openControlbar();
         UI.openConnectPanel();
+
+        if (UI.forceReconnect) {
+            UI.forceReconnect = false;
+            UI.connect(null, UI.reconnectPassword);
+        }
     },
 
     securityFailed(e) {
@@ -1429,7 +1548,8 @@ const UI = {
                     }
                     break;
                 case 'setvideoquality':
-                    UI.rfb.videoQuality = event.data.value;
+                    UI.forceSetting('video_quality', parseInt(event.data.value), false);
+                    UI.updateQuality();
                     break;
                 case 'pointergamemode':
                     document.getElementById("noVNC_setting_pointer_relative").click();
@@ -1699,9 +1819,109 @@ const UI = {
  * ------v------*/
 
     updateQuality() {
-        if (!UI.rfb) return;
+        let present_mode = parseInt(UI.getSetting('video_quality'));
 
-        UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
+        // video_quality preset values
+        switch (present_mode) {
+            case 10: //custom
+                UI.enableSetting('dynamic_quality_min');
+                UI.enableSetting('dynamic_quality_max');
+                UI.enableSetting('treat_lossless');
+                UI.enableSetting('video_time');
+                UI.enableSetting('video_area');
+                UI.enableSetting('max_video_resolution_x');
+                UI.enableSetting('max_video_resolution_y');
+                UI.enableSetting('jpeg_video_quality');
+                UI.enableSetting('webp_video_quality');
+                UI.enableSetting('framerate');
+                UI.enableSetting('video_scaling');
+                UI.enableSetting('video_out_time');
+                UI.showStatus("Refresh or reconnect to apply changes.");
+                return;
+            case 4: //extreme
+                UI.forceSetting('dynamic_quality_min', 8);
+                UI.forceSetting('dynamic_quality_max', 9);
+                UI.forceSetting('framerate', 30);
+                UI.forceSetting('treat_lossless', 8);
+
+                // effectively disables video mode
+                UI.forceSetting('video_time', 100);
+                UI.forceSetting('video_area', 100);
+                // go ahead and set video mode settings, won't be used
+                UI.forceSetting('max_video_resolution_x', 1920);
+                UI.forceSetting('max_video_resolution_y', 1080);
+                UI.forceSetting('jpeg_video_quality', 8);
+                UI.forceSetting('webp_video_quality', 8);
+                UI.forceSetting('video_scaling', 0);
+                UI.forceSetting('video_out_time', 3);
+                break;
+            case 3: // high
+                UI.forceSetting('jpeg_video_quality', 8);
+                UI.forceSetting('webp_video_quality', 8);
+                UI.forceSetting('dynamic_quality_min', 7);
+                UI.forceSetting('dynamic_quality_max', 9);
+                UI.forceSetting('max_video_resolution_x', 1920);
+                UI.forceSetting('max_video_resolution_y', 1080);
+                UI.forceSetting('framerate', 30);
+                UI.forceSetting('treat_lossless', 8);
+                UI.forceSetting('video_time', 5);
+                UI.forceSetting('video_area', 65);
+                UI.forceSetting('video_scaling', 0);
+                UI.forceSetting('video_out_time', 3);
+                break;
+            case 1: // low, resolution capped at 720p keeping aspect ratio
+                UI.forceSetting('jpeg_video_quality', 5);
+                UI.forceSetting('webp_video_quality', 4);
+                UI.forceSetting('dynamic_quality_min', 3);
+                UI.forceSetting('dynamic_quality_max', 7);
+                UI.forceSetting('max_video_resolution_x', 960);
+                UI.forceSetting('max_video_resolution_y', 540);
+                UI.forceSetting('framerate', 22);
+                UI.forceSetting('treat_lossless', 7);
+                UI.forceSetting('video_time', 5);
+                UI.forceSetting('video_area', 65);
+                UI.forceSetting('video_scaling', 0);
+                UI.forceSetting('video_out_time', 3);
+                break;
+            case 2: // medium
+            case 0: // static resolution, but same settings as medium
+            default:
+                UI.forceSetting('jpeg_video_quality', 7);
+                UI.forceSetting('webp_video_quality', 7);
+                UI.forceSetting('dynamic_quality_min', 4);
+                UI.forceSetting('dynamic_quality_max', 9);
+                UI.forceSetting('max_video_resolution_x', 960);
+                UI.forceSetting('max_video_resolution_y', 540);
+                UI.forceSetting('framerate', 24);
+                UI.forceSetting('treat_lossless', 7);
+                UI.forceSetting('video_time', 5);
+                UI.forceSetting('video_area', 65);
+                UI.forceSetting('video_scaling', 0);
+                UI.forceSetting('video_out_time', 3);
+                break;
+        }
+
+        if (UI.rfb) {
+            UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
+            UI.rfb.antiAliasing = parseInt(UI.getSetting('anti_aliasing'));
+            UI.rfb.dynamicQualityMin = parseInt(UI.getSetting('dynamic_quality_min'));
+            UI.rfb.dynamicQualityMax = parseInt(UI.getSetting('dynamic_quality_max'));
+            UI.rfb.jpegVideoQuality = parseInt(UI.getSetting('jpeg_video_quality'));
+            UI.rfb.webpVideoQuality = parseInt(UI.getSetting('webp_video_quality'));
+            UI.rfb.videoArea = parseInt(UI.getSetting('video_area'));
+            UI.rfb.videoTime = parseInt(UI.getSetting('video_time'));
+            UI.rfb.videoOutTime = parseInt(UI.getSetting('video_out_time'));
+            UI.rfb.videoScaling = parseInt(UI.getSetting('video_scaling'));
+            UI.rfb.treatLossless = parseInt(UI.getSetting('treat_lossless'));
+            UI.rfb.maxVideoResolutionX = parseInt(UI.getSetting('max_video_resolution_x'));
+            UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
+            UI.rfb.frameRate = parseInt(UI.getSetting('framerate'));
+            UI.rfb.enableWebP = UI.getSetting('enable_webp');
+            UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
+
+            // Gracefully update settings server side
+            UI.rfb.updateConnectionSettings();
+        }
     },
 
 /* ------^-------
@@ -1716,15 +1936,27 @@ const UI = {
         UI.rfb.compressionLevel = parseInt(UI.getSetting('compression'));
     },
 
+
+
 /* ------^-------
  *  /COMPRESSION
  * ==============
- *    KEYBOARD
+ *  MOUSE AND KEYBOARD
  * ------v------*/
 
-    showVirtualKeyboard() {
-        if (!isTouchDevice) return;
+    updateShortcutTranslation() {
+        UI.rfb.translateShortcuts = UI.getSetting('translate_shortcuts');
+    },
 
+    showKeyboardControls() {
+        document.querySelector(".keyboard-controls").classList.add("is-visible");
+    },
+
+    hideKeyboardControls() {
+        document.querySelector(".keyboard-controls").classList.remove("is-visible");
+    },
+
+    showVirtualKeyboard() {
         const input = document.getElementById('noVNC_keyboardinput');
 
         if (document.activeElement == input) return;
@@ -1738,11 +1970,17 @@ const UI = {
         } catch (err) {
             // setSelectionRange is undefined in Google Chrome
         }
+
+        // ensure that the hidden input used for showing the virutal keyboard
+        // does not steal focus if the user has closed it manually
+        document.querySelector("canvas").addEventListener("touchstart", () => {
+            if (document.activeElement === input) {
+                input.blur();
+            }
+        }, { once: true });
     },
 
     hideVirtualKeyboard() {
-        if (!isTouchDevice) return;
-
         const input = document.getElementById('noVNC_keyboardinput');
 
         if (document.activeElement != input) return;
@@ -1777,9 +2015,8 @@ const UI = {
 
     keepVirtualKeyboard(event) {
         const input = document.getElementById('noVNC_keyboardinput');
-        if ( UI.needToCheckClipboardChange ) {
-            UI.copyFromLocalClipboard();
-        }
+
+        UI.copyFromLocalClipboard();
 
         // Only prevent focus change if the virtual keyboard is active
         if (document.activeElement != input) {
@@ -1899,6 +2136,14 @@ const UI = {
             .classList.add("noVNC_selected");
     },
 
+    disableSoftwareKeyboard() {
+        document.querySelector("#noVNC_keyboard_button").disabled = true;
+    },
+
+    enableSoftwareKeyboard() {
+        document.querySelector("#noVNC_keyboard_button").disabled = false;
+    },
+
     closeExtraKeys() {
         document.getElementById('noVNC_modifiers')
             .classList.remove("noVNC_open");
@@ -1907,8 +2152,7 @@ const UI = {
     },
 
     toggleExtraKeys() {
-        if (document.getElementById('noVNC_modifiers')
-            .classList.contains("noVNC_open")) {
+        if (document.getElementById('noVNC_modifiers').classList.contains("noVNC_open")) {
             UI.closeExtraKeys();
         } else  {
             UI.openExtraKeys();
@@ -1932,6 +2176,8 @@ const UI = {
             UI.sendKey(KeyTable.XK_Control_L, "ControlLeft", true);
             btn.classList.add("noVNC_selected");
         }
+
+        document.querySelector(".keyboard-controls .button.ctrl").classList.toggle("selected");
     },
 
     toggleWindows() {
@@ -1943,6 +2189,8 @@ const UI = {
             UI.sendKey(KeyTable.XK_Super_L, "MetaLeft", true);
             btn.classList.add("noVNC_selected");
         }
+
+        document.querySelector(".keyboard-controls .button.windows").classList.toggle("selected");
     },
 
     toggleAlt() {
@@ -1954,6 +2202,8 @@ const UI = {
             UI.sendKey(KeyTable.XK_Alt_L, "AltLeft", true);
             btn.classList.add("noVNC_selected");
         }
+
+        document.querySelector(".keyboard-controls .button.alt").classList.toggle("selected");
     },
 
     sendCtrlAltDel() {

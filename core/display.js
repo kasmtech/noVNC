@@ -21,6 +21,8 @@ export default class Display {
         this._fbWidth = 0;
         this._fbHeight = 0;
 
+        this._renderMs = 0;
+
         this._prevDrawStyle = "";
 
         Log.Debug(">> Display.constructor");
@@ -61,6 +63,7 @@ export default class Display {
 
         this._scale = 1.0;
         this._clipViewport = false;
+        this._antiAliasing = 0;
 
         // ===== EVENT HANDLERS =====
 
@@ -68,6 +71,12 @@ export default class Display {
     }
 
     // ===== PROPERTIES =====
+    
+    get antiAliasing() { return this._antiAliasing; }
+    set antiAliasing(value) {
+        this._antiAliasing = value;
+        this._rescale(this._scale);
+    }
 
     get scale() { return this._scale; }
     set scale(scale) {
@@ -89,6 +98,13 @@ export default class Display {
 
     get height() {
         return this._fbHeight;
+    }
+
+    get renderMs() {
+        return this._renderMs;
+    }
+    set renderMs(val) {
+        this._renderMs = val;
     }
 
     // ===== PUBLIC METHODS =====
@@ -394,21 +410,24 @@ export default class Display {
     }
 
     drawImage(img, x, y, w, h) {
-	if (img.width != w || img.height != h) {
-            this._drawCtx.drawImage(img, x, y, w, h);
-        } else {
-            this._drawCtx.drawImage(img, x, y);
+        try {
+	    if (img.width != w || img.height != h) {
+                this._drawCtx.drawImage(img, x, y, w, h);
+            } else {
+                this._drawCtx.drawImage(img, x, y);
+            }
+        } catch (error) {
+            Log.Error('Invalid image recieved.'); //KASM-2090
         }
         this._damage(x, y, w, h);
     }
 
-    autoscale(containerWidth, containerHeight) {
-        let scaleRatio;
+    autoscale(containerWidth, containerHeight, scaleRatio=0) {
 
         if (containerWidth === 0 || containerHeight === 0) {
             scaleRatio = 0;
 
-        } else {
+        } else if (scaleRatio === 0) {
 
             const vp = this._viewportLoc;
             const targetAspectRatio = containerWidth / containerHeight;
@@ -442,6 +461,19 @@ export default class Display {
             this._target.style.width = width;
             this._target.style.height = height;
         }
+
+        Log.Info('Pixel Ratio: ' + window.devicePixelRatio + ', VNC Scale: ' + factor + 'VNC Res: ' + vp.w + 'x' + vp.h);
+
+        var pixR = Math.abs(Math.ceil(window.devicePixelRatio));
+        var isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
+
+        if (this.antiAliasing === 2 || (this.antiAliasing === 0 && factor === 1 && this._target.style.imageRendering !== 'pixelated' && pixR === window.devicePixelRatio && vp.w > 0)) {
+            this._target.style.imageRendering = ((!isFirefox) ? 'pixelated' : 'crisp-edges' );
+            Log.Debug('Smoothing disabled');
+        } else if (this.antiAliasing === 1 || (this.antiAliasing === 0 && factor !== 1 && this._target.style.imageRendering !== 'auto')) {
+            this._target.style.imageRendering = 'auto'; //auto is really smooth (blurry) using trilinear of linear
+            Log.Debug('Smoothing enabled');
+        }
     }
 
     _setFillColor(color) {
@@ -470,6 +502,7 @@ export default class Display {
 
     _scanRenderQ() {
         let ready = true;
+        let before = Date.now();
         while (ready && this._renderQ.length > 0) {
             const a = this._renderQ[0];
             switch (a.type) {
@@ -513,5 +546,8 @@ export default class Display {
             this._flushing = false;
             this.onflush();
         }
+
+        let elapsed = Date.now() - before;
+        this._renderMs += elapsed;
     }
 }

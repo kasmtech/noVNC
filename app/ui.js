@@ -47,6 +47,7 @@ const PAGE_TITLE = "KasmVNC";
 
 var delta = 500;
 var lastKeypressTime = 0;
+var lastKeypressCode = -1;
 var currentEventCount = -1;
 var idleCounter = 0;
 
@@ -542,6 +543,7 @@ const UI = {
         UI.addSettingChangeHandler('clipboard_seamless');
         UI.addSettingChangeHandler('clipboard_up');
         UI.addSettingChangeHandler('clipboard_down');
+        UI.addSettingChangeHandler('toggle_control_panel');
     },
 
     addFullscreenHandlers() {
@@ -1403,23 +1405,33 @@ const UI = {
             document.getElementById('noVNC_status').style.visibility = "visible";
          }
 
-         // Send an event to the parent document (kasm app) to toggle the control panel when ctl is double clicked
-        if (UI.getSetting('toggle_control_panel', false)) {
+        //key events for KasmVNC control
+        document.addEventListener('keyup', function (event) {
 
-            document.addEventListener('keyup', function (event) {
-                // CTRL and the various implementations of the mac command key
-                if ([17, 224, 91, 93].indexOf(event.keyCode) > -1) {
-                    var thisKeypressTime = new Date();
-
-                    if (thisKeypressTime - lastKeypressTime <= delta) {
-                        UI.toggleNav();
-                        thisKeypressTime = 0;
+            var thisKeypressTime = new Date();
+            if (UI.getSetting('toggle_control_panel', false) && lastKeypressCode == event.keyCode) {
+                if (thisKeypressTime - lastKeypressTime <= delta) {
+                    switch(event.keyCode) {
+                        case 17:
+                        case 224:
+                        case 91:
+                        case 93:
+                            UI.toggleNav();
+                            break;
+                        case 192:
+                            document.getElementById("noVNC_setting_pointer_relative").click();
                     }
 
-                    lastKeypressTime = thisKeypressTime;
+                    lastKeypressTime = 0;
+                    lastKeypressCode = -1;
                 }
-            }, true);
-        }
+            } else {
+                lastKeypressTime = 0;
+            }
+            lastKeypressCode = event.keyCode;
+            lastKeypressTime = thisKeypressTime;
+
+        }, true);
     },
 
     disconnect() {
@@ -1566,7 +1578,11 @@ const UI = {
     },
 
     toggleNav(){
-        parent.postMessage({ action: 'togglenav', value: null}, '*' );
+        if (WebUtil.isInsideKasmVDI()) {
+            parent.postMessage({ action: 'togglenav', value: null}, '*' );
+        } else {
+            
+        }
     },
 
     clipboardRx(event) {
@@ -1757,21 +1773,28 @@ const UI = {
     },
 
     toggleRelativePointer() {
-        if (document.getElementById("noVNC_setting_pointer_relative").checked == true) {
+        if (UI.rfb.pointerRelative == false) {
+
             UI.rfb.pointerRelative = true;
             // enable pointer lock if it is not already enabled
             var pointer_lock_el = document.getElementById("noVNC_setting_pointer_lock");
             if (!pointer_lock_el.checked) {
                 pointer_lock_el.click();
             }
+
+            document.getElementById('noVNC_setting_pointer_relative')
+                .classList.add("noVNC_selected");
         } else {
             // disable pointer lock if it is not already disabled
             var pointer_lock_el = document.getElementById("noVNC_setting_pointer_lock");
             if (!pointer_lock_el.checked) {
                 pointer_lock_el.click();
-            } else {
-                UI.rfb.pointerRelative = false;
             }
+            
+            UI.rfb.pointerRelative = false;
+            
+            document.getElementById('noVNC_setting_pointer_relative')
+                .classList.remove("noVNC_selected");
         }
     },
 
@@ -2288,6 +2311,8 @@ const UI = {
             pointer_lock_el.checked = false;
             pointer_rel_el.checked = false;
             UI.rfb.pointerRelative = false;
+            document.getElementById('noVNC_setting_pointer_relative')
+                .classList.remove("noVNC_selected");
         }
     },
 

@@ -777,22 +777,25 @@ export default class RFB extends EventTargetMixin {
         this._canvas.blur();
     }
 
-    requestInputLock(locks) {
-        if (locks.pointer) {
+    toggleInputLock() {
+        if (!this._pointerLock) {
             if (this._canvas.requestPointerLock) {
                 this._canvas.requestPointerLock();
-                return;
-            }
-            if (this._canvas.mozRequestPointerLock) {
+            } else if (this._canvas.mozRequestPointerLock) {
                 this._canvas.mozRequestPointerLock();
-                return;
+            }
+        } else {
+            if (window.document.exitPointerLock) {
+                window.document.exitPointerLock();
+            } else if (window.document.mozExitPointerLock) {
+                window.document.mozExitPointerLock();
             }
         }
         // If we were not able to request any lock, still let the user know
         // about the result.
-        this.dispatchEvent(new CustomEvent(
-            "inputlock",
-            { detail: { pointer: this._pointerLock }, }));
+        //this.dispatchEvent(new CustomEvent(
+        //    "inputlock",
+        //    { detail: { pointer: this._pointerLock }, }));
     }
 
     clipboardPasteFrom(text) {

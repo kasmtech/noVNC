@@ -34,7 +34,7 @@ import "core-js/stable";
 import "regenerator-runtime/runtime";
 import * as Log from '../core/util/logging.js';
 import _, { l10n } from './localization.js';
-import { isTouchDevice, isSafari, hasScrollbarGutter, dragThreshold, supportsBinaryClipboard, isFirefox, isWindows, isIOS }
+import { isTouchDevice, isSafari, hasScrollbarGutter, dragThreshold, supportsBinaryClipboard, isFirefox, isWindows, isIOS, supportsPointerLock }
     from '../core/util/browser.js';
 import { setCapture, getPointerEvent } from '../core/util/events.js';
 import KeyTable from "../core/input/keysym.js";
@@ -357,7 +357,7 @@ const UI = {
 
         document
             .getElementById("noVNC_setting_pointer_lock")
-            .addEventListener("click", UI.requestPointerLock);
+            .addEventListener("click", UI.togglePointerLock);
         document
             .getElementById("noVNC_setting_pointer_relative")
             .addEventListener("click", UI.toggleRelativePointer)
@@ -1407,29 +1407,19 @@ const UI = {
 
         //key events for KasmVNC control
         document.addEventListener('keyup', function (event) {
-
-            var thisKeypressTime = new Date();
-            if (UI.getSetting('toggle_control_panel', false) && lastKeypressCode == event.keyCode) {
-                if (thisKeypressTime - lastKeypressTime <= delta) {
-                    switch(event.keyCode) {
-                        case 17:
-                        case 224:
-                        case 91:
-                        case 93:
+            if (event.ctrlKey && event.shiftKey) {
+                switch(event.keyCode) {
+                        case 49:
                             UI.toggleNav();
                             break;
-                        case 192:
-                            document.getElementById("noVNC_setting_pointer_relative").click();
+                        case 50:
+                            UI.toggleRelativePointer();
+                            break;
+                        case 51:
+                            UI.togglePointerLock();
+                            break;
                     }
-
-                    lastKeypressTime = 0;
-                    lastKeypressCode = -1;
-                }
-            } else {
-                lastKeypressTime = 0;
             }
-            lastKeypressCode = event.keyCode;
-            lastKeypressTime = thisKeypressTime;
 
         }, true);
     },
@@ -1548,10 +1538,6 @@ const UI = {
     Menu.js Additions
      */
     receiveMessage(event) {
-        //TODO: UNCOMMENT FOR PRODUCTION
-        //if (event.origin !== "https://kasmweb.com")
-        //      return;
-
         if (event.data && event.data.action) {
             switch (event.data.action) {
                 case 'clipboardsnd':
@@ -1564,10 +1550,10 @@ const UI = {
                     UI.updateQuality();
                     break;
                 case 'pointergamemode':
-                    document.getElementById("noVNC_setting_pointer_relative").click();
+                    UI.toggleRelativePointer();
                     break;
                 case 'pointerlock':
-                    document.getElementById("noVNC_setting_pointer_lock").click();
+                    UI.togglePointerLock();
                     break;
             }
         }
@@ -1581,7 +1567,11 @@ const UI = {
         if (WebUtil.isInsideKasmVDI()) {
             parent.postMessage({ action: 'togglenav', value: null}, '*' );
         } else {
-            
+            UI.toggleControlbar();
+            UI.keepControlbar();
+            UI.activateControlbar();
+            UI.controlbarGrabbed = false;
+            UI.showControlbarHint(false);
         }
     },
 
@@ -1768,11 +1758,20 @@ const UI = {
         }
     },
 
-    requestPointerLock() {
-        UI.rfb.requestInputLock({ pointer: true });
+    togglePointerLock() {
+        if (!supportsPointerLock()) {
+            UI.showStatus('Your browser does not support pointer lock.', 'info', 1500, true);
+        } else {
+            UI.rfb.toggleInputLock();
+        }
     },
 
     toggleRelativePointer() {
+        if (!supportsPointerLock()) {
+            UI.showStatus('Your browser does not support pointer lock.', 'info', 1500, true);
+            return;
+        }
+
         if (UI.rfb.pointerRelative == false) {
 
             UI.rfb.pointerRelative = true;
@@ -1787,7 +1786,7 @@ const UI = {
         } else {
             // disable pointer lock if it is not already disabled
             var pointer_lock_el = document.getElementById("noVNC_setting_pointer_lock");
-            if (!pointer_lock_el.checked) {
+            if (pointer_lock_el.checked) {
                 pointer_lock_el.click();
             }
             

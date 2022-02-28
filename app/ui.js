@@ -468,6 +468,8 @@ const UI = {
             .addEventListener('change', UI.clipboardSend);
         document.getElementById("noVNC_clipboard_clear_button")
             .addEventListener('click', UI.clipboardClear);
+
+        window.addEventListener("focus", UI.copyFromLocalClipboard);
     },
 
     // Add a call to save settings when the element changes,
@@ -1201,9 +1203,16 @@ const UI = {
 
     //recieved bottleneck stats
     bottleneckStatsRecieve(e) {
-        var obj = JSON.parse(e.detail.text);
-        document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3];
-        console.log(e.detail.text);
+        if (UI.rfb) {
+            try {
+                let obj = JSON.parse(e.detail.text);
+                let fps = UI.rfb.statsFps;
+                document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + fps;
+                console.log(e.detail.text);
+            } catch (err) {
+                console.log('Invalid bottleneck stats recieved from server.')
+            }
+        }
     },
 
     popupMessage: function(msg, secs) {
@@ -2037,8 +2046,6 @@ const UI = {
 
     keepVirtualKeyboard(event) {
         const input = document.getElementById('noVNC_keyboardinput');
-
-        UI.copyFromLocalClipboard();
 
         // Only prevent focus change if the virtual keyboard is active
         if (document.activeElement != input) {

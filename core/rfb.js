@@ -109,23 +109,16 @@ export default class RFB extends EventTargetMixin {
         this._rfbTightVNC = false;
         this._rfbVeNCryptState = 0;
         this._rfbXvpVer = 0;
-
         this._fbWidth = 0;
         this._fbHeight = 0;
-
         this._fbName = "";
-
         this._capabilities = { power: false };
-
         this._supportsFence = false;
-
         this._supportsContinuousUpdates = false;
         this._enabledContinuousUpdates = false;
-
         this._supportsSetDesktopSize = false;
         this._screenID = 0;
         this._screenFlags = 0;
-
         this._qemuExtKeyEventSupported = false;
 
         // kasm defaults
@@ -675,6 +668,8 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
+    get statsFps() { return this._display.fps; }
+
     // ===== PUBLIC METHODS =====
 
     /*
@@ -810,6 +805,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         let h = hashUInt8Array(data);
+        // avoid resending the same data if larger than 64k
         if (h === this._clipHash) {
             Log.Debug('No clipboard changes');
             return;
@@ -848,6 +844,7 @@ export default class RFB extends EventTargetMixin {
 
                         if (!h) {
                             h = hashUInt8Array(data);
+                            // avoid resending the same data if larger than 64k
                             if (h === this._clipHash) {
                                 Log.Debug('No clipboard changes');
                                 return;
@@ -2787,18 +2784,17 @@ export default class RFB extends EventTargetMixin {
         let first, ret;
         switch (msgType) {
             case 0:  // FramebufferUpdate
-                let before = performance.now();
                 this._display.renderMs = 0;
                 ret = this._framebufferUpdate();
                 if (ret && !this._enabledContinuousUpdates) {
                     RFB.messages.fbUpdateRequest(this._sock, true, 0, 0,
                                                  this._fbWidth, this._fbHeight);
                 }
-                let elapsed = performance.now() - before;
                 if (this._trackFrameStats) {
-                    RFB.messages.sendFrameStats(this._sock, elapsed, this._display.renderMs);
+                    RFB.messages.sendFrameStats(this._sock, this._display.fps, this._display.renderMs);
                     this._trackFrameStats = false;
                 }
+                
                 return ret;
 
             case 1:  // SetColorMapEntries
@@ -3651,7 +3647,7 @@ RFB.messages = {
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
-	if (buff == null) { return; }
+        if (buff == null) { return; }
 
         buff[offset] = 178; // msg-type
 
@@ -3667,7 +3663,7 @@ RFB.messages = {
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
-	if (buff == null) { return; }
+        if (buff == null) { return; }
 
         buff[offset] = 179; // msg-type
 

@@ -77,7 +77,7 @@ export default class Keyboard {
             delete this._keyDownList[code];
         }
 
-        Log.Info("onkeyevent " + (down ? "down" : "up") +
+        Log.Debug("onkeyevent " + (down ? "down" : "up") +
                   ", keysym: " + keysym, ", code: " + code);
         this.onkeyevent(keysym, code, down);
     }
@@ -125,9 +125,7 @@ export default class Keyboard {
         Log.Debug("Composition ended");
         if (this._enableIME) { this._imeInProgress = false; }
         if (isChromiumBased()) {
-            //chromium based browsers fire compositionEnd AFTER input changed event
-            //so we must call it again
-            this._handleInput(e);
+            this._imeHold = false;
         }
     }
 
@@ -137,24 +135,30 @@ export default class Keyboard {
         //IME changes can back out old characters and replace, thus send differential if IME
         //otherwise send new characters
         if (this._enableIME && this._imeHold) {
-            if (this._imeInProgress) {
-                Log.Debug("IME in progress, skipping input");
-                return;
+            Log.Debug("IME input change, sending differential");
+            if (!this._imeInProgress) {
+                this._imeHold = false; //Firefox fires compisitionend before last input change
             }
 
-            Log.Debug("IME input change, sending differential");
-            this._imeHold = false; //release the ime hold
             const oldValue = this._lastKeyboardInput;
             const newValue = e.target.value;
-            let diff = '';
             let diff_start = 0;
+
+            //find position where difference starts
             for (let i = 0; i < Math.min(oldValue.length, newValue.length); i++) {
                 if (newValue.charAt(i) != oldValue.charAt(i)) {
                     break;
                 }
                 diff_start++;
             }
+
+            //send backspaces if needed
+            for (let bs = oldValue.length - diff_start; bs > 0; bs--) {
+                this._sendKeyEvent(KeyTable.XK_BackSpace, "Backspace", true);
+                this._sendKeyEvent(KeyTable.XK_BackSpace, "Backspace", false);
+            } 
             
+            //send new keys
             for (let i = diff_start; i < newValue.length; i++) {
                 this._sendKeyEvent(keysyms.lookup(newValue.charCodeAt(i)), 'Unidentified', true);
                 this._sendKeyEvent(keysyms.lookup(newValue.charCodeAt(i)), 'Unidentified', false);

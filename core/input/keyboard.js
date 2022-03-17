@@ -51,7 +51,10 @@ export default class Keyboard {
     // ===== PUBLIC METHODS =====
 
     get enableIME() { return this._enableIME; }
-    set enableIME(val) { this._enableIME = val; }
+    set enableIME(val) { 
+        this._enableIME = val; 
+        this.focus();
+    }
 
     // ===== PRIVATE METHODS =====
 

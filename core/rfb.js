@@ -339,6 +339,25 @@ export default class RFB extends EventTargetMixin {
 
     // ===== PROPERTIES =====
 
+    get pointerLock() { return this._pointerLock; }
+    set pointerLock(value) {
+        // this._pointLock is set after pointer lock is successfully implemented
+        // callback is handled at this._handlePointerLockChange
+        if (!this._pointerLock) {
+            if (this._canvas.requestPointerLock) {
+                this._canvas.requestPointerLock();
+            } else if (this._canvas.mozRequestPointerLock) {
+                this._canvas.mozRequestPointerLock();
+            }
+        } else {
+            if (window.document.exitPointerLock) {
+                window.document.exitPointerLock();
+            } else if (window.document.mozExitPointerLock) {
+                window.document.mozExitPointerLock();
+            }
+        }
+    }
+
     get pointerRelative() { return this._pointerRelativeEnabled; }
     set pointerRelative(value) 
     { 
@@ -772,27 +791,6 @@ export default class RFB extends EventTargetMixin {
         this._canvas.blur();
     }
 
-    toggleInputLock() {
-        if (!this._pointerLock) {
-            if (this._canvas.requestPointerLock) {
-                this._canvas.requestPointerLock();
-            } else if (this._canvas.mozRequestPointerLock) {
-                this._canvas.mozRequestPointerLock();
-            }
-        } else {
-            if (window.document.exitPointerLock) {
-                window.document.exitPointerLock();
-            } else if (window.document.mozExitPointerLock) {
-                window.document.mozExitPointerLock();
-            }
-        }
-        // If we were not able to request any lock, still let the user know
-        // about the result.
-        //this.dispatchEvent(new CustomEvent(
-        //    "inputlock",
-        //    { detail: { pointer: this._pointerLock }, }));
-    }
-
     clipboardPasteFrom(text) {
         if (this._rfbConnectionState !== 'connected' || this._viewOnly) { return; }
         if (!(typeof text === 'string' && text.length > 0)) { return; }
@@ -1034,6 +1032,12 @@ export default class RFB extends EventTargetMixin {
         }
 
         this.focus();
+
+        // Re-enable pointerLock if relative cursor is enabled
+        // pointerLock must come from user initiated event, such as mouse down
+        if (!this._pointerLock && this._pointerRelativeEnabled) {
+            this.pointerLock = true;
+        }
     }
 
     _setDesktopName(name) {
@@ -1381,7 +1385,7 @@ export default class RFB extends EventTargetMixin {
                 pos.y = this._fbHeight;
             }
             this._cursor.move(pos.x, pos.y);
-        } else if (this._pointerRelativeEnabled) {
+        } else if (this._pointerLock && this._pointerRelativeEnabled) {
             pos = {
                 x: this._mousePos.x + ev.movementX,
                 y: this._mousePos.y + ev.movementY,
@@ -1523,7 +1527,7 @@ export default class RFB extends EventTargetMixin {
 
     _handlePointerLockError() {
         this.dispatchEvent(new CustomEvent(
-            "inputlock",
+            "inputlockerror",
             { detail: { pointer: this._pointerLock }, }));
     }
 
@@ -1531,7 +1535,8 @@ export default class RFB extends EventTargetMixin {
         if (this._rfbConnectionState !== 'connected') { return; }
         if (this._viewOnly) { return; } // View only, skip mouse events
 
-        if (this._pointerRelativeEnabled) {
+        if (this._pointerLock && this._pointerRelativeEnabled) {
+
             // Use releative cursor position
             var rel_16_x = toSignedRelative16bit(x - this._pointerLockPos.x);
             var rel_16_y = toSignedRelative16bit(y - this._pointerLockPos.y);

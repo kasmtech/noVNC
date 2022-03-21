@@ -246,7 +246,6 @@ const UI = {
         UI.initSetting('prefer_local_cursor', true);
         UI.initSetting('toggle_control_panel', false);
         UI.initSetting('enable_perf_stats', false);
-        UI.initSetting('pointer_relative', false); 
 
         if (WebUtil.isInsideKasmVDI()) {
             UI.initSetting('clipboard_up', false);
@@ -358,9 +357,6 @@ const UI = {
         document
             .getElementById("noVNC_setting_pointer_lock")
             .addEventListener("click", UI.togglePointerLock);
-        document
-            .getElementById("noVNC_setting_pointer_relative")
-            .addEventListener("click", UI.toggleRelativePointer)
 
         document.getElementById("noVNC_control_bar_handle")
             .addEventListener('mousedown', UI.controlbarHandleMouseDown);
@@ -433,6 +429,8 @@ const UI = {
             .addEventListener('click', UI.sendEsc);
         document.getElementById("noVNC_send_ctrl_alt_del_button")
             .addEventListener('click', UI.sendCtrlAltDel);
+        document.getElementById("noVNC_game_mode_button")
+            .addEventListener("click", UI.toggleRelativePointer)
     },
 
     addMachineHandlers() {
@@ -1327,6 +1325,7 @@ const UI = {
         UI.rfb.addEventListener("bell", UI.bell);
         UI.rfb.addEventListener("desktopname", UI.updateDesktopName);
         UI.rfb.addEventListener("inputlock", UI.inputLockChanged);
+        UI.rfb.addEventListener("inputlockerror", UI.inputLockError);
         UI.rfb.translateShortcuts = UI.getSetting('translate_shortcuts');
         UI.rfb.clipViewport = UI.getSetting('view_clip');
         UI.rfb.scaleViewport = UI.getSetting('resize') === 'scale';
@@ -1550,7 +1549,7 @@ const UI = {
         if (event.data && event.data.action) {
             switch (event.data.action) {
                 case 'clipboardsnd':
-                    if (UI.rfb.clipboardUp) {
+                    if (UI.rfb && UI.rfb.clipboardUp) {
                         UI.rfb.clipboardPasteFrom(event.data.value);
                     }
                     break;
@@ -1558,11 +1557,25 @@ const UI = {
                     UI.forceSetting('video_quality', parseInt(event.data.value), false);
                     UI.updateQuality();
                     break;
-                case 'pointergamemode':
-                    UI.toggleRelativePointer();
+                case 'enable_game_mode':
+                    if (UI.rfb && !UI.rfb.pointerRelative) {
+                        UI.toggleRelativePointer();
+                    }
                     break;
-                case 'pointerlock':
-                    UI.togglePointerLock();
+                case 'disable_game_mode':
+                    if (UI.rfb && UI.rfb.pointerRelative) {
+                        UI.toggleRelativePointer();
+                    }
+                    break;
+                case 'enable_pointer_lock':
+                    if (UI.rfb && !UI.rfb.pointerLock) {
+                        UI.togglePointerLock();
+                    }
+                    break;
+                case 'disable_pointer_lock':
+                    if (UI.rfb && UI.rfb.pointerLock) {
+                        UI.togglePointerLock();
+                    }
                     break;
             }
         }
@@ -1755,14 +1768,14 @@ const UI = {
                 .getElementById("noVNC_setting_pointer_lock")
                 .classList.remove("noVNC_hidden");
             document
-                .getElementById("noVNC_setting_pointer_relative")
+                .getElementById("noVNC_game_mode_button")
                 .classList.remove("noVNC_hidden");
         } else {
             document
                 .getElementById("noVNC_setting_pointer_lock")
                 .classList.add("noVNC_hidden");
             document
-                .getElementById("noVNC_setting_pointer_relative")
+                .getElementById("noVNC_game_mode_button")
                 .classList.add("noVNC_hidden");
         }
     },
@@ -1770,8 +1783,13 @@ const UI = {
     togglePointerLock() {
         if (!supportsPointerLock()) {
             UI.showStatus('Your browser does not support pointer lock.', 'info', 1500, true);
+            //force pointer lock in UI to false and disable control
+            UI.forceSetting('pointer_lock', false, true);
         } else {
-            UI.rfb.toggleInputLock();
+            UI.rfb.pointerLock = !UI.rfb.pointerLock;
+            if (UI.getSetting('pointer_lock') !== UI.rfb.pointerLock) {
+                UI.forceSetting('pointer_lock', UI.rfb.pointerLock, false);
+            }
         }
     },
 
@@ -1781,27 +1799,26 @@ const UI = {
             return;
         }
 
-        if (UI.rfb.pointerRelative == false) {
+        if (!UI.rfb.pointerRelative) {
 
             UI.rfb.pointerRelative = true;
-            // enable pointer lock if it is not already enabled
-            var pointer_lock_el = document.getElementById("noVNC_setting_pointer_lock");
-            if (!pointer_lock_el.checked) {
-                pointer_lock_el.click();
+            
+            if (!UI.rfb.pointerLock) {
+                UI.rfb.pointerLock = true;
             }
 
-            document.getElementById('noVNC_setting_pointer_relative')
+            document.getElementById('noVNC_game_mode_button')
                 .classList.add("noVNC_selected");
         } else {
-            // disable pointer lock if it is not already disabled
-            var pointer_lock_el = document.getElementById("noVNC_setting_pointer_lock");
-            if (pointer_lock_el.checked) {
-                pointer_lock_el.click();
+            if (UI.rfb.pointerLock) {
+                UI.rfb.pointerLock = false;
             }
-            
             UI.rfb.pointerRelative = false;
             
-            document.getElementById('noVNC_setting_pointer_relative')
+            if (UI.getSetting('pointer_lock') !== UI.rfb.pointerLock) {
+                UI.forceSetting('pointer_lock', UI.rfb.pointerLock, false);
+            }
+            document.getElementById('noVNC_game_mode_button')
                 .classList.remove("noVNC_selected");
         }
     },
@@ -2280,6 +2297,8 @@ const UI = {
                 .classList.add('noVNC_hidden');
             document.getElementById('noVNC_clipboard_button')
                 .classList.add('noVNC_hidden');
+            document.getElementById('noVNC_game_mode_button')
+                .classList.add('noVNC_hidden');    
         } else {
             document.getElementById('noVNC_keyboard_button')
                 .classList.remove('noVNC_hidden');
@@ -2287,6 +2306,8 @@ const UI = {
                 .classList.remove('noVNC_hidden');
             document.getElementById('noVNC_clipboard_button')
                 .classList.remove('noVNC_hidden');
+            document.getElementById('noVNC_game_mode_button')
+                .classList.remove('noVNC_hidden');  
         }
     },
 
@@ -2307,19 +2328,30 @@ const UI = {
 
     inputLockChanged(e) {
         var pointer_lock_el = document.getElementById("noVNC_setting_pointer_lock");
-        var pointer_rel_el = document.getElementById("noVNC_setting_pointer_relative");
+        var pointer_rel_el = document.getElementById("noVNC_game_mode_button");
 
         if (e.detail.pointer) {
             pointer_lock_el.checked = true;
             UI.closeControlbar();
             UI.showStatus('Press Esc Key to Exit Pointer Lock Mode', 'warn', 5000, true);
         } else {
-            pointer_lock_el.checked = false;
-            pointer_rel_el.checked = false;
-            UI.rfb.pointerRelative = false;
-            document.getElementById('noVNC_setting_pointer_relative')
+            //If in game mode 
+            if (UI.rfb.pointerRelative) {
+                UI.showStatus('Game Mode paused, click on screen to resume Game Mode.', 'warn', 5000, true);
+            } else {
+                UI.forceSetting('pointer_lock', false, false);
+                document.getElementById('noVNC_game_mode_button')
                 .classList.remove("noVNC_selected");
+            }
         }
+    },
+
+    inputLockError(e) {
+        UI.showStatus('Unable to enter pointer lock mode.', 'warn', 5000, true);
+        UI.forceSetting('pointer_lock', false, false);
+        UI.rfb.pointerRelative = false;
+        document.getElementById('noVNC_game_mode_button')
+                .classList.remove("noVNC_selected");
     },
 
     bell(e) {

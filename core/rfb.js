@@ -2497,6 +2497,10 @@ export default class RFB extends EventTargetMixin {
         
 
         for (let i = 0; i < num; i++) {
+            if (this._sock.rQwait("Binary Clipboard op id", 4, buffByteLen)) { return false; }
+            buffByteLen += 4;
+            let clipid = this._sock.rQshift32();
+
             if (this._sock.rQwait("Binary Clipboard mimelen", 1, buffByteLen)) { return false; }
             buffByteLen++;
             let mimelen = this._sock.rQshift8();

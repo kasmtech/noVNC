@@ -2544,10 +2544,10 @@ export default class RFB extends EventTargetMixin {
                             );
                         }
 
-                    if (!this.clipboardBinary) { continue; }
+                    Log.Info("Processed binary clipboard (ID: " + clipid + ", SeqNum: " + seqNum  + ")  of MIME " + mime + " of length " + len);
                     
-                    Log.Info("Processed binary clipboard of MIME " + mime + " of length " + len);
-
+	            if (!this.clipboardBinary) { continue; }
+                    
                     clipItemData[mime] = new Blob([data], { type: mime });
                     break;
                 default:

@@ -2484,9 +2484,12 @@ export default class RFB extends EventTargetMixin {
     _handleBinaryClipboard() {
         Log.Debug("HandleBinaryClipboard");
 
-        if (this._sock.rQwait("Binary Clipboard header", 2, 1)) { return false; }
+        if (this._sock.rQwait("Binary Clipboard header", 6, 1)) { return false; }
 
         let num = this._sock.rQshift8(); // how many different mime types
+        let seqNum = this._sock.rQshift32();
+        // binary packet sequence number. Not guaranteed to be one-to-one with clipboard
+        // actions, especially in multi-user contexts
         let mimes = [];
         let clipItemData = {};
         let buffByteLen = 2;

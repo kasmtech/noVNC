@@ -1821,6 +1821,8 @@ const UI = {
             document.getElementById('noVNC_game_mode_button')
                 .classList.remove("noVNC_selected");
         }
+
+        parent.postMessage({ action: 'enable_game_mode', value: UI.rfb.pointerRelative }, '*' );
     },
 
 /* ------^-------
@@ -2332,6 +2334,7 @@ const UI = {
 
         if (e.detail.pointer) {
             pointer_lock_el.checked = true;
+            parent.postMessage({ action: 'enable_pointer_lock', value: true }, '*' );
             UI.closeControlbar();
             UI.showStatus('Press Esc Key to Exit Pointer Lock Mode', 'warn', 5000, true);
         } else {
@@ -2342,6 +2345,7 @@ const UI = {
                 UI.forceSetting('pointer_lock', false, false);
                 document.getElementById('noVNC_game_mode_button')
                 .classList.remove("noVNC_selected");
+                parent.postMessage({ action: 'enable_pointer_lock', value: false }, '*' );
             }
         }
     },

@@ -363,8 +363,10 @@ export default class RFB extends EventTargetMixin {
     { 
         this._pointerRelativeEnabled = value; 
         if (value) {
-            this._pointerLockPos.x = Math.floor(this._fbWidth / 2);
-            this._pointerLockPos.y = Math.floor(this._fbHeight / 2);
+            let max_w = ((this._display.scale === 1) ? this._fbWidth : (this._fbWidth * this._display.scale));
+            let max_h = ((this._display.scale === 1) ? this._fbHeight : (this._fbHeight * this._display.scale));
+            this._pointerLockPos.x = Math.floor(max_w / 2);
+            this._pointerLockPos.y = Math.floor(max_h / 2);
 
             // reset the cursor position to center
             this._mousePos = { x: this._pointerLockPos.x , y: this._pointerLockPos.y };
@@ -1370,19 +1372,21 @@ export default class RFB extends EventTargetMixin {
 
         let pos;
         if (this._pointerLock && !this._pointerRelativeEnabled) {
+            let max_w = ((this._display.scale === 1) ? this._fbWidth : (this._fbWidth * this._display.scale));
+            let max_h = ((this._display.scale === 1) ? this._fbHeight : (this._fbHeight * this._display.scale));
             pos = {
                 x: this._mousePos.x + ev.movementX,
                 y: this._mousePos.y + ev.movementY,
             };
             if (pos.x < 0) {
                 pos.x = 0;
-            } else if (pos.x > this._fbWidth) {
-                pos.x = this._fbWidth;
+            } else if (pos.x > max_w) {
+                pos.x = max_w;
             }
             if (pos.y < 0) {
                 pos.y = 0;
-            } else if (pos.y > this._fbHeight) {
-                pos.y = this._fbHeight;
+            } else if (pos.y > max_h) {
+                pos.y = max_h;
             }
             this._cursor.move(pos.x, pos.y);
         } else if (this._pointerLock && this._pointerRelativeEnabled) {

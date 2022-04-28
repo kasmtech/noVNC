@@ -211,6 +211,11 @@
                             <input type="checkbox" id="noVNC_setting_pointer_lock" />  Enable Pointer Lock
                         </label>
                     </li>
+                        <label><input id="noVNC_setting_enable_ime" type="checkbox" /> IME Input Mode</label></li>
+                    <li>
+                        <label><input id="noVNC_setting_virtual_keyboard_visible" type="checkbox" /> Show Virtual Keyboard Control</label></li>
+                    <li>
+                        <label><input id="noVNC_setting_toggle_control_panel" type="checkbox" /> Toggle Control Panel via Keystrokes</label></li>
                     <li>
                         <label for="noVNC_setting_idle_disconnect">Idle Timeout:</label>
                         <select id="noVNC_setting_idle_disconnect" name="vncIdleDisconnect">
@@ -468,7 +473,7 @@
         <source src="app/sounds/bell.mp3" type="audio/mpeg">
     </audio>
 
-    <div class="keyboard-controls">
+    <div id="noVNC_keyboard_control" class="keyboard-controls">
         <div class="buttons">
             <div class="button ctrl"></div>
             <div class="button alt"></div>
@@ -478,7 +483,7 @@
             <div class="button ctrlaltdel"></div>
         </div>
         
-        <div class="button keyboard handle"></div>
+        <div id="noVNC_keyboard_control_handle" class="button keyboard handle"></div>
     </div>
  </body>
 </html>

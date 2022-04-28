@@ -71,7 +71,7 @@ const extendedClipboardActionNotify  = 1 << 27;
 const extendedClipboardActionProvide = 1 << 28;
 
 export default class RFB extends EventTargetMixin {
-    constructor(target, urlOrChannel, options) {
+    constructor(target, touchInput, urlOrChannel, options) {
         if (!target) {
             throw new Error("Must specify target");
         }
@@ -250,7 +250,7 @@ export default class RFB extends EventTargetMixin {
         }
         this._display.onflush = this._onFlush.bind(this);
 
-        this._keyboard = new Keyboard(this._canvas);
+        this._keyboard = new Keyboard(this._canvas, touchInput);
         this._keyboard.onkeyevent = this._handleKeyEvent.bind(this);
 
         this._gestures = new GestureHandler();
@@ -373,6 +373,8 @@ export default class RFB extends EventTargetMixin {
             this._cursor.move(this._pointerLockPos.x, this._pointerLockPos.y);
         }
     }
+
+    get keyboard() { return this._keyboard; }
 
     get clipboardBinary() { return this._clipboardMode; }
     set clipboardBinary(val) { this._clipboardMode = val; }
@@ -786,11 +788,13 @@ export default class RFB extends EventTargetMixin {
     }
 
     focus() {
-        this._canvas.focus();
+        this._keyboard.focus();
+        //this._canvas.focus();
     }
 
     blur() {
-        this._canvas.blur();
+        this._keyboard.blur();
+        //this._canvas.blur();
     }
 
     clipboardPasteFrom(text) {
@@ -2623,6 +2627,10 @@ export default class RFB extends EventTargetMixin {
         
 
         for (let i = 0; i < num; i++) {
+            if (this._sock.rQwait("Binary Clipboard op id", 4, buffByteLen)) { return false; }
+            buffByteLen += 4;
+            let clipid = this._sock.rQshift32();
+
             if (this._sock.rQwait("Binary Clipboard mimelen", 1, buffByteLen)) { return false; }
             buffByteLen++;
             let mimelen = this._sock.rQshift8();
@@ -2663,10 +2671,10 @@ export default class RFB extends EventTargetMixin {
                             );
                         }
 
-                    if (!this.clipboardBinary) { continue; }
+                    Log.Info("Processed binary clipboard (ID: " + clipid + ")  of MIME " + mime + " of length " + len);
                     
-                    Log.Info("Processed binary clipboard of MIME " + mime + " of length " + len);
-
+	            if (!this.clipboardBinary) { continue; }
+                    
                     clipItemData[mime] = new Blob([data], { type: mime });
                     break;
                 default:

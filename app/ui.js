@@ -1555,7 +1555,6 @@ const UI = {
                     UI.forceSetting('video_quality', parseInt(event.data.value), false);
                     UI.updateQuality();
                     break;
-<<<<<<< HEAD
                 case 'enable_game_mode':
                     if (UI.rfb && !UI.rfb.pointerRelative) {
                         UI.toggleRelativePointer();
@@ -1574,7 +1573,8 @@ const UI = {
                 case 'disable_pointer_lock':
                     if (UI.rfb && UI.rfb.pointerLock) {
                         UI.togglePointerLock();
-=======
+                    }
+                    break;
                 case 'show_keyboard_controls':
                     if (!UI.getSetting('virtual_keyboard_visible')) {
                         UI.forceSetting('virtual_keyboard_visible', true, false);
@@ -1597,7 +1597,6 @@ const UI = {
                     if (UI.getSetting('enable_ime')) {
                         UI.forceSetting('enable_ime', false, false);
                         UI.toggleIMEMode();
->>>>>>> master
                     }
                     break;
             }

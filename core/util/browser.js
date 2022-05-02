@@ -138,6 +138,7 @@ export function isIE() {
     // other browser
     console.log(ie_ver);
     return ie_ver;
+}
 
 export function isChromiumBased() {
     return (!!window.chrome);

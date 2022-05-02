@@ -1815,36 +1815,31 @@ const UI = {
         }
     },
 
-    toggleRelativePointer() {
+    toggleRelativePointer(forcedToggleValue=null) {
         if (!supportsPointerLock()) {
             UI.showStatus('Your browser does not support pointer lock.', 'info', 1500, true);
             return;
         }
 
-        if (!UI.rfb.pointerRelative) {
+        var togglePosition = (forcedToggleValue || (forcedToggleValue === null && !UI.rfb.pointerRelative));
 
-            UI.rfb.pointerRelative = true;
-            
-            if (!UI.rfb.pointerLock) {
-                UI.rfb.pointerLock = true;
-            }
-
-            document.getElementById('noVNC_game_mode_button')
-                .classList.add("noVNC_selected");
-        } else {
-            if (UI.rfb.pointerLock) {
-                UI.rfb.pointerLock = false;
-            }
-            UI.rfb.pointerRelative = false;
-            
-            if (UI.getSetting('pointer_lock') !== UI.rfb.pointerLock) {
-                UI.forceSetting('pointer_lock', UI.rfb.pointerLock, false);
-            }
-            document.getElementById('noVNC_game_mode_button')
-                .classList.remove("noVNC_selected");
+        UI.rfb.pointerRelative = togglePosition;
+        if (UI.rfb.pointerLock !== togglePosition) {
+            UI.rfb.pointerLock = togglePosition;
+        }
+        if (UI.rfb.pointerRelative !== togglePosition) {
+            UI.rfb.pointerRelative = togglePosition;
         }
 
-        parent.postMessage({ action: 'enable_game_mode', value: UI.rfb.pointerRelative }, '*' );
+        if (togglePosition) {
+            document.getElementById('noVNC_game_mode_button').classList.add("noVNC_selected");
+        } else {
+            document.getElementById('noVNC_game_mode_button').classList.remove("noVNC_selected");
+        }
+
+        parent.postMessage({ action: 'enable_game_mode', value: togglePosition }, '*' );
+        parent.postMessage({ action: 'enable_pointer_lock', value: togglePosition }, '*' );
+
     },
 
 /* ------^-------

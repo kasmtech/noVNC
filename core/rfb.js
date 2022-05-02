@@ -789,12 +789,10 @@ export default class RFB extends EventTargetMixin {
 
     focus() {
         this._keyboard.focus();
-        //this._canvas.focus();
     }
 
     blur() {
         this._keyboard.blur();
-        //this._canvas.blur();
     }
 
     clipboardPasteFrom(text) {
@@ -1033,17 +1031,18 @@ export default class RFB extends EventTargetMixin {
             value: null
         }, "*");
 
+        // Re-enable pointerLock if relative cursor is enabled
+        // pointerLock must come from user initiated event
+        if (!this._pointerLock && this._pointerRelativeEnabled) {
+            this.pointerLock = true;
+        }
+
         if (!this.focusOnClick) {
             return;
         }
 
         this.focus();
 
-        // Re-enable pointerLock if relative cursor is enabled
-        // pointerLock must come from user initiated event, such as mouse down
-        if (!this._pointerLock && this._pointerRelativeEnabled) {
-            this.pointerLock = true;
-        }
     }
 
     _setDesktopName(name) {

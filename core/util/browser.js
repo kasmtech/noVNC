@@ -135,8 +135,6 @@ export function isIE() {
         ie_ver = parseInt(ua.substring(edge + 5, ua.indexOf('.', edge)), 10);
     }
 
-    // other browser
-    console.log(ie_ver);
     return ie_ver;
 }
 

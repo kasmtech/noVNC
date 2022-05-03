@@ -1540,9 +1540,14 @@ const UI = {
         UI.showStatus(msg, 'error');
     },
 
-    /*
-    Menu.js Additions
-     */
+    //send message to parent window
+    sendMessage(name, value) {
+        if (WebUtil.isInsideKasmVDI()) {
+            parent.postMessage({ action: name, value: value }, '*' );
+        }
+    },
+
+    //receive message from parent window
     receiveMessage(event) {
         if (event.data && event.data.action) {
             switch (event.data.action) {
@@ -1815,15 +1820,14 @@ const UI = {
         }
     },
 
-    toggleRelativePointer(forcedToggleValue=null) {
+    toggleRelativePointer(event=null, forcedToggleValue=null) {
         if (!supportsPointerLock()) {
             UI.showStatus('Your browser does not support pointer lock.', 'info', 1500, true);
             return;
         }
 
-        var togglePosition = (forcedToggleValue || (forcedToggleValue === null && !UI.rfb.pointerRelative));
+        var togglePosition = !UI.rfb.pointerRelative;
 
-        UI.rfb.pointerRelative = togglePosition;
         if (UI.rfb.pointerLock !== togglePosition) {
             UI.rfb.pointerLock = togglePosition;
         }
@@ -1835,10 +1839,11 @@ const UI = {
             document.getElementById('noVNC_game_mode_button').classList.add("noVNC_selected");
         } else {
             document.getElementById('noVNC_game_mode_button').classList.remove("noVNC_selected");
+            UI.forceSetting('pointer_lock', false, false);
         }
 
-        parent.postMessage({ action: 'enable_game_mode', value: togglePosition }, '*' );
-        parent.postMessage({ action: 'enable_pointer_lock', value: togglePosition }, '*' );
+        UI.sendMessage('enable_game_mode', togglePosition);
+        UI.sendMessage('enable_pointer_lock', togglePosition);
 
     },
 
@@ -2308,7 +2313,7 @@ const UI = {
 
         if (e.detail.pointer) {
             pointer_lock_el.checked = true;
-            parent.postMessage({ action: 'enable_pointer_lock', value: true }, '*' );
+            UI.sendMessage('enable_pointer_lock', true);
             UI.closeControlbar();
             UI.showStatus('Press Esc Key to Exit Pointer Lock Mode', 'warn', 5000, true);
         } else {
@@ -2319,17 +2324,20 @@ const UI = {
                 UI.forceSetting('pointer_lock', false, false);
                 document.getElementById('noVNC_game_mode_button')
                 .classList.remove("noVNC_selected");
-                parent.postMessage({ action: 'enable_pointer_lock', value: false }, '*' );
+                UI.sendMessage('enable_pointer_lock', false);
             }
         }
     },
 
     inputLockError(e) {
         UI.showStatus('Unable to enter pointer lock mode.', 'warn', 5000, true);
-        UI.forceSetting('pointer_lock', false, false);
         UI.rfb.pointerRelative = false;
-        document.getElementById('noVNC_game_mode_button')
-                .classList.remove("noVNC_selected");
+
+        document.getElementById('noVNC_game_mode_button').classList.remove("noVNC_selected");
+        UI.forceSetting('pointer_lock', false, false);
+
+        UI.sendMessage('enable_game_mode', false);
+        UI.sendMessage('enable_pointer_lock', false);
     },
 
     bell(e) {

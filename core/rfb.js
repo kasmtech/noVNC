@@ -341,19 +341,21 @@ export default class RFB extends EventTargetMixin {
 
     get pointerLock() { return this._pointerLock; }
     set pointerLock(value) {
-        // this._pointLock is set after pointer lock is successfully implemented
-        // callback is handled at this._handlePointerLockChange
         if (!this._pointerLock) {
             if (this._canvas.requestPointerLock) {
                 this._canvas.requestPointerLock();
+                this._pointerLockChanging = true;
             } else if (this._canvas.mozRequestPointerLock) {
                 this._canvas.mozRequestPointerLock();
+                this._pointerLockChanging = true;
             }
         } else {
             if (window.document.exitPointerLock) {
                 window.document.exitPointerLock();
+                this._pointerLockChanging = true;
             } else if (window.document.mozExitPointerLock) {
                 window.document.mozExitPointerLock();
+                this._pointerLockChanging = true;
             }
         }
     }
@@ -1516,7 +1518,7 @@ export default class RFB extends EventTargetMixin {
         this._mouseLastMoveTime = Date.now();
     }
 
-    _handlePointerLockChange() {
+    _handlePointerLockChange(env) {
         if (
             document.pointerLockElement === this._canvas ||
             document.mozPointerLockElement === this._canvas
@@ -1533,6 +1535,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handlePointerLockError() {
+        this._pointerLockChanging = false;
         this.dispatchEvent(new CustomEvent(
             "inputlockerror",
             { detail: { pointer: this._pointerLock }, }));

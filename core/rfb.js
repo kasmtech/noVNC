@@ -36,7 +36,6 @@ import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
 import UDPDecoder from './decoders/udp.js';
 import { toSignedRelative16bit } from './util/int.js';
-const Encoding = require('encoding-japanese');
 
 // How many seconds to wait for a disconnect to finish
 const DISCONNECT_TIMEOUT = 3;
@@ -856,15 +855,7 @@ export default class RFB extends EventTargetMixin {
 
         this.sentEventsCounter+=1;
 
-        let data = new Uint8Array(text.length);
-        for (let i = 0; i < text.length; i++) {
-            data[i] = text.charCodeAt(i);
-        }
-
-        var detectEncoding = Encoding.detect(data);
-        console.log("Character encoding is " + detectEncoding);
-        var conv = Encoding.convert(data, { to: 'UNICODE', from: 'SJIS' });
-        console.log("converted " + conv);
+        let data = new TextEncoder().encode(text);
 
         let h = hashUInt8Array(data);
         // avoid resending the same data if larger than 64k
@@ -2829,11 +2820,7 @@ export default class RFB extends EventTargetMixin {
                     mimes.push(mime);
 
                         if (mime == "text/plain") {
-
-                            //textdata = new TextDecoder().decode(data);
-                            for (let i = 0; i < data.length; i++) {
-                                textdata+=String.fromCharCode(data[i]);
-                            }
+                            textdata = new TextDecoder().decode(data);
 
                             if ((textdata.length > 0) && "\0" === textdata.charAt(textdata.length - 1)) {
                                 textdata = textdata.slice(0, -1);

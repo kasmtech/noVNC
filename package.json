@@ -86,8 +86,7 @@
     "sinon-chai": "^2.8.0",
     "svg-sprite-html-webpack": "^2.3.0",
     "webpack": "^4.29.6",
-    "webpack-cli": "^3.2.3",
-    "encoding-japanese": "^2.0.0"
+    "webpack-cli": "^3.2.3"
   },
   "keywords": [
     "vnc",

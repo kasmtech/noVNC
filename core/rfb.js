@@ -512,6 +512,9 @@ export default class RFB extends EventTargetMixin {
             return;
         }
 
+        // Disable QOI
+        this._decoders[encodings.encodingTight].disableQOIWorkers();
+
         if (this._jpegVideoQuality === qualityLevel) {
             return;
         }

@@ -53,7 +53,7 @@ export default class TightDecoder {
             // Figure out filter
             this._ctl = this._ctl >> 4;
         }
-
+        
         let ret;
 
         if (this._ctl === 0x08) {
@@ -403,12 +403,11 @@ export default class TightDecoder {
         let sabTest = typeof SharedArrayBuffer;
         if (sabTest !== 'undefined') {
             this._enableQOI = true;
-            if ((window.navigator.hardwareConcurrency) && (window.navigator.hardwareConcurrency > 8)) {
-                this._threads = window.navigator.hardwareConcurrency;
+            if ((window.navigator.hardwareConcurrency) && (window.navigator.hardwareConcurrency >= 4)) {
+                this._threads = 16;
             } else {
                 this._threads = 8;
             }
-            this._workerEnabled = false;
             this._workers = [];
             this._availableWorkers = [];
             this._sabs = [];
@@ -458,6 +457,24 @@ export default class TightDecoder {
         } else {
             this._enableQOI = false;
             Log.Warn("Enabling QOI Failed, client not compatible.");
+        }
+    }
+
+    async disableQOIWorkers() {
+        // make sure we have workers
+        if (this._workers) {
+            this._availableWorkers = null;
+            this._sabs = null;
+            this._sabsR = null;
+            this._arrs = null;
+            this._arrsR = null;
+            this._qoiRects = null;
+            this._rectQlooping = null;
+            for await (let i of Array.from(Array(this._threads).keys())) {
+                this._workers[i].terminate();
+                delete this._workers[i];
+            }
+            this._workers = null;
         }
     }
 }

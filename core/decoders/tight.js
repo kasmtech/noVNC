@@ -460,22 +460,4 @@ export default class TightDecoder {
             Log.Warn("Enabling QOI Failed, client not compatible.");
         }
     }
-
-    async disableQOIWorkers() {
-        // make sure we have workers
-        if (this._workers) {
-            this._availableWorkers = null;
-            this._sabs = null;
-            this._sabsR = null;
-            this._arrs = null;
-            this._arrsR = null;
-            this._qoiRects = null;
-            this._rectQlooping = null;
-            for await (let i of Array.from(Array(this._threads).keys())) {
-                this._workers[i].terminate();
-                delete this._workers[i];
-            }
-            this._workers = null;
-        }
-    }
 }

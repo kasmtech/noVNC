@@ -497,6 +497,7 @@ export default class RFB extends EventTargetMixin {
                 return;
             }
         }
+
         this._enableQOI = enabled;
         this._pendingApplyEncodingChanges = true;
     }
@@ -512,9 +513,6 @@ export default class RFB extends EventTargetMixin {
             Log.Error("qualityLevel must be an integer between 0 and 9");
             return;
         }
-
-        // Disable QOI
-        this._decoders[encodings.encodingTight].disableQOIWorkers();
 
         if (this._jpegVideoQuality === qualityLevel) {
             return;

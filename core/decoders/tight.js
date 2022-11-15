@@ -28,12 +28,23 @@ export default class TightDecoder {
         }
     }
 
-    enableQOI() {
-        if (!this._enableQOI) {
-            this._enableQOIWorkers();
+    // ===== PROPERTIES =====
+    
+    get enableQOI() { return this._enableQOI; }
+    set enableQOI(enabled) {
+        if(this._enableQOI === enabled) {
+            return;
         }
-        return this._enableQOI; //did it succeed
+
+        if (enabled) {
+            this._enableQOI = this._enableQOIWorkers();
+        } else {
+            this._enableQOI = false;
+            this._disableQOIWorkers();
+        }
     }
+
+    // ===== Public Methods =====
 
     decodeRect(x, y, width, height, sock, display, depth, frame_id) {
         if (this._ctl === null) {
@@ -86,6 +97,8 @@ export default class TightDecoder {
 
         return ret;
     }
+
+    // ===== Private Methods =====
 
     _fillRect(x, y, width, height, sock, display, depth, frame_id) {
         if (sock.rQwait("TIGHT", 3)) {
@@ -398,12 +411,31 @@ export default class TightDecoder {
         return this._scratchBuffer;
     }
 
+    async _disableQOIWorkers() {
+        if (this._workers) {
+            this._enableQOI = false;
+            this._availableWorkers = null;
+            this._sabs = null;
+            this._sabsR = null;
+            this._arrs = null;
+            this._arrsR = null;
+            this._qoiRects = null;
+            this._rectQlooping = null;
+            for await (let i of Array.from(Array(this._threads).keys())) {
+                this._workers[i].terminate();
+                delete this._workers[i];
+            }
+            this._workers = null;
+        }
+    }
+
     _enableQOIWorkers() {
         let fullPath = window.location.pathname;
         let path = fullPath.substring(0, fullPath.lastIndexOf('/')+1);
         let sabTest = typeof SharedArrayBuffer;
+        let enablePassed = false;
         if (sabTest !== 'undefined') {
-            this._enableQOI = true;
+            enablePassed = true;
             if ((window.navigator.hardwareConcurrency) && (window.navigator.hardwareConcurrency >= 4)) {
                 this._threads = 16;
             } else {
@@ -456,8 +488,9 @@ export default class TightDecoder {
                 this._workers[i].postMessage({path:path});
             }
         } else {
-            this._enableQOI = false;
             Log.Warn("Enabling QOI Failed, client not compatible.");
         }
+
+        return enablePassed;
     }
 }

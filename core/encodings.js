@@ -12,6 +12,7 @@ export const encodings = {
     encodingRRE: 2,
     encodingHextile: 5,
     encodingTight: 7,
+    encodingKasmVideo: 17,
     encodingTightPNG: -260,
     encodingUDP: -261,
 

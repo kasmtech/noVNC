@@ -35,6 +35,7 @@ import RawDecoder from "./decoders/raw.js";
 import CopyRectDecoder from "./decoders/copyrect.js";
 import RREDecoder from "./decoders/rre.js";
 import HextileDecoder from "./decoders/hextile.js";
+import KasmVideoDecoder from "./decoders/kasmvideo.js";
 import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
 import UDPDecoder from './decoders/udp.js';
@@ -293,6 +294,7 @@ export default class RFB extends EventTargetMixin {
         this._decoders[encodings.encodingCopyRect] = new CopyRectDecoder();
         this._decoders[encodings.encodingRRE] = new RREDecoder();
         this._decoders[encodings.encodingHextile] = new HextileDecoder();
+        this._decoders[encodings.encodingKasmVideo] = new KasmVideoDecoder(this._display);
         this._decoders[encodings.encodingTight] = new TightDecoder(this._display);
         this._decoders[encodings.encodingTightPNG] = new TightPNGDecoder();
         this._decoders[encodings.encodingUDP] = new UDPDecoder();
@@ -3144,6 +3146,7 @@ export default class RFB extends EventTargetMixin {
         }
         // Only supported with full depth support
         if (this._fbDepth == 24) {
+            encs.push(encodings.encodingKasmVideo);
             encs.push(encodings.encodingTight);
             encs.push(encodings.encodingTightPNG);
             encs.push(encodings.encodingHextile);

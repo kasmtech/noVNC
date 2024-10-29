@@ -18,6 +18,7 @@ export default class KasmVideoDecoder {
         this._len = 0;
         this._ctl = null;
         this._displayGlobal = display;
+        this.frameCount = 0;
     }
 
     // ===== Public Methods =====
@@ -56,6 +57,13 @@ export default class KasmVideoDecoder {
 
     // ===== Private Methods =====
 
+    _decoder = new VideoDecoder({
+        output: this._handleChunk,
+        error: e => {
+            console.log(e.message);
+        }
+    });
+
     _skipRect(x, y, width, height, sock, display, depth, frame_id) {
         console.log("Received a KasmVideo skiprect");
 
@@ -63,23 +71,32 @@ export default class KasmVideoDecoder {
     }
 
     _vp8Rect(x, y, width, height, sock, display, depth, frame_id) {
+
+        if (this._decoder.state == "unconfigured") {
+            this._decoder.configure({
+                codec: "vp8",
+                width: width,
+                height: height,
+                optimizeForLatency: true
+            });
+        }
+        
         let data = this._readData(sock);
         if (data === null) {
             return false;
         }
 
-        console.log("Received a KasmVideo vp8 rect, size " + data.length);
-
-        // the first byte specifies if this is a keyframe
-        // after that it's the VP8 frame
-        /*const init = {
-            type: data[0] ? "key" : "delta",
-            data: data + 1,
-            timestamp: 0,
-            duration: 1,
-        };
-        chunk = new EncodedVideoChunk(init);*/
-
+        let type = data[0] ? "key" : "delta";
+        let vidData = data.slice(1).buffer;
+        let vidChunk = new EncodedVideoChunk({
+            type: type,
+            data: vidData,
+            timestamp: 1,
+            duration: 0
+        })
+        data = null;
+        vidData = null;
+        this._decoder.decode(vidChunk);
         return true;
     }
 
@@ -112,4 +129,9 @@ export default class KasmVideoDecoder {
 
         return data;
     }
+
+    _handleChunk(chunk, metadata) {
+        chunk.close();
+    }
+
 }

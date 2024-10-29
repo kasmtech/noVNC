@@ -16,7 +16,7 @@ import { hashUInt8Array } from '../util/int.js';
 export default class KasmVideoDecoder {
     constructor(display) {
         this._len = 0;
-        this._ctl = 0;
+        this._ctl = null;
         this._displayGlobal = display;
     }
 

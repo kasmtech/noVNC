@@ -926,6 +926,17 @@ export default class Display {
         }
     }
 
+    putImage(img, x, y) {
+        try {
+            let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
+            targetCtx.putImageData(img, x, y);
+            img = null;
+        } catch (error) {
+            Log.Error('Invalid image recieved.');
+            img = null;
+        }
+    }
+
     autoscale(containerWidth, containerHeight, scaleRatio=0) {
         if (containerWidth === 0 || containerHeight === 0) {
             scaleRatio = 0;

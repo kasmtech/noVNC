@@ -13,8 +13,7 @@ import * as Log from '../util/logging.js';
 import Inflator from "../inflator.js";
 import { hashUInt8Array } from '../util/int.js';
 
-var testCanvas = null;
-var testCtx = null;
+var offscreen = null;
 var drawX = 0;
 var drawY = 0;
 
@@ -22,6 +21,8 @@ var drawY = 0;
 
 var workerScript = URL.createObjectURL( new Blob([ '(',
 function(){
+    var canvas;
+    var ctx;
     var decoder = new VideoDecoder({
         output: handleChunk,
         error: e => {
@@ -29,10 +30,15 @@ function(){
         }   
     });
     function handleChunk(chunk, metadata) {
-        postMessage({frame: chunk}, [chunk]);
+        ctx.drawImage(chunk,0,0);
+        chunk.close();
     }
 
     self.addEventListener('message', function(event) {
+        if (event.data.hasOwnProperty('canvas')) {
+            canvas = event.data.canvas;
+            ctx = canvas.getContext("2d",{ willReadFrequently: true });
+        }
         if (event.data.hasOwnProperty('frame')) {
             let vidChunk = new EncodedVideoChunk({
                 type: event.data.frame.type,
@@ -44,7 +50,6 @@ function(){
             decoder.decode(vidChunk);
             // Send data back for garbage collection
             postMessage({freemem: event.data.frame.data});
-            event.data.frame.data = null;
         }
         if (event.data.hasOwnProperty('config')) {
             if (decoder.state == "unconfigured") {
@@ -61,18 +66,13 @@ function(){
 ')()' ], { type: 'application/javascript' } ) ), worker = new Worker(workerScript);
 URL.revokeObjectURL(workerScript);
 
-// Worker returns
+// Plug memory leaks by sending transferable objects to main thread
 worker.onmessage = function (event) {
-    // Plug memory leaks by sending transferable objects back to main thread
     if (event.data.hasOwnProperty('freemem')) {
         event.data.freemem = null;
     }
-    // Render video frames to canvas
-    if (event.data.hasOwnProperty('frame')) {
-        testCtx.drawImage(event.data.frame, 0, 0);
-        event.data.frame.close();
-    }
 };
+
 
 // ===== Functions =====
 
@@ -86,9 +86,9 @@ export default class KasmVideoDecoder {
     // ===== Test Canvas rendering operation =====
 
     _copyCanvas() {
-        if (testCtx) {
-            let width = testCanvas.width;
-            let height = testCanvas.height;
+        if (offscreen) {
+            let width = offscreen.width;
+            let height = offscreen.height;
             drawX++;
             drawY++;
             if (drawX == (width - 500)) {
@@ -97,8 +97,7 @@ export default class KasmVideoDecoder {
             if (drawY == (height - 500)) {
                 drawY = 0;
             }
-            let imgData = testCtx.getImageData(drawX, drawY, 500, 500);
-            this._displayGlobal.putImage(imgData, drawX, drawY);
+            this._displayGlobal.putImage(offscreen, drawX, drawY);
         }
     }
 
@@ -146,11 +145,9 @@ export default class KasmVideoDecoder {
 
     _vp8Rect(x, y, width, height, sock, display, depth, frame_id) {
 
-        if (! testCanvas) {
-            testCanvas = document.createElement('canvas');
-            testCanvas.width = width;
-            testCanvas.height = height;
-            testCtx = testCanvas.getContext("2d", { willReadFrequently: true })
+        if (! offscreen) {
+            offscreen = new OffscreenCanvas(width,height);
+            worker.postMessage({ canvas: offscreen }, [offscreen]);
             worker.postMessage({ config: {width: width,height: height} });
         }
 

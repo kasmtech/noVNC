@@ -13,8 +13,8 @@ import * as Log from '../util/logging.js';
 import Inflator from "../inflator.js";
 import { hashUInt8Array } from '../util/int.js';
 
-var testCanvas = null;
-var testCtx = null;
+var videoCanvas = null;
+var offscreen = null;
 var drawX = 0;
 var drawY = 0;
 
@@ -22,6 +22,8 @@ var drawY = 0;
 
 var workerScript = URL.createObjectURL( new Blob([ '(',
 function(){
+    var canvas;
+    var ctx;
     var decoder = new VideoDecoder({
         output: handleChunk,
         error: e => {
@@ -29,10 +31,15 @@ function(){
         }   
     });
     function handleChunk(chunk, metadata) {
-        postMessage({frame: chunk}, [chunk]);
+        ctx.drawImage(chunk,0,0);
+        chunk.close();
     }
 
     self.addEventListener('message', function(event) {
+        if (event.data.hasOwnProperty('canvas')) {
+            canvas = event.data.canvas;
+            ctx = canvas.getContext("2d");
+        }
         if (event.data.hasOwnProperty('frame')) {
             let vidChunk = new EncodedVideoChunk({
                 type: event.data.frame.type,
@@ -44,7 +51,6 @@ function(){
             decoder.decode(vidChunk);
             // Send data back for garbage collection
             postMessage({freemem: event.data.frame.data});
-            event.data.frame.data = null;
         }
         if (event.data.hasOwnProperty('config')) {
             if (decoder.state == "unconfigured") {
@@ -61,18 +67,13 @@ function(){
 ')()' ], { type: 'application/javascript' } ) ), worker = new Worker(workerScript);
 URL.revokeObjectURL(workerScript);
 
-// Worker returns
+// Plug memory leaks by sending transferable objects to main thread
 worker.onmessage = function (event) {
-    // Plug memory leaks by sending transferable objects back to main thread
     if (event.data.hasOwnProperty('freemem')) {
         event.data.freemem = null;
     }
-    // Render video frames to canvas
-    if (event.data.hasOwnProperty('frame')) {
-        testCtx.drawImage(event.data.frame, 0, 0);
-        event.data.frame.close();
-    }
 };
+
 
 // ===== Functions =====
 
@@ -85,20 +86,9 @@ export default class KasmVideoDecoder {
 
     // ===== Test Canvas rendering operation =====
 
-    _copyCanvas() {
-        if (testCtx) {
-            let width = testCanvas.width;
-            let height = testCanvas.height;
-            drawX++;
-            drawY++;
-            if (drawX == (width - 500)) {
-                drawX = 0;
-            }
-            if (drawY == (height - 500)) {
-                drawY = 0;
-            }
-            let imgData = testCtx.getImageData(drawX, drawY, 500, 500);
-            this._displayGlobal.putImage(imgData, drawX, drawY);
+    _canvasRect(x1,y1,x2,y2) {
+        if (offscreen) {
+          //pass
         }
     }
 
@@ -139,19 +129,24 @@ export default class KasmVideoDecoder {
     // ===== Private Methods =====
 
     _skipRect(x, y, width, height, sock, display, depth, frame_id) {
-        console.log("Received a KasmVideo skiprect");
+        console.log('skip rect: ',x,y,width,height);
 
         return true;
     }
 
     _vp8Rect(x, y, width, height, sock, display, depth, frame_id) {
 
-        if (! testCanvas) {
-            testCanvas = document.createElement('canvas');
-            testCanvas.width = width;
-            testCanvas.height = height;
-            testCtx = testCanvas.getContext("2d", { willReadFrequently: true })
+        if (! offscreen) {
+            videoCanvas = document.createElement('canvas');
+            videoCanvas.width = Math.floor(width / 2);
+            videoCanvas.height = height;
+            videoCanvas.style.position = 'absolute';
+            videoCanvas.style.top = '0px';
+            videoCanvas.style.left = '0px';
+            offscreen = videoCanvas.transferControlToOffscreen();
+            worker.postMessage({ canvas: offscreen }, [offscreen]);
             worker.postMessage({ config: {width: width,height: height} });
+            document.body.appendChild(videoCanvas);
         }
 
         let data = this._readData(sock);
@@ -163,7 +158,6 @@ export default class KasmVideoDecoder {
         let vidData = data.slice(1).buffer;
         data = null;
         worker.postMessage({ frame: {data: vidData, type: type} }, [vidData]);
-        this._copyCanvas();
         return true;
     }
 

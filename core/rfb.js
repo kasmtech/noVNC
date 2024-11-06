@@ -43,7 +43,7 @@ import { toSignedRelative16bit } from './util/int.js';
 
 // How many seconds to wait for a disconnect to finish
 const DISCONNECT_TIMEOUT = 3;
-const DEFAULT_BACKGROUND = 'rgb(40, 40, 40)';
+const DEFAULT_BACKGROUND = 'rgb(0, 0, 0, 0.0)';
 
 // Minimum wait (ms) between two mouse moves
 const MOUSE_MOVE_DELAY = 17; 
@@ -263,6 +263,7 @@ export default class RFB extends EventTargetMixin {
         this._canvas.height = 0;
         this._canvas.tabIndex = -1;
         this._canvas.overflow = 'hidden';
+        this._canvas.style.zIndex = "2";
         this._screen.appendChild(this._canvas);
 
         // Cursor

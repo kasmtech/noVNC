@@ -48,19 +48,21 @@ function(){
                 duration: 0
             })
             event.data.frame.data = null;
-            decoder.decode(vidChunk);
+            try {
+                decoder.decode(vidChunk);
+            } catch (e) {
+                console.log(e);
+            }
             // Send data back for garbage collection
             postMessage({freemem: event.data.frame.data});
         }
         if (event.data.hasOwnProperty('config')) {
-            if (decoder.state == "unconfigured") {
-                decoder.configure({
-                    codec: "vp8",
-                    width: event.data.config.width,
-                    height: event.data.config.height,
-                    optimizeForLatency: true
-                });
-            }
+            decoder.configure({
+                codec: "vp8",
+                width: event.data.config.width,
+                height: event.data.config.height,
+                optimizeForLatency: true
+            });
         }
     });
 }.toString(),
@@ -74,7 +76,6 @@ worker.onmessage = function (event) {
     }
 };
 
-
 // ===== Functions =====
 
 export default class KasmVideoDecoder {
@@ -82,14 +83,6 @@ export default class KasmVideoDecoder {
         this._len = 0;
         this._ctl = null;
         this._displayGlobal = display;
-    }
-
-    // ===== Test Canvas rendering operation =====
-
-    _canvasRect(x1,y1,x2,y2) {
-        if (offscreen) {
-          //pass
-        }
     }
 
     // ===== Public Methods =====
@@ -126,29 +119,45 @@ export default class KasmVideoDecoder {
         return ret;
     }
 
+    resize(width, height) {
+        this._setupCanvas(width, height, true);
+        worker.postMessage({ config: {width: width,height: height} });
+    }
+
     // ===== Private Methods =====
 
     _skipRect(x, y, width, height, sock, display, depth, frame_id) {
-        console.log('skip rect: ',x,y,width,height);
+        display.clearRect(x, y, width, height);
 
         return true;
     }
 
-    _vp8Rect(x, y, width, height, sock, display, depth, frame_id) {
-
-        if (! offscreen) {
+    _setupCanvas(width, height, destroy) {
+        if ((! offscreen) || (destroy)) {
+            try {
+                videoCanvas.remove();
+            } catch (e) {
+                console.log(e);
+            }
+            videoCanvas = null;
+            offscreen = null;
             videoCanvas = document.createElement('canvas');
-            videoCanvas.width = Math.floor(width / 2);
+            videoCanvas.width = width;
             videoCanvas.height = height;
             videoCanvas.style.position = 'absolute';
             videoCanvas.style.top = '0px';
             videoCanvas.style.left = '0px';
+            videoCanvas.style.zIndex = "1";
             offscreen = videoCanvas.transferControlToOffscreen();
             worker.postMessage({ canvas: offscreen }, [offscreen]);
             worker.postMessage({ config: {width: width,height: height} });
             document.body.appendChild(videoCanvas);
         }
+    }
 
+    _vp8Rect(x, y, width, height, sock, display, depth, frame_id) {
+
+        this._setupCanvas(width, height, false);
         let data = this._readData(sock);
         if (data === null) {
             return false;

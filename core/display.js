@@ -13,6 +13,7 @@ import { toSigned32bit } from './util/int.js';
 import { isWindows } from './util/browser.js';
 import { uuidv4 } from './util/strings.js';
 import UI from '../app/ui.js';
+import KasmVideoDecoder from './decoders/kasmvideo.js';
 
 export default class Display {
     constructor(target, isPrimaryDisplay) {
@@ -46,6 +47,7 @@ export default class Display {
         this._renderMs = 0;
         this._prevDrawStyle = "";
         this._target = target;
+        this._videDecoder = new KasmVideoDecoder();
 
         if (!this._target) {
             throw new Error("Target must be set");
@@ -567,6 +569,7 @@ export default class Display {
     }
 
     resize(width, height) {
+        this._videDecoder.resize(width, height);
         this._prevDrawStyle = "";
 
         this._fbWidth = width;
@@ -740,7 +743,7 @@ export default class Display {
         if ((typeof ImageDecoder !== 'undefined') && (this._threading)) {
             let imageDecoder = new ImageDecoder({ data: arr, type: mime });
             let rect = {
-                'type': 'vid',  
+                'type': 'vid',
                 'img': null,
                 'x': x,
                 'y': y,
@@ -829,8 +832,8 @@ export default class Display {
         if (!fromQueue) {
             var buf;
             if (!ArrayBuffer.isView(arr)) {
-                buf = arr;          
-            } else {                
+                buf = arr;
+            } else {
                 buf = arr.buffer;
             }
             // NB(directxman12): it's technically more performant here to use preallocated arrays,
@@ -916,6 +919,11 @@ export default class Display {
             Log.Error('Invalid image recieved.');
             img = null;
         }
+    }
+
+    clearRect(x, y, w, h) {
+        let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
+        targetCtx.clearRect(x, y, w, h);
     }
 
     autoscale(containerWidth, containerHeight, scaleRatio=0) {
@@ -1300,7 +1308,7 @@ export default class Display {
                                 secondaryScreenRects++;
                                 if (this._screens[screenLocation.screenIndex].channel) {
                                     this._screens[screenLocation.screenIndex].channel.postMessage({
-                                        eventType: 'rect', 
+                                        eventType: 'rect',
                                         rect: {
                                            'type': 'img',
                                            'img': null,

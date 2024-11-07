@@ -921,9 +921,22 @@ export default class Display {
         }
     }
 
-    clearRect(x, y, w, h) {
+    clearRect(x, y, width, height, offset, frame_id, fromQueue) {
         let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
-        targetCtx.clearRect(x, y, w, h);
+        if (!fromQueue) {
+            let rect = {
+                'type': 'clear',
+                'x': x,
+                'y': y,
+                'width': width,
+                'height': height,
+                'frame_id': frame_id
+            }
+            this._processRectScreens(rect);
+            this._asyncRenderQPush(rect);
+        } else {
+            this._targetCtx.clearRect(x, y, width, height);
+        }
     }
 
     autoscale(containerWidth, containerHeight, scaleRatio=0) {
@@ -1250,6 +1263,9 @@ export default class Display {
                                 break;
                             case 'img':
                                 this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
+                                break;
+                            case 'clear':
+                                this.clearRect(screenLocation.x, screenLocation.y, a.width, a.height, 0, a.frame_id, true);
                                 break;
                             case 'vid':
                                 this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);

@@ -15,8 +15,6 @@ import { hashUInt8Array } from '../util/int.js';
 
 var videoCanvas = null;
 var offscreen = null;
-var drawX = 0;
-var drawY = 0;
 
 // ===== Worker init =====
 
@@ -24,6 +22,7 @@ var workerScript = URL.createObjectURL( new Blob([ '(',
 function(){
     var canvas;
     var ctx;
+    var frameBuffer = [];
     var decoder = new VideoDecoder({
         output: handleChunk,
         error: e => {
@@ -31,8 +30,12 @@ function(){
         }   
     });
     function handleChunk(chunk, metadata) {
-        ctx.drawImage(chunk,0,0);
-        chunk.close();
+        frameBuffer.push(chunk);
+        if (frameBuffer.length > 3) {
+            ctx.drawImage(frameBuffer[0],0,0);
+            frameBuffer[0].close();
+            frameBuffer.shift();
+        }
     }
 
     self.addEventListener('message', function(event) {
@@ -51,7 +54,7 @@ function(){
             try {
                 decoder.decode(vidChunk);
             } catch (e) {
-                console.log(e);
+                //pass
             }
             // Send data back for garbage collection
             postMessage({freemem: event.data.frame.data});
@@ -127,8 +130,7 @@ export default class KasmVideoDecoder {
     // ===== Private Methods =====
 
     _skipRect(x, y, width, height, sock, display, depth, frame_id) {
-        display.clearRect(x, y, width, height);
-
+        display.clearRect(x, y, width, height, 0, frame_id, false);
         return true;
     }
 
@@ -137,7 +139,7 @@ export default class KasmVideoDecoder {
             try {
                 videoCanvas.remove();
             } catch (e) {
-                console.log(e);
+                //pass
             }
             videoCanvas = null;
             offscreen = null;
@@ -166,7 +168,7 @@ export default class KasmVideoDecoder {
         let type = data[0] ? "key" : "delta";
         let vidData = data.slice(1).buffer;
         data = null;
-        worker.postMessage({ frame: {data: vidData, type: type} }, [vidData]);
+        worker.postMessage({ frame: {data: vidData, type: type, id: frame_id} }, [vidData]);
         return true;
     }
 

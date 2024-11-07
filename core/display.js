@@ -990,6 +990,24 @@ export default class Display {
         }
     }
 
+    clearRect(x, y, width, height, offset, frame_id, fromQueue) {
+        let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
+        if (!fromQueue) {
+            let rect = {
+                'type': 'clear',
+                'x': x,
+                'y': y,
+                'width': width,
+                'height': height,
+                'frame_id': frame_id
+            }
+            this._processRectScreens(rect);
+            this._asyncRenderQPush(rect);
+        } else {
+            this._targetCtx.clearRect(x, y, width, height);
+        }
+    }
+
     autoscale(containerWidth, containerHeight, scaleRatio=0) {
         if (containerWidth === 0 || containerHeight === 0) {
             scaleRatio = 0;

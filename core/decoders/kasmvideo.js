@@ -15,6 +15,7 @@ import { hashUInt8Array } from '../util/int.js';
 
 var videoCanvas = null;
 var offscreen = null;
+var codec;
 
 // ===== Worker init =====
 
@@ -23,12 +24,7 @@ function(){
     var canvas;
     var ctx;
     var frameBuffer = [];
-    var decoder = new VideoDecoder({
-        output: handleChunk,
-        error: e => {
-            console.log(e.message);
-        }   
-    });
+    var decoder;
     function handleChunk(chunk, metadata) {
         frameBuffer.push(chunk);
         if (frameBuffer.length > 3) {
@@ -60,8 +56,17 @@ function(){
             postMessage({freemem: event.data.frame.data});
         }
         if (event.data.hasOwnProperty('config')) {
+            if (decoder) {
+                decoder.close();
+            }
+            decoder = new VideoDecoder({
+                output: handleChunk,
+                error: e => {
+                    console.log(e.message);
+                }
+            });
             decoder.configure({
-                codec: "vp8",
+                codec: event.data.config.codec,
                 width: event.data.config.width,
                 height: event.data.config.height,
                 optimizeForLatency: true
@@ -123,8 +128,10 @@ export default class KasmVideoDecoder {
     }
 
     resize(width, height) {
-        this._setupCanvas(width, height, true);
-        worker.postMessage({ config: {width: width,height: height} });
+        if (codec) {
+            this._setupCanvas(width, height, true);
+            worker.postMessage({ config: {width: width,height: height, codec: codec} });
+        }
     }
 
     // ===== Private Methods =====
@@ -152,13 +159,13 @@ export default class KasmVideoDecoder {
             videoCanvas.style.zIndex = "1";
             offscreen = videoCanvas.transferControlToOffscreen();
             worker.postMessage({ canvas: offscreen }, [offscreen]);
-            worker.postMessage({ config: {width: width,height: height} });
+            worker.postMessage({ config: {width: width,height: height,codec: codec} });
             document.body.appendChild(videoCanvas);
         }
     }
 
     _vp8Rect(x, y, width, height, sock, display, depth, frame_id) {
-
+        codec = 'vp8';
         this._setupCanvas(width, height, false);
         let data = this._readData(sock);
         if (data === null) {

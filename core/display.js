@@ -129,6 +129,36 @@ export default class Display {
             window.addEventListener('message', this._handleSecondaryDisplayMessage.bind(this));
         }
 
+
+        this.initWS = function() {
+          let protocol = window.location.protocol;
+          let host = window.location.hostname;
+          let port = window.location.port;
+          this.websocket = new WebSocket(protocol + '//' + host + ':' + port + '/jpeg', "x11-jpeg-stream-protocol");
+          this.websocket.binaryType = 'arraybuffer';
+          this.websocket.onopen = function(event) {
+            console.log("WebSocket connection opened");
+          };
+          this.websocket.onmessage = function(event) {
+            let receivedBuffer = event.data;
+            if (receivedBuffer.byteLength == 1) {
+              return;
+            }
+            let dataView = new DataView(receivedBuffer);
+            let stripe_y_start = dataView.getInt32(0, true);
+            let jpegDataBuffer = receivedBuffer.slice(4);
+            this._process_stripe(stripe_y_start, jpegDataBuffer);
+          }.bind(this);
+          this.websocket.onerror = function(error) {
+            console.error("WebSocket error:", error);
+          };
+          this.websocket.onclose = function(event) {
+            console.log("WebSocket connection closed");
+          };
+        }
+
+        // Wait a second to connect to the new WS server
+        setTimeout(this.initWS.bind(this), 1000)
         Log.Debug("<< Display.constructor");
     }
 
@@ -1428,6 +1458,26 @@ export default class Display {
         if (newStyle !== this._prevDrawStyle) {
             targetCtx.fillStyle = newStyle;
             this._prevDrawStyle = newStyle;
+        }
+    }
+
+    _handleVidChunk(data, chunk) {
+        let stripe_y_start = data[0];
+        let that = data[1];
+        let imageDecoder = data[2];
+        imageDecoder.close();
+        let targetCtx = ((that._enableCanvasBuffer && !overlay) ? that._drawCtx : that._targetCtx);
+        targetCtx.drawImage(chunk.image, 0, stripe_y_start);
+        chunk.image.close();
+    }
+
+
+    _process_stripe(stripe_y_start, jpegDataBuffer) {
+        console.log(stripe_y_start);
+        // Use threaded image decoder
+        if ((typeof ImageDecoder !== 'undefined') && (this._threading)) {
+            let imageDecoder = new ImageDecoder({ data: jpegDataBuffer, type: 'image/jpeg' });
+            imageDecoder.decode().then(this._handleVidChunk.bind(null,[stripe_y_start,this,imageDecoder]));
         }
     }
 }

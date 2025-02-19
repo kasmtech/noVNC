@@ -13,6 +13,7 @@ import { toSigned32bit } from './util/int.js';
 import { isWindows } from './util/browser.js';
 import { uuidv4 } from './util/strings.js';
 import UI from '../app/ui.js';
+import KasmVideoDecoder from './decoders/kasmvideo.js';
 
 export default class Display {
     constructor(target, isPrimaryDisplay) {
@@ -926,6 +927,24 @@ export default class Display {
         }
     }
 
+    clearRect(x, y, width, height, offset, frame_id, fromQueue) {
+        let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
+        if (!fromQueue) {
+            let rect = {
+                'type': 'clear',
+                'x': x,
+                'y': y,
+                'width': width,
+                'height': height,
+                'frame_id': frame_id
+            }
+            this._processRectScreens(rect);
+            this._asyncRenderQPush(rect);
+        } else {
+            this._targetCtx.clearRect(x, y, width, height);
+        }
+    }
+
     autoscale(containerWidth, containerHeight, scaleRatio=0) {
         if (containerWidth === 0 || containerHeight === 0) {
             scaleRatio = 0;
@@ -1253,6 +1272,9 @@ export default class Display {
                                 break;
                             case 'vid':
                                 this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
+                                break;
+                            case 'clear':
+                                this.clearRect(screenLocation.x, screenLocation.y, a.width, a.height, 0, a.frame_id, true);
                                 break;
                             default:
                                 continue;

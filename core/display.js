@@ -91,7 +91,7 @@ export default class Display {
         this._fps = 0;
         this._isPrimaryDisplay = isPrimaryDisplay;
         this._screenID = uuidv4();
-        this._screens = [{ 
+        this._screens = [{
             screenID: this._screenID,
             screenIndex: 0,
             width: this._target.width, //client
@@ -122,6 +122,10 @@ export default class Display {
         this._drawCtx = this._backbuffer.getContext('2d');
         this._damageBounds = { left: 0, top: 0, right: this._backbuffer.width, bottom: this._backbuffer.height };
 
+        // Frame Buffering for JPEG Stripes
+        this._currentFrameStripes = [];
+        this._renderedFrameStripes = [];
+
         // ===== EVENT HANDLERS =====
 
         this.onflush = () => {  }; // A flush request has finished
@@ -130,7 +134,8 @@ export default class Display {
             window.addEventListener('message', this._handleSecondaryDisplayMessage.bind(this));
         }
 
-
+        this._currentFrameStripes = [];
+        this._renderFrame(); // Start the RAF loop
         this.initWS = function() {
           let protocol = window.location.protocol;
           let host = window.location.hostname;
@@ -147,8 +152,43 @@ export default class Display {
             }
             let dataView = new DataView(receivedBuffer);
             let stripe_y_start = dataView.getInt32(0, true);
-            let jpegDataBuffer = receivedBuffer.slice(4);
-            this._process_stripe(stripe_y_start, jpegDataBuffer);
+            let frameId = dataView.getUint32(4, true); // Extract frameId from the next 4 bytes
+            let jpegDataBuffer = receivedBuffer.slice(8); // Slice from byte 8 onwards now
+            this._process_stripe(stripe_y_start, jpegDataBuffer, frameId); // Pass frameId to _process_stripe if you need it there
+          }.bind(this);
+          this.websocket.onerror = function(error) {
+            console.error("WebSocket error:", error);
+          };
+          this.websocket.onclose = function(event) {
+            console.log("WebSocket connection closed");
+          };
+        }
+
+        // Wait a second to connect to the new WS server
+        setTimeout(this.initWS.bind(this), 3000)
+
+
+        this._currentFrameStripes = [];
+        this._renderFrame(); // Start the RAF loop
+        this.initWS = function() {
+          let protocol = window.location.protocol;
+          let host = window.location.hostname;
+          let port = window.location.port;
+          this.websocket = new WebSocket(protocol + '//' + host + ':' + port + '/jpeg', "x11-jpeg-stream-protocol");
+          this.websocket.binaryType = 'arraybuffer';
+          this.websocket.onopen = function(event) {
+            console.log("WebSocket connection opened");
+          };
+          this.websocket.onmessage = function(event) {
+            let receivedBuffer = event.data;
+            if (receivedBuffer.byteLength == 1) {
+              return;
+            }
+            let dataView = new DataView(receivedBuffer);
+            let stripe_y_start = dataView.getInt32(0, true);
+            let frameId = dataView.getUint32(4, true); // Extract frameId from the next 4 bytes
+            let jpegDataBuffer = receivedBuffer.slice(8); // Slice from byte 8 onwards now
+            this._process_stripe(stripe_y_start, jpegDataBuffer, frameId); // Pass frameId to _process_stripe if you need it there
           }.bind(this);
           this.websocket.onerror = function(error) {
             console.error("WebSocket error:", error);
@@ -160,6 +200,10 @@ export default class Display {
 
         // Wait a second to connect to the new WS server
         setTimeout(this.initWS.bind(this), 1000)
+
+        // Start RAF render loop
+        this._startRenderLoop();
+
         Log.Debug("<< Display.constructor");
     }
 
@@ -171,7 +215,7 @@ export default class Display {
 
         this._enableCanvasBuffer = value;
 
-        
+
         if (value && this._target)
         {
             //copy current visible canvas to backbuffer
@@ -191,14 +235,12 @@ export default class Display {
     get screens() { return this._screens; }
     get screenID() { return this._screenID; }
     get screenIndex() {
-        // A secondary screen should not have a screen index of 0, but it will be 0 until registration is complete
-        // returning a -1 lets the caller know the screen has not been registered yet
         if (!this._isPrimaryDisplay && this._screens[0].screenIndex == 0) {
             return -1;
         }
-        return this._screens[0].screenIndex; 
+        return this._screens[0].screenIndex;
     }
-    
+
     get antiAliasing() { return this._antiAliasing; }
     set antiAliasing(value) {
         this._antiAliasing = value;
@@ -218,7 +260,6 @@ export default class Display {
     get clipViewport() { return this._clipViewport; }
     set clipViewport(viewport) {
         this._clipViewport = viewport;
-        // May need to readjust the viewport dimensions
         const vp = this._screens[0];
         this.viewportChangeSize(vp.width, vp.height);
         this.viewportChangePos(0, 0);
@@ -242,13 +283,9 @@ export default class Display {
     get fps() { return this._fps; }
 
     // ===== PUBLIC METHODS =====
-
-    /*
-    Returns the screen index and relative coordinates given globally scoped coordinates
-    */
     getClientRelativeCoordinates(x, y) {
         for (let i = 0; i < this._screens.length; i++) {
-            if ( 
+            if (
                 (x >= this._screens[i].x && x <= this._screens[i].x + this._screens[i].serverWidth) &&
                 (y >= this._screens[i].y && y <= this._screens[i].y + this._screens[i].serverHeight)
                 )
@@ -262,9 +299,6 @@ export default class Display {
         }
     }
 
-    /* 
-    Returns coordinates that are server relative when multiple monitors are in use
-    */
     getServerRelativeCoordinates(screenIndex, x, y) {
         if (screenIndex >= 0 && screenIndex < this._screens.length) {
             x = toSigned32bit(x / this._screens[screenIndex].scale + this._screens[screenIndex].x);
@@ -280,51 +314,44 @@ export default class Display {
             serverWidth: 0,
             serverHeight: 0
         }
-
         let i = 0;
 
-        //recalculate primary display container size
         this._screens[i].containerHeight = this._target.parentNode.offsetHeight;
         this._screens[i].containerWidth = this._target.parentNode.offsetWidth;
         this._screens[i].pixelRatio = window.devicePixelRatio;
         this._screens[i].width = this._target.parentNode.offsetWidth;
         this._screens[i].height = this._target.parentNode.offsetHeight;
 
-        //calculate server-side and client-side resolution of each screen
         let width = max_width || this._screens[i].containerWidth;
         let height = max_height || this._screens[i].containerHeight;
         let scale = 1;
 
-        //max the resolution of a single screen to 1280
         if (
             (this._screens[i].serverReportedWidth > 0 && this._screens[i].serverReportedHeight > 0) &&
             (
                 disableScaling ||
                 (this._screens[i].serverReportedWidth !== this._screens[i].serverWidth || this._screens[i].serverReportedHeight !== this._screens[i].serverHeight)
-            ) && 
+            ) &&
             (!max_width && !max_height)
         ) {
             height = this._screens[i].serverReportedHeight;
             width = this._screens[i].serverReportedWidth;
         }
         else if (width > 1280 && !disableLimit && resolutionQuality == 1) {
-            height = Math.floor(1280 * (height/width)); //keeping the aspect ratio of original resolution, shrink y to match x
+            height = Math.floor(1280 * (height/width));
             width = 1280;
         }
-        //hard coded 720p
         else if (resolutionQuality == 0 && !disableLimit) {
             width = 1280;
             height = 720;
         }
-        //force full resolution on a high DPI monitor where the OS is scaling
         else if (hiDpi) {
             width = Math.floor(width * this._screens[i].pixelRatio);
             height = Math.floor(height * this._screens[i].pixelRatio);
             scale = 1 / this._screens[i].pixelRatio;
         }
-        //physically small device with high DPI
         else if (this._antiAliasing === 0 && this._screens[i].pixelRatio > 1 && width < 1000 & width > 0) {
-            Log.Info('Device Pixel ratio: ' + this._screens[i].pixelRatio + ' Reported Resolution: ' + width + 'x' + height); 
+            Log.Info('Device Pixel ratio: ' + this._screens[i].pixelRatio + ' Reported Resolution: ' + width + 'x' + height);
             let targetDevicePixelRatio = 1.5;
             if (this._screens[i].pixelRatio > 2) { targetDevicePixelRatio = 2; }
             let scaledWidth = (width * this._screens[i].pixelRatio) * (1 / targetDevicePixelRatio);
@@ -334,10 +361,10 @@ export default class Display {
             scale = 1 / scaleRatio;
             Log.Info('Small device with hDPI screen detected, auto scaling at ' + scaleRatio + ' to ' + width + 'x' + height);
         }
-        
+
         let clientServerRatioH = this._screens[i].containerHeight / height;
         let clientServerRatioW = this._screens[i].containerWidth / width;
-        
+
         this._screens[i].height = Math.floor(height * clientServerRatioH);
         this._screens[i].width = Math.floor(width * clientServerRatioW);
         this._screens[i].serverWidth = width;
@@ -353,7 +380,6 @@ export default class Display {
         }
 
         data.screens = this._screens;
-
         return data;
     }
 
@@ -367,7 +393,6 @@ export default class Display {
     }
 
     applyScreenPlan(screenPlan) {
-        //check all screens for any changes, but only apply changes to primary screen, secondary screens will individually be updated and report back with their new settings
         let changes = false;
         for (let i = 0; i < screenPlan.screens.length; i++) {
             for (let z = 0; z < this._screens.length; z++) {
@@ -398,11 +423,9 @@ export default class Display {
             throw new Error("Cannot add a screen to a secondary display.");
         }
         else if (containerHeight === 0 || containerWidth === 0 || pixelRatio === 0) {
-            Log.Warn("Invalid screen configuration."); 
+            Log.Warn("Invalid screen configuration.");
         }
         let screenIdx = -1;
-
-        //Does the screen already exist?
         for (let i = 0; i < this._screens.length; i++) {
             if (this._screens[i].screenID === screenID) {
                 screenIdx = i;
@@ -410,10 +433,9 @@ export default class Display {
         }
 
         if (screenIdx > 0) {
-            //existing screen, update
             const existing_screen = this._screens[screenIdx];
-            if (existing_screen.serverHeight !== serverHeight || existing_screen.serverWidth !== serverWidth || existing_screen.width !== width || existing_screen.height !== height 
-                || existing_screen.containerHeight !== containerHeight || existing_screen.containerWidth !== containerWidth || existing_screen.scale !== scale || existing_screen.pixelRatio !== pixelRatio || 
+            if (existing_screen.serverHeight !== serverHeight || existing_screen.serverWidth !== serverWidth || existing_screen.width !== width || existing_screen.height !== height
+                || existing_screen.containerHeight !== containerHeight || existing_screen.containerWidth !== containerWidth || existing_screen.scale !== scale || existing_screen.pixelRatio !== pixelRatio ||
                 existing_screen.x !== x || existing_screen.y !== y) {
                 existing_screen.width = width;
                 existing_screen.height = height;
@@ -430,7 +452,6 @@ export default class Display {
                 return true;
             }
         } else {
-            //New Screen, add to far right until user repositions it
             for (let i = 0; i < this._screens.length; i++) {
                 x = Math.max(x, this._screens[i].x + this._screens[i].serverWidth);
             }
@@ -438,8 +459,8 @@ export default class Display {
             var new_screen = {
                 screenID: screenID,
                 screenIndex: this.screens.length,
-                width: width, //client
-                height: height, //client
+                width: width,
+                height: height,
                 serverWidth: serverWidth,
                 serverHeight: serverHeight,
                 serverReportedWidth: 0,
@@ -457,10 +478,8 @@ export default class Display {
 
             this._screens.push(new_screen);
             new_screen.channel.postMessage({ eventType: "registered", screenIndex: new_screen.screenIndex });
-
             return new_screen.screenIndex;
         }
-
         return false;
     }
 
@@ -469,7 +488,6 @@ export default class Display {
         if (this._isPrimaryDisplay) {
             for (let i=1; i<this._screens.length; i++) {
                 if (this._screens[i].screenID == screenID) {
-                    //flush all rects on target screen
                     this._flushRectsScreen(i);
                     UI.displayWindows.splice(i, 1);
                     this._screens.splice(i, 1);
@@ -477,7 +495,6 @@ export default class Display {
                     break;
                 }
             }
-            //recalculate indexes and update secondary displays
             for (let i=1; i<this._screens.length; i++) {
                 this.screens[i].screenIndex = i;
                 if (i > 0) {
@@ -496,14 +513,12 @@ export default class Display {
         deltaY = Math.floor(deltaY);
 
         if (!this._clipViewport) {
-            deltaX = -vp.width;  // clamped later of out of bounds
+            deltaX = -vp.width;
             deltaY = -vp.height;
         }
 
         const vx2 = vp.x + vp.width - 1;
         const vy2 = vp.y + vp.height - 1;
-
-        // Position change
 
         if (deltaX < 0 && vp.x + deltaX < 0) {
             deltaX = -vp.x;
@@ -563,11 +578,7 @@ export default class Display {
             if (saveImg) {
                 this._targetCtx.putImageData(saveImg, 0, 0);
             }
-
-            // The position might need to be updated if we've grown
             this.viewportChangePos(0, 0);
-
-            // Update the visible size of the target canvas
             this._rescale(this._scale);
         }
     }
@@ -594,14 +605,13 @@ export default class Display {
 
         let canvas = this._backbuffer;
         if (canvas == undefined) { return; }
-        
+
         if (this._screens.length > 0) {
             width = this._screens[0].serverWidth;
             height = this._screens[0].serverHeight;
         }
 
         if (canvas.width !== width || canvas.height !== height) {
-            // We have to save the canvas data since changing the size will clear it
             let saveImg = null;
             if (canvas.width > 0 && canvas.height > 0) {
                 saveImg = this._drawCtx.getImageData(0, 0, canvas.width, canvas.height);
@@ -619,21 +629,12 @@ export default class Display {
                 this._drawCtx.putImageData(saveImg, 0, 0);
             }
         }
-
-        
-
-        // Readjust the viewport as it may be incorrectly sized
-        // and positioned
         const vp = this._screens[0];
         this.viewportChangeSize(vp.serverWidth, vp.serverHeight);
         this.viewportChangePos(0, 0);
     }
 
-    /*
-    * Mark the specified frame with a rect count
-    * @param {number} frame_id - The frame ID of the target frame
-    * @param {number} rect_cnt - The number of rects in the target frame
-    */
+
     flip(frame_id, rect_cnt) {
         this._asyncRenderQPush({
             'type': 'flip',
@@ -643,46 +644,27 @@ export default class Display {
         });
     }
 
-    /*
-    * Is the frame queue full
-    * @returns {bool} is the queue full
-    */
     pending() {
-        //is the slot in the queue for the newest frame in use
         return this._asyncFrameQueue[this._maxAsyncFrameQueue - 1][0] > 0;
     }
 
-    /*
-    * Force the oldest frame in the queue to render, whether ready or not.
-    * @param {bool} onflush_message - The caller wants an onflush event triggered once complete. This is
-    *   useful for TCP, allowing the websocket to block until we are ready to process the next frame.
-    *   UDP cannot block and thus no need to notify the caller when complete.
-    */
     flush(onflush_message=true) {
-        //force oldest frame to render
         this._asyncFrameComplete(0, true);
-
         if (onflush_message)
             this.onflush();
     }
-    
-    /*
-    * Clears the buffer of anything that has not yet been displayed.
-    * This must be called when switching between transit modes tcp/udp
-    */
+
     clear() {
        this._clearAsyncQueue();
     }
 
-    /*
-    * Cleans up resources, should be called on a disconnect
-    */
     dispose() {
         clearInterval(this._frameStatsInterval);
         this.clear();
     }
 
     fillRect(x, y, width, height, color, frame_id, fromQueue) {
+        return;
         if (!fromQueue) {
             let rect = {
                 type: 'fill',
@@ -706,6 +688,7 @@ export default class Display {
     }
 
     copyImage(oldX, oldY, newX, newY, w, h, frame_id, fromQueue) {
+        return;
         if (!fromQueue) {
             let rect = {
                 'type': 'copy',
@@ -723,13 +706,6 @@ export default class Display {
             let targetCtx = ((this._enableCanvasBuffer) ? this._drawCtx : this._targetCtx);
             let sourceCvs = ((this._enableCanvasBuffer) ? this._backbuffer : this._target);
 
-            // Due to this bug among others [1] we need to disable the image-smoothing to
-            // avoid getting a blur effect when copying data.
-            //
-            // 1. https://bugzilla.mozilla.org/show_bug.cgi?id=1194719
-            //
-            // We need to set these every time since all properties are reset
-            // when the the size is changed
             targetCtx.mozImageSmoothingEnabled = false;
             targetCtx.webkitImageSmoothingEnabled = false;
             targetCtx.msImageSmoothingEnabled = false;
@@ -751,16 +727,14 @@ export default class Display {
     }
 
     imageRect(x, y, width, height, mime, arr, frame_id) {
-        /* The internal logic cannot handle empty images, so bail early */
         if ((width === 0) || (height === 0)) {
             return;
         }
 
-        // Use threaded image decoder
         if ((typeof ImageDecoder !== 'undefined') && (this._threading)) {
             let imageDecoder = new ImageDecoder({ data: arr, type: mime });
             let rect = {
-                'type': 'vid',  
+                'type': 'vid',
                 'img': null,
                 'x': x,
                 'y': y,
@@ -801,7 +775,6 @@ export default class Display {
     }
 
     transparentRect(x, y, width, height, img, frame_id, hashId) {
-        /* The internal logic cannot handle empty images, so bail early */
         if ((width === 0) || (height === 0)) {
             return;
         }
@@ -846,16 +819,14 @@ export default class Display {
     }
 
     blitImage(x, y, width, height, arr, offset, frame_id, fromQueue) {
+        return;
         if (!fromQueue) {
             var buf;
             if (!ArrayBuffer.isView(arr)) {
-                buf = arr;          
-            } else {                
+                buf = arr;
+            } else {
                 buf = arr.buffer;
             }
-            // NB(directxman12): it's technically more performant here to use preallocated arrays,
-            // but it's a lot of extra work for not a lot of payoff -- if we're using the render queue,
-            // this probably isn't getting called *nearly* as much
             const newArr = new Uint8Array(width * height * 4);
             newArr.set(new Uint8Array(buf, 0, newArr.length));
             let rect = {
@@ -880,15 +851,14 @@ export default class Display {
                                              arr.byteOffset + offset,
                                              width * height * 4);
             }
-            // NB(directxman12): arr must be an Type Array view
             let img = new ImageData(data, width, height);
             if (this._enableCanvasBuffer) {
                 this._drawCtx.putImageData(img, x, y);
             } else {
                 this._targetCtx.putImageData(img, x, y);
-                
+
             }
-            
+
         }
     }
 
@@ -915,6 +885,7 @@ export default class Display {
     }
 
     drawImage(img, x, y, w, h, overlay=false) {
+        return;
         try {
             let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
             if (img.width != w || img.height != h) {
@@ -923,7 +894,7 @@ export default class Display {
                 targetCtx.drawImage(img, x, y);
             }
         } catch (error) {
-            Log.Error('Invalid image recieved.'); //KASM-2090
+            Log.Error('Invalid image recieved.');
         }
     }
 
@@ -941,7 +912,7 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            this._targetCtx.clearRect(x, y, width, height);
+            //this._targetCtx.clearRect(x, y, width, height);
         }
     }
 
@@ -968,7 +939,6 @@ export default class Display {
     // ===== PRIVATE METHODS =====
 
     _writeCtxBuffer() {
-    	//TODO: KASM-5450 Damage tracking with transparent rect overlay support
         if (this._backbuffer.width > 0) {
             this._targetCtx.drawImage(this._backbuffer, 0, 0);
         }
@@ -979,7 +949,6 @@ export default class Display {
             switch (event.data.eventType) {
                 case 'rect':
                     let rect = event.data.rect;
-                    //overwrite screen locations when received on the secondary display
                     rect.screenLocations = [ rect.screenLocations[event.data.screenLocationIndex] ]
                     rect.screenLocations[0].screenIndex = 0;
                     switch (rect.type) {
@@ -988,6 +957,7 @@ export default class Display {
                             rect.img.src = rect.src;
                             break;
                         case '_img':
+                            rect.img = new Image();
                             rect.img = new Image();
                             rect.img.src = rect.src;
                             rect.type = 'img';
@@ -1005,14 +975,13 @@ export default class Display {
                     }
                     this._syncFrameQueue.push(rect);
 
-                    //if the secondary display is not in focus, the browser may not call requestAnimationFrame, thus we need to limit our buffer
                     if (this._syncFrameQueue.length > 5000) {
                         this._syncFrameQueue.shift();
                         this._droppedRects++;
                     }
                     break;
                 case 'frameComplete':
-                        window.requestAnimationFrame( () => { this._pushSyncRects(); });
+                        //window.requestAnimationFrame( () => { this._pushSyncRects(); });
                         break;
                 case 'registered':
                         if (!this._isPrimaryDisplay) {
@@ -1078,7 +1047,7 @@ export default class Display {
         }
 
         if (this._syncFrameQueue.length > 0) {
-            window.requestAnimationFrame( () => { this._pushSyncRects(); });
+            //window.requestAnimationFrame( () => { this._pushSyncRects(); });
         }
     }
 
@@ -1097,9 +1066,6 @@ export default class Display {
         }
     }
 
-    /*
-    Process incoming rects into a frame buffer, assume rects are out of order due to either UDP or parallel processing of decoding
-    */
     _asyncRenderQPush(rect) {
         let frameIx = -1;
         let oldestFrameID = Number.MAX_SAFE_INTEGER;
@@ -1128,28 +1094,24 @@ export default class Display {
 
         if (frameIx >= 0) {
             if (rect.type == "flip") {
-                //flip rect contains the rect count for the frame
                 if (this._asyncFrameQueue[frameIx][1] !== 0) {
                     Log.Warn("Redundant flip rect, current rect_cnt: " + this._asyncFrameQueue[frameIx][1] + ", new rect_cnt: " + rect.rect_cnt );
                 }
                 this._asyncFrameQueue[frameIx][1] += rect.rect_cnt;
                 if (rect.rect_cnt == 0) {
                     Log.Warn("Invalid rect count");
-                }  
+                }
             }
 
             if (this._asyncFrameQueue[frameIx][1] > 0 && this._asyncFrameQueue[frameIx][2].length >= this._asyncFrameQueue[frameIx][1]) {
-                //frame is complete
                 this._asyncFrameComplete(frameIx);
             }
         } else {
             if (rect.frame_id < oldestFrameID) {
-                //rect is older than any frame in the queue, drop it
                 this._droppedRects++;
                 if (rect.type == "flip") { this._lateFlipRect++; }
                 return;
             } else if (rect.frame_id > newestFrameID) {
-                //frame is newer than any frame in the queue, drop old frame
                 if (this._asyncFrameQueue[0][3] == true) {
                     Log.Warn("Forced frame to canvas");
                     this._pushAsyncFrame(true);
@@ -1160,18 +1122,16 @@ export default class Display {
                     this._asyncFrameQueue.shift();
                     this._droppedFrames += (rect.frame_id - newestFrameID);
                 }
-                
+
                 let rect_cnt = ((rect.type == "flip") ? rect.rect_cnt : 0);
                 this._asyncFrameQueue.push([ rect.frame_id, rect_cnt, [ rect ], (rect_cnt == 1), 0, 0 ]);
-                
+
             }
         }
-        
+
     }
 
-    /*
-    Clear the async frame buffer
-    */
+
     _clearAsyncQueue() {
         this._droppedFrames += this._asyncFrameQueue.length;
 
@@ -1181,10 +1141,6 @@ export default class Display {
         }
     }
 
-    /*
-    Pre-processing required before displaying a finished frame
-    If marked force, unloaded images will be skipped and the frame will be marked complete and ready for rendering
-    */
     _asyncFrameComplete(frameIx, force=false) {
         if (frameIx >= this._asyncFrameQueue.length) {
             return;
@@ -1194,21 +1150,20 @@ export default class Display {
 
         if (force) {
             if (this._asyncFrameQueue[frameIx][1] == 0) {
-                this._missingFlipRect++; //at minimum the flip rect is missing
+                this._missingFlipRect++;
             } else if (this._asyncFrameQueue[frameIx][1] !== this._asyncFrameQueue[frameIx][2].length) {
                 this._droppedRects += (this._asyncFrameQueue[frameIx][1] - this._asyncFrameQueue[frameIx][2].length);
                 if (this._asyncFrameQueue[frameIx][2].length > this._asyncFrameQueue[frameIx][1]) {
                     Log.Warn("Frame has more rects than the reported rect_cnt.");
                 }
             }
-            while (currentFrameRectIx < this._asyncFrameQueue[frameIx][2].length) {   
+            while (currentFrameRectIx < this._asyncFrameQueue[frameIx][2].length) {
                 if (this._asyncFrameQueue[frameIx][2][currentFrameRectIx].type == 'img') {
                     if (this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img && !this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img.complete) {
                         this._asyncFrameQueue[frameIx][2][currentFrameRectIx].type = 'skip';
                         this._droppedRects++;
                     }
                 }
-
                 currentFrameRectIx++;
             }
         } else {
@@ -1218,7 +1173,6 @@ export default class Display {
                     this._asyncFrameQueue[frameIx][4] = currentFrameRectIx;
                     return;
                 }
-
                 currentFrameRectIx++;
             }
         }
@@ -1228,7 +1182,7 @@ export default class Display {
         if (force && frameIx == 0) {
             this._pushAsyncFrame(true);
         } else {
-            window.requestAnimationFrame( () => { this._pushAsyncFrame(); });
+            //window.requestAnimationFrame( () => { this._pushAsyncFrame(); });
         }
     }
 
@@ -1245,10 +1199,9 @@ export default class Display {
 
             let secondaryScreenRects = 0;
             let primaryScreenRects = 0;
-            
-            //render the selected frame
+
             for (let i = 0; i < frame.length; i++) {
-                
+
                 const a = frame[i];
 
                 for (let sI = 0; sI < a.screenLocations.length; sI++) {
@@ -1330,7 +1283,7 @@ export default class Display {
                                 secondaryScreenRects++;
                                 if (this._screens[screenLocation.screenIndex].channel) {
                                     this._screens[screenLocation.screenIndex].channel.postMessage({
-                                        eventType: 'rect', 
+                                        eventType: 'rect',
                                         rect: {
                                            'type': 'img',
                                            'img': null,
@@ -1365,8 +1318,8 @@ export default class Display {
                 if (primaryScreenRects > 0) {
                     this._writeCtxBuffer();
                 }
-                
-                if (this._transparentOverlayImg) { 
+
+                if (this._transparentOverlayImg) {
                     if (primaryScreenRects > 0) {
                         this.drawImage(this._transparentOverlayImg, this._transparentOverlayRect.x, this._transparentOverlayRect.y, this._transparentOverlayRect.width, this._transparentOverlayRect.height, true);
                     }
@@ -1396,15 +1349,12 @@ export default class Display {
                 this.onflush();
             }
 
-            // if there is more data in queue, then keep checking
             if (this._asyncFrameQueue[0][2].length > 0) {
-                window.requestAnimationFrame( () => { this._pushAsyncFrame(); });
+                //window.requestAnimationFrame( () => { this._pushAsyncFrame(); });
             }
         } else if (this._asyncFrameQueue[0][1] > 0 && this._asyncFrameQueue[0][1] == this._asyncFrameQueue[0][2].length) {
-            //how many times has _pushAsyncFrame been called when the frame had all rects but has not been drawn
             this._asyncFrameQueue[0][5] += 1;
-            //force the frame to be drawn if it has been here too long
-            if (this._asyncFrameQueue[0][5] > 5) { 
+            if (this._asyncFrameQueue[0][5] > 5) {
                 this._pushAsyncFrame(true);
             }
         }
@@ -1412,7 +1362,6 @@ export default class Display {
 
     _processRectScreens(rect) {
 
-        //find which screen this rect belongs to and adjust its x and y to be relative to the destination
         let indexes = [];
         rect.inPrimary = false;
         rect.inSecondary = false;
@@ -1422,14 +1371,14 @@ export default class Display {
             if (
                 !((rect.x > screen.x2 || screen.x > (rect.x + rect.width)) && (rect.y > screen.y2 || screen.y > (rect.y + rect.height)))
             ) {
-                let screenPosition = { 
-                    x: 0 - (screen.x - rect.x), //rect.x - screen.x,
-                    y: 0 - (screen.y - rect.y), //rect.y - screen.y,
+                let screenPosition = {
+                    x: 0 - (screen.x - rect.x),
+                    y: 0 - (screen.y - rect.y),
                     screenIndex: i
                 }
                 if (rect.type === 'copy') {
-                    screenPosition.oldX = 0 - (screen.x - rect.oldX); //rect.oldX - screen.x;
-                    screenPosition.oldY = 0 - (screen.y - rect.oldY); //rect.oldY - screen.y;
+                    screenPosition.oldX = 0 - (screen.x - rect.oldX);
+                    screenPosition.oldY = 0 - (screen.y - rect.oldY);
                 }
                 indexes.push(screenPosition);
                 if (i == 0) {
@@ -1447,10 +1396,6 @@ export default class Display {
         this._scale = factor;
         const vp = this._screens[0];
 
-        // NB(directxman12): If you set the width directly, or set the
-        //                   style width to a number, the canvas is cleared.
-        //                   However, if you set the style width to a string
-        //                   ('NNNpx'), the canvas is scaled without clearing.
         const width = factor * vp.serverWidth + 'px';
         const height = factor * vp.serverHeight + 'px';
 
@@ -1469,7 +1414,7 @@ export default class Display {
             this._target.style.imageRendering = ((!isFirefox) ? 'pixelated' : 'crisp-edges' );
             Log.Debug('Smoothing disabled');
         } else if (this.antiAliasing === 1 || (this.antiAliasing === 0 && factor !== 1 && this._target.style.imageRendering !== 'auto')) {
-            this._target.style.imageRendering = 'auto'; //auto is really smooth (blurry) using trilinear of linear
+            this._target.style.imageRendering = 'auto';
             Log.Debug('Smoothing enabled');
         }
     }
@@ -1483,23 +1428,44 @@ export default class Display {
         }
     }
 
-    _handleVidChunk(data, chunk) {
+
+    _renderFrame() {
+        requestAnimationFrame(this._renderFrame.bind(this));
+
+        if (this._currentFrameStripes.length > 0) {
+            let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
+
+            // Render all stripes accumulated for the current frame
+            this._currentFrameStripes.forEach(stripeData => {
+                let stripe_y_start = stripeData.y;
+                let chunk = stripeData.chunk;
+                if (chunk && chunk.image) {
+                    targetCtx.drawImage(chunk.image, 0, stripe_y_start);
+                    chunk.image.close(); // Close image after drawing
+                }
+            });
+            this._currentFrameStripes = []; // Clear stripes array for the next frame
+        }
+    }
+
+
+    _handleImageChunk(data, chunk) {
         let stripe_y_start = data[0];
         let that = data[1];
         let imageDecoder = data[2];
         imageDecoder.close();
-        let targetCtx = ((that._enableCanvasBuffer && !overlay) ? that._drawCtx : that._targetCtx);
-        targetCtx.drawImage(chunk.image, 0, stripe_y_start);
-        chunk.image.close();
+
+        // Always add the stripe to the current frame's stripes array
+        that._currentFrameStripes.push({ y: stripe_y_start, chunk: chunk });
     }
 
 
     _process_stripe(stripe_y_start, jpegDataBuffer) {
-        console.log(stripe_y_start);
         // Use threaded image decoder
         if ((typeof ImageDecoder !== 'undefined') && (this._threading)) {
             let imageDecoder = new ImageDecoder({ data: jpegDataBuffer, type: 'image/jpeg' });
-            imageDecoder.decode().then(this._handleVidChunk.bind(null,[stripe_y_start,this,imageDecoder]));
+            imageDecoder.decode().then(this._handleImageChunk.bind(null,[stripe_y_start,this,imageDecoder]));
         }
     }
+
 }

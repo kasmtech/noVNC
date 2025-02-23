@@ -4724,7 +4724,7 @@ RFB.messages = {
         }
 
         sock._sQlen += 9 + n;
-        sock.flush();
+        //sock.flush();
     },
 
     requestStats(sock) {

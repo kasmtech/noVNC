@@ -167,43 +167,6 @@ export default class Display {
         // Wait a second to connect to the new WS server
         setTimeout(this.initWS.bind(this), 3000)
 
-
-        this._currentFrameStripes = [];
-        this._renderFrame(); // Start the RAF loop
-        this.initWS = function() {
-          let protocol = window.location.protocol;
-          let host = window.location.hostname;
-          let port = window.location.port;
-          this.websocket = new WebSocket(protocol + '//' + host + ':' + port + '/jpeg', "x11-jpeg-stream-protocol");
-          this.websocket.binaryType = 'arraybuffer';
-          this.websocket.onopen = function(event) {
-            console.log("WebSocket connection opened");
-          };
-          this.websocket.onmessage = function(event) {
-            let receivedBuffer = event.data;
-            if (receivedBuffer.byteLength == 1) {
-              return;
-            }
-            let dataView = new DataView(receivedBuffer);
-            let stripe_y_start = dataView.getInt32(0, true);
-            let frameId = dataView.getUint32(4, true); // Extract frameId from the next 4 bytes
-            let jpegDataBuffer = receivedBuffer.slice(8); // Slice from byte 8 onwards now
-            this._process_stripe(stripe_y_start, jpegDataBuffer, frameId); // Pass frameId to _process_stripe if you need it there
-          }.bind(this);
-          this.websocket.onerror = function(error) {
-            console.error("WebSocket error:", error);
-          };
-          this.websocket.onclose = function(event) {
-            console.log("WebSocket connection closed");
-          };
-        }
-
-        // Wait a second to connect to the new WS server
-        setTimeout(this.initWS.bind(this), 1000)
-
-        // Start RAF render loop
-        this._startRenderLoop();
-
         Log.Debug("<< Display.constructor");
     }
 
@@ -1460,7 +1423,7 @@ export default class Display {
     }
 
 
-    _process_stripe(stripe_y_start, jpegDataBuffer) {
+    _process_stripe(stripe_y_start, jpegDataBuffer, frameId) {
         // Use threaded image decoder
         if ((typeof ImageDecoder !== 'undefined') && (this._threading)) {
             let imageDecoder = new ImageDecoder({ data: jpegDataBuffer, type: 'image/jpeg' });

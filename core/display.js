@@ -74,10 +74,6 @@ export default class Display {
         this._lateFlipRect = 0;
         this._frameStatsInterval = setInterval(function() {
             let delta = Date.now() - this._lastFlip;
-            if (delta > 0) {
-                this._fps = (this._flipCnt / (delta / 1000)).toFixed(2);
-            }
-            Log.Debug('Dropped Frames: ' + this._droppedFrames + ' Dropped Rects: ' + this._droppedRects + ' Forced Frames: ' + this._forcedFrameCnt + ' Missing Flips: ' + this._missingFlipRect + ' Late Flips: ' + this._lateFlipRect);
             this._flipCnt = 0;
             this._lastFlip = Date.now();
         }.bind(this), 5000);
@@ -133,9 +129,16 @@ export default class Display {
         if (!this._isPrimaryDisplay) {
             window.addEventListener('message', this._handleSecondaryDisplayMessage.bind(this));
         }
-
+        this._frameBuffer = {}; // { frameId: { stripes: [], lastStripeArrival: timestamp } }
+        this._readyFrames = [];   // Queue of frameIds that are "ready enough" to render
+        this._frameCompletionTimeout = 50; // milliseconds - adjust as needed
+        this._maxFrameBufferLength = 4; // Maximum number of frames to buffer, drop older ones if exceeded
+        this._lastFrameCheckTime = 0; // To control frame completion checks frequency
+        this._frameCheckInterval = 16; // ms - How often to check for frame completion
         this._currentFrameStripes = [];
         this._renderFrame(); // Start the RAF loop
+        this._frameCount = 0;      // Initialize frame count
+        this._lastFpsUpdateTime = 0; // Initialize last FPS update time
         this.initWS = function() {
           let protocol = window.location.protocol;
           let host = window.location.hostname;
@@ -1391,44 +1394,115 @@ export default class Display {
         }
     }
 
-
     _renderFrame() {
         requestAnimationFrame(this._renderFrame.bind(this));
+        const frameBufferKeys = Object.keys(this._frameBuffer).sort((a, b) => parseInt(a) - parseInt(b));
+        let framesRenderedThisRAF = 0; // Track frames rendered in this RAF cycle
+        const maxFramesToRenderPerRAF = 10; // Limit to avoid blocking main thread too long - adjust as needed
+        if (!this._frameCount) {
+            this._frameCount = 0; // Initialize frame count if not yet set
+        }
+        if (!this._lastFpsUpdateTime) {
+            this._lastFpsUpdateTime = performance.now(); // Initialize last update time
+        }
+        const now = performance.now();
+        const timeSinceLastUpdate = now - this._lastFpsUpdateTime;
+        // Aggressively render frames if buffer is longer than 2 frames (or adjust threshold)
+        while (frameBufferKeys.length >= 3 && framesRenderedThisRAF < maxFramesToRenderPerRAF) {
+            const frameIdToRender = frameBufferKeys.shift(); // Get the oldest frame ID
+            const frameData = this._frameBuffer[frameIdToRender];
 
-        if (this._currentFrameStripes.length > 0) {
-            let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
+            if (frameData) {
+                let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
+                frameData.stripes.sort((a, b) => a.y - b.y);
+                frameData.stripes.forEach(stripeData => {
+                    let stripe_y_start = stripeData.y;
+                    let chunk = stripeData.chunk;
+                    if (chunk && chunk.image) {
+                        targetCtx.drawImage(chunk.image, 0, stripe_y_start);
+                        chunk.image.close();
+                    }
+                });
+                delete this._frameBuffer[frameIdToRender]; // Cleanup AFTER rendering
+                framesRenderedThisRAF++;
+                this._frameCount++; // Increment frame count for FPS calculation
+            } else {
+                break; // Stop catch-up if frame data is missing to avoid errors
+            }
+             // Re-sort keys after shift in case buffer changed during rendering (less likely in JS single-thread, but good practice)
+            frameBufferKeys.sort((a, b) => parseInt(a) - parseInt(b));
+        }
 
-            // Render all stripes accumulated for the current frame
-            this._currentFrameStripes.forEach(stripeData => {
-                let stripe_y_start = stripeData.y;
-                let chunk = stripeData.chunk;
-                if (chunk && chunk.image) {
-                    targetCtx.drawImage(chunk.image, 0, stripe_y_start);
-                    chunk.image.close(); // Close image after drawing
-                }
-            });
-            this._currentFrameStripes = []; // Clear stripes array for the next frame
+        // Normal rendering: If still frames ready after catch-up or if buffer wasn't long enough for catch-up
+        if (frameBufferKeys.length > 0 && framesRenderedThisRAF < maxFramesToRenderPerRAF) { // Ensure we don't exceed max frames per RAF
+            const frameIdToRender = frameBufferKeys.shift(); // Get the next oldest frame (if any left after catch-up)
+            const frameData = this._frameBuffer[frameIdToRender];
+
+            if (frameData) {
+                // console.log("RENDER LOOP: Rendering frameId:", frameIdToRender, " (Normal)"); // Optional log
+                let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
+                frameData.stripes.sort((a, b) => a.y - b.y);
+                frameData.stripes.forEach(stripeData => {
+                    let stripe_y_start = stripeData.y;
+                    let chunk = stripeData.chunk;
+                    if (chunk && chunk.image) {
+                        targetCtx.drawImage(chunk.image, 0, stripe_y_start);
+                        chunk.image.close();
+                    }
+                });
+                delete this._frameBuffer[frameIdToRender]; // Cleanup AFTER rendering
+                this._frameCount++; // Increment frame count for FPS calculation
+            } else {
+                console.warn("RENDER LOOP: NO frame data found for frameId:", frameIdToRender, "in _frameBuffer:", this._frameBuffer);
+            }
+        }
+
+        if (timeSinceLastUpdate >= 1000) { // Update FPS every second (1000ms)
+            this._fps = this._frameCount; // FPS is just the frame count in the last second
+            this._frameCount = 0; // Reset frame count for the next second
+            this._lastFpsUpdateTime = now; // Update last update time
         }
     }
-
 
     _handleImageChunk(data, chunk) {
         let stripe_y_start = data[0];
         let that = data[1];
         let imageDecoder = data[2];
+        let frameId = data[3];
         imageDecoder.close();
-
-        // Always add the stripe to the current frame's stripes array
-        that._currentFrameStripes.push({ y: stripe_y_start, chunk: chunk });
+        if (!that._frameBuffer[frameId]) {
+            that._frameBuffer[frameId] = { stripes: [], lastStripeArrival: 0, frameId: frameId, startTime: performance.now() };
+        }
+        that._frameBuffer[frameId].stripes.push({ y: stripe_y_start, chunk: chunk });
+        that._frameBuffer[frameId].lastStripeArrival = performance.now();
+        that._dropOldFramesIfNeeded(); // Keep drop old frames as a safety net
     }
 
 
     _process_stripe(stripe_y_start, jpegDataBuffer, frameId) {
-        // Use threaded image decoder
         if ((typeof ImageDecoder !== 'undefined') && (this._threading)) {
             let imageDecoder = new ImageDecoder({ data: jpegDataBuffer, type: 'image/jpeg' });
-            imageDecoder.decode().then(this._handleImageChunk.bind(null,[stripe_y_start,this,imageDecoder]));
+            imageDecoder.decode().then(this._handleImageChunk.bind(this, [stripe_y_start, this, imageDecoder, frameId]));
         }
     }
 
+    _dropOldFramesIfNeeded() {
+        if (Object.keys(this._frameBuffer).length > this._maxFrameBufferLength) {
+            const frameIds = Object.keys(this._frameBuffer).sort((a, b) => parseInt(a) - parseInt(b));
+            const frameIdToDrop = frameIds[0];
+            console.warn(`FRAME DROP CHECK: Dropping frame ${frameIdToDrop} due to buffer overflow.`);
+            delete this._frameBuffer[frameIdToDrop];
+        }
+        const maxFrameAge = 1000; // milliseconds
+        const now = performance.now();
+        const frameIds = Object.keys(this._frameBuffer);
+        for (const frameId of frameIds) {
+            const frameData = this._frameBuffer[frameId];
+            if (frameData && (now - frameData.startTime > maxFrameAge)) {
+                console.warn(`FRAME DROP CHECK: Dropping frame ${frameId} because it's too old.`);
+                delete this._frameBuffer[frameId];
+                console.log("FRAME DROP CHECK: Frame", frameId, "dropped due to age."); // Keep log for age drops
+            }
+        }
+    }
 }

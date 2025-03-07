@@ -1819,7 +1819,7 @@ export default class RFB extends EventTargetMixin {
                     
                     clearTimeout(this._resizeTimeout);
                     this._resizeTimeout = setTimeout(this._requestRemoteResize.bind(this), 500);
-                    this.dispatchEvent(new CustomEvent("screenregistered", {}));
+                    this.dispatchEvent(new CustomEvent("screenupdated", {}));
                     Log.Info(`Secondary monitor (${event.data.screenID}) has been reattached.`);
                     break;
                 case 'unregister':

@@ -1477,6 +1477,7 @@ const UI = {
         UI.rfb.addEventListener("inputlock", UI.inputLockChanged);
         UI.rfb.addEventListener("inputlockerror", UI.inputLockError);
         UI.rfb.addEventListener("screenregistered", UI.screenRegistered);
+        UI.rfb.addEventListener("screenupdated", UI.screenUpdated);
         UI.rfb.translateShortcuts = UI.getSetting('translate_shortcuts');
         UI.rfb.clipViewport = UI.getSetting('view_clip');
         UI.rfb.scaleViewport = UI.getSetting('resize') === 'scale';
@@ -1974,8 +1975,6 @@ const UI = {
         document.getElementById('noVNC_refreshMonitors_icon').style.transform = "rotate(" + rotation + "deg)"
         UI.refreshRotation = rotation
         UI.updateMonitors(screenPlan)
-        UI.recenter()
-        UI.draw()
     },
 
     normalizePlacementValues(details) {
@@ -2070,9 +2069,9 @@ const UI = {
 
     },
 
-    updateMonitors(screenPlan) {
+    updateMonitors(screenPlan, setScreenPlan = true) {
         UI.initMonitors(screenPlan) 
-        UI.recenter()
+        UI.recenter(setScreenPlan)
         UI.draw()
     },
 
@@ -2088,7 +2087,7 @@ const UI = {
         }
     },
 
-    recenter() {
+    recenter(setScreenPlan = true) {
         const monitors = UI.sortedMonitors
         UI.removeSpaces()
         const { startLeft, startTop } = UI.getSizes(monitors)
@@ -2098,7 +2097,9 @@ const UI = {
             m.x += startLeft
             m.y += startTop
         }
-        UI.setScreenPlan()
+        if (setScreenPlan === true) {
+            UI.setScreenPlan()
+        }
     },
 
     removeSpaces() {
@@ -2201,8 +2202,8 @@ const UI = {
         const { top, left, width, height } = UI.getSizes(sortedMonitors)
         const screens = []
         for (var i = 0; i < monitors.length; i++) {
-            var monitor = monitors[i];
-            var a = sortedMonitors.find(el => el.id === monitor.id)
+            const monitor = monitors[i];
+            const a = sortedMonitors.find(el => el.id === monitor.id)
             screens.push({
                 screenID: a.id,
                 serverHeight: Math.round(a.h * scale),
@@ -2973,6 +2974,25 @@ const UI = {
         }
     },
 
+    resetScreenPositions(screenPlan) {
+        const leftMost = Math.min(...screenPlan.screens.map(screen => screen.x))
+        if (leftMost >= 0) {
+            return screenPlan
+        }
+
+        const increaseBy = Math.abs(leftMost)
+        screenPlan.screens.map(screen => screen.x += increaseBy)
+        return screenPlan
+    },
+
+    screenUpdated(e) {
+        if (UI.rfb) {
+            let screenPlan = UI.rfb.getScreenPlan();
+            UI.updateMonitors(screenPlan, false)
+            UI._identify(UI.monitors)
+        }
+    },
+
     screenRegistered(e) {
         console.log('screen registered')
         
@@ -2987,6 +3007,7 @@ const UI = {
                     screenPlan.screens[current].x = left
                     screenPlan.screens[current].y = top
                 }
+                screenPlan = UI.resetScreenPositions(screenPlan)
             }
 
             UI.updateMonitors(screenPlan)

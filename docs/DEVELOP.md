@@ -10,9 +10,7 @@ sudo rm -rf www
 sudo git clone https://github.com/kasmtech/noVNC.git www
 sudo chown -R user:user www
 cd www
-sed -i 's#<script type="module" crossorigin="use-credentials" src="app/ui.js"></script-->#<script type="module" crossorigin="use-credentials" src="app/ui.js"></script>#' index.html
-sed -i 's#<!--link rel="stylesheet" href="app/styles/base.css">#<link rel="stylesheet" href="app/styles/base.css">#' index.html
-sed -i "s#base.css\">#base.css\">\n\n    <script type="module" src="vendor/interact.min.js"></script>#" index.html
+sed -i "s#base.css\">#base.css\">\n    <script type="module" src="vendor/interact.min.js"></script>#" index.html
 sed -i 's#import "core-js/stable";#//import "core-js/stable";#' app/ui.js
 sed -i 's#import "regenerator-runtime/runtime";#//import "regenerator-runtime/runtime";#' app/ui.js
 sed -i 's#\(import.\+@interactjs\)#//\1#' app/ui.js
@@ -26,8 +24,6 @@ Undo the HTML/JS changes that allow you to run the code directly without the web
 
 ```bash
 cd /usr/share/kasmvnc/www
-sed -i 's#<script type="module" crossorigin="use-credentials" src="app/ui.js"></script>#<script type="module" crossorigin="use-credentials" src="app/ui.js"></script-->#' index.html
-sed -i 's#<link rel="stylesheet" href="app/styles/base.css">#<!--link rel="stylesheet" href="app/styles/base.css">#' index.html
 sed -i '/interact.min.js/d' index.html
 sed -i 's#//import "core-js/stable";#import "core-js/stable";#' app/ui.js
 sed -i 's#//import "regenerator-runtime/runtime";#import "regenerator-runtime/runtime";#' app/ui.js

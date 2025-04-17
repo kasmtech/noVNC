@@ -164,6 +164,8 @@ export default class RFB extends EventTargetMixin {
         this._clipboardServerCapabilitiesActions = {};
         this._clipboardServerCapabilitiesFormats = {};
 
+        this._threading = true;
+
         // Internal objects
         this._sock = null;              // Websock object
         this._display = null;           // Display object
@@ -736,6 +738,14 @@ export default class RFB extends EventTargetMixin {
             this._hiDpi = value;
             this._pendingApplyResolutionChange = true;
             this._display.applyServerResolution(0, 0, 0);
+        }
+    }
+
+    get threading() { return this._threading; }
+    set threading(value) {
+        if (value !== this._threading) {
+            this._threading = value;
+            this._display.threading = value;
         }
     }
 

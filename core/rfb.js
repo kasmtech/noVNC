@@ -717,6 +717,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     get statsFps() { return this._display.fps; }
+    get statsDroppedFps() { return this._display.droppedFps; }
 
     get enableWebRTC() { return this._useUdp; }
     set enableWebRTC(value) {

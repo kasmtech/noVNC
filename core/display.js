@@ -66,7 +66,9 @@ export default class Display {
         // performance metrics
         this._flipCnt = 0;
         this._lastFlip = Date.now();
-        this._droppedFrames = 0;
+        this._droppedFrames = 0; // total count
+        this._droppedFramesRate = 0; //frames dropped per second
+        this._droppedFramesCnt = 0; //dropper frames temp counter
         this._droppedRects = 0;
         this._forcedFrameCnt = 0;
         this._missingFlipRect = 0;
@@ -75,8 +77,16 @@ export default class Display {
             let delta = Date.now() - this._lastFlip;
             if (delta > 0) {
                 this._fps = (this._flipCnt / (delta / 1000)).toFixed(2);
+                if (this._droppedFrames > this._droppedFramesCnt) {
+                    let droppedFrames = this._droppedFrames - this._droppedFramesCnt;
+                    this._droppedFramesRate = (droppedFrames / (delta / 1000)).toFixed(2);
+                } else {
+                    this._droppedFramesRate = 0;
+                }
+                this._droppedFramesCnt = this._droppedFrames;
             }
             Log.Debug('Dropped Frames: ' + this._droppedFrames + ' Dropped Rects: ' + this._droppedRects + ' Forced Frames: ' + this._forcedFrameCnt + ' Missing Flips: ' + this._missingFlipRect + ' Late Flips: ' + this._lateFlipRect);
+
             this._flipCnt = 0;
             this._lastFlip = Date.now();
         }.bind(this), 5000);
@@ -209,6 +219,7 @@ export default class Display {
     }
 
     get fps() { return this._fps; }
+    get droppedFps() { return this._droppedFramesRate; }
 
     // ===== PUBLIC METHODS =====
 

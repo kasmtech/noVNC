@@ -12,6 +12,7 @@ import keysyms from "./keysymdef.js";
 import imekeys from "./imekeys.js";
 import * as browser from "../util/browser.js";
 import { isChromiumBased } from '../util/browser.js';
+import KeySenderWorker from './keysender.js?worker';
 
 //
 // Keyboard event handler
@@ -26,22 +27,33 @@ export default class Keyboard {
                                         // (even if they are happy)
         this._altGrArmed = false;       // Windows AltGr detection
 
+        this._rfbKeyQueue = [];
+        this._lastSendTime = 0;
+
+        this._keySenderWorker = new KeySenderWorker();
+
+        this._keySenderWorker.onmessage = (e) => {
+            const msg = e.data;
+            this._rfbKeyQueue.push({ keysym: msg.keysym, code: msg.code, down: msg.down });
+            this._scheduleRfbKeySend();
+        };
+
         // keep these here so we can refer to them later
         this._eventHandlers = {
             'keyup': this._handleKeyUp.bind(this),
             'keydown': this._handleKeyDown.bind(this),
             'blur': this._allKeysUp.bind(this),
-            'compositionstart' : this._handleCompositionStart.bind(this),
-            'compositionend' : this._handleCompositionEnd.bind(this),
-            'input' : this._handleInput.bind(this)
+            'compositionstart': this._handleCompositionStart.bind(this),
+            'compositionend': this._handleCompositionEnd.bind(this),
+            'compositionupdate': this._handleCompositionUpdate.bind(this),
+            'input': this._handleInput.bind(this)
         };
 
         // ===== EVENT HANDLERS =====
         this.onkeyevent = () => {}; // Handler for key press/release
 
         this._enableIME = false;
-        this._imeHold = false;
-        this._imeInProgress = false;
+        this._imeStarted = false;
         this._lastKeyboardInput = null;
         this._defaultKeyboardInputLen = 100;
         this._keyboardInputReset();
@@ -51,8 +63,8 @@ export default class Keyboard {
     // ===== PUBLIC METHODS =====
 
     get enableIME() { return this._enableIME; }
-    set enableIME(val) { 
-        this._enableIME = val; 
+    set enableIME(val) {
+        this._enableIME = val;
         this.focus();
     }
 
@@ -64,12 +76,11 @@ export default class Keyboard {
     clearKeysDown(event) {
         // On some Operating systems, the browser will lose key up events when a shortcut key combination triggers something
         // on the OS that is outside the scope of the browser. For example, MacOS Cmd+Shift+Ctrl+4 brings up a screen capture
-        // tool and the browser only recieves some of the key down events, but not the key up events. This leaves the server 
+        // tool and the browser only recieves some of the key down events, but not the key up events. This leaves the server
         // out of sync, with cetain keys stuck down. This attempts to discover and fix these occurances in a OS nuetral way
         if (event) {
-            
             for (const [key, value] of Object.entries(this._keyDownList)) {
-                switch(key) {
+                switch (key) {
                     case "ControlLeft":
                     case "ControlRight":
                         if (!event.ctrlKey) {
@@ -103,6 +114,29 @@ export default class Keyboard {
         }
     }
 
+    _scheduleRfbKeySend() {
+        if (this._rfbKeyQueue.length === 0) return;
+
+        const process = (timestamp) => {
+            const elapsed = timestamp - this._lastSendTime;
+            if (elapsed > 16) {
+                while (this._rfbKeyQueue.length > 0) {
+                    const event = this._rfbKeyQueue.shift();
+                    Log.Debug("onkeyevent " + (event.down ? "down" : "up") +
+                        ", keysym: " + event.keysym, ", code: " + event.code);
+                    this.onkeyevent(event.keysym, event.code, event.down);
+                }
+                this._lastSendTime = timestamp;
+            }
+
+            if (this._rfbKeyQueue.length > 0) {
+                requestAnimationFrame(process);
+            }
+        };
+
+        requestAnimationFrame(process);
+    }
+
     _sendKeyEvent(keysym, code, down) {
         if (down) {
             this._keyDownList[code] = keysym;
@@ -114,9 +148,17 @@ export default class Keyboard {
             delete this._keyDownList[code];
         }
 
-        Log.Debug("onkeyevent " + (down ? "down" : "up") +
-                  ", keysym: " + keysym, ", code: " + code);
-        this.onkeyevent(keysym, code, down);
+        this._keySenderWorker.postMessage({
+            keysym: keysym, // your symbol
+            code: code,
+            down: down       // true or false
+        });
+    }
+
+    _sendKeyStroke(keySym, code) {
+        if (keySym === 13) {console.log("NEW LINE");}
+        this._sendKeyEvent(keySym, code, true);
+        this._sendKeyEvent(keySym, code, false);
     }
 
     _getKeyCode(e) {
@@ -137,11 +179,11 @@ export default class Keyboard {
         // is not layout independent, so it is as bad as using keyCode
         if (e.keyIdentifier) {
             // Non-character key?
-            if (e.keyIdentifier.substr(0, 2) !== 'U+') {
+            if (!e.keyIdentifier.startsWith('U+')) {
                 return e.keyIdentifier;
             }
 
-            const codepoint = parseInt(e.keyIdentifier.substr(2), 16);
+            const codepoint = parseInt(e.keyIdentifier.substring(2), 16);
             const char = String.fromCharCode(codepoint).toUpperCase();
 
             return 'Platform' + char.charCodeAt();
@@ -152,56 +194,52 @@ export default class Keyboard {
 
     _handleCompositionStart(e) {
         Log.Debug("composition started");
-        if (this._enableIME) { 
-            this._imeHold = true; 
-            this._imeInProgress = true;
+        this._imeStarted = true;
+        this._lastKeyboardInput = null;
+    }
+
+    _handleCompositionUpdate(e) {
+        const oldValue = this._lastKeyboardInput;
+        const newValue = e.data;
+        let diffStart = 0;
+
+        if (this._imeStarted) {
+            this._sendKeyStroke(keysyms.lookup(newValue.charCodeAt(0)), 'Unidentified');
+            this._imeStarted = false;
+        } else {
+            //find position where difference starts
+            for (let i = 0; i < Math.min(oldValue.length, newValue.length); i++) {
+                if (newValue.charAt(i) !== oldValue.charAt(i)) {
+                    break;
+                }
+                diffStart++;
+            }
+
+            //send backspaces if needed
+            for (let bs = oldValue.length - diffStart; bs > 0; bs--) {
+                this._sendKeyStroke(KeyTable.XK_BackSpace, "Backspace");
+            }
+
+            //send new keys
+            for (let i = diffStart; i < newValue.length; i++) {
+                this._sendKeyStroke(keysyms.lookup(newValue.charCodeAt(i)), 'Unidentified');
+            }
         }
+        this._lastKeyboardInput = newValue;
+        this._touchInput.focus();
     }
 
     _handleCompositionEnd(e) {
         Log.Debug("Composition ended");
-        if (this._enableIME) { this._imeInProgress = false; }
-        if (isChromiumBased()) {
-            this._imeHold = false;
-        }
     }
 
     _handleInput(e) {
         //input event occurs only when keyup keydown events don't prevent default
-        //IME events will make this happen, for example 
+        //IME events will make this happen, for example
         //IME changes can back out old characters and replace, thus send differential if IME
         //otherwise send new characters
-        if (this._enableIME && this._imeHold) {
-            Log.Debug("IME input change, sending differential");
-            if (!this._imeInProgress) {
-                this._imeHold = false; //Firefox fires compisitionend before last input change
-            }
-
-            const oldValue = this._lastKeyboardInput;
-            const newValue = e.target.value;
-            let diff_start = 0;
-
-            //find position where difference starts
-            for (let i = 0; i < Math.min(oldValue.length, newValue.length); i++) {
-                if (newValue.charAt(i) != oldValue.charAt(i)) {
-                    break;
-                }
-                diff_start++;
-            }
-
-            //send backspaces if needed
-            for (let bs = oldValue.length - diff_start; bs > 0; bs--) {
-                this._sendKeyEvent(KeyTable.XK_BackSpace, "Backspace", true);
-                this._sendKeyEvent(KeyTable.XK_BackSpace, "Backspace", false);
-            } 
-            
-            //send new keys
-            for (let i = diff_start; i < newValue.length; i++) {
-                this._sendKeyEvent(keysyms.lookup(newValue.charCodeAt(i)), 'Unidentified', true);
-                this._sendKeyEvent(keysyms.lookup(newValue.charCodeAt(i)), 'Unidentified', false);
-            }
-            this._lastKeyboardInput = newValue;
-        } else {
+        console.log("Input: " + e.data);
+        if (!this._enableIME) {
             Log.Debug("Non-IME input change, sending new characters");
             const newValue = e.target.value;
 
@@ -218,17 +256,18 @@ export default class Keyboard {
                 newLen = Math.max(e.target.selectionStart, newValue.length);
             } catch (err) {
                 // selectionStart is undefined in Google Chrome
+                Log.Error("_handleInput: " + err);
                 newLen = newValue.length;
             }
             const oldLen = oldValue.length;
-    
+
             let inputs = newLen - oldLen;
             let backspaces = inputs < 0 ? -inputs : 0;
 
             // Compare the old string with the new to account for
             // text-corrections or other input that modify existing text
             for (let i = 0; i < Math.min(oldLen, newLen); i++) {
-                if (newValue.charAt(i) != oldValue.charAt(i)) {
+                if (newValue.charAt(i) !== oldValue.charAt(i)) {
                     inputs = newLen - i;
                     backspaces = oldLen - i;
                     break;
@@ -270,15 +309,17 @@ export default class Keyboard {
     }
 
     _handleKeyDown(e) {
+        console.log("KEY CODE: " + e.keyCode + e.isComposing);
+        if (e.isComposing || e.keyCode === 229) {
+            //skip event if IME related
+            Log.Debug("Skipping keydown, IME interaction, keycode: " + e.keyCode);
+            return;
+        }
+
         const code = this._getKeyCode(e);
         let keysym = KeyboardUtil.getKeysym(e);
         this.clearKeysDown(e);
-        
-        if (this._isIMEInteraction(e)) {
-            //skip event if IME related
-            Log.Debug("Skipping keydown, IME interaction, code: " + code + " keysym: " + keysym + " keycode: " + e.keyCode);
-            return;
-        }
+        console.log("KEY DOWN: " + e.keyCode + ' ' + code + ' ' + keysym);
 
         // Windows doesn't have a proper AltGr, but handles it using
         // fake Ctrl+Alt. However the remote end might not be Windows,
@@ -401,13 +442,12 @@ export default class Keyboard {
     }
 
     _handleKeyUp(e) {
-        const code = this._getKeyCode(e);
-
-        if (this._isIMEInteraction(e)) {
+        if (e.isComposing || e.keyCode === 229) {
             //skip IME related events
-            Log.Debug("Skipping keyup, IME interaction, code: " + code + " keycode: " + e.keyCode);
+            // Log.Debug("Skipping keyup, IME interaction, code: " + code + " keycode: " + e.keyCode);
             return;
         }
+        const code = this._getKeyCode(e);
         stopEvent(e);
 
         // We can't get a release in the middle of an AltGr sequence, so
@@ -459,10 +499,10 @@ export default class Keyboard {
 
     _isIMEInteraction(e) {
         //input must come from touchinput (textarea) and ime must be enabled
-        if (e.target != this._touchInput || !this._enableIME) { return false; }
+        if (e.target !== this._touchInput || !this._enableIME) { return false; }
 
         //keyCode of 229 is IME composition
-        if (e.keyCode == 229) {
+        if (e.keyCode === 229) {
             return true;
         }
 
@@ -471,11 +511,7 @@ export default class Keyboard {
         //we can't do that with none character keys though
         //Firefox does not seem to fire key events for IME interaction but Chrome does
         //TODO: potentially skip this for Firefox browsers, needs more testing with different IME types
-        if (e.keyCode in imekeys) {
-            return true;
-        }
-
-        return false;
+        return e.keyCode in imekeys;
     }
 
     // ===== PUBLIC METHODS =====
@@ -498,6 +534,7 @@ export default class Keyboard {
 
     grab() {
         //Log.Debug(">> Keyboard.grab");
+        console.log("=====================grab");
 
         this._screenInput.addEventListener('keydown', this._eventHandlers.keydown);
         this._screenInput.addEventListener('keyup', this._eventHandlers.keyup);
@@ -505,6 +542,7 @@ export default class Keyboard {
         this._touchInput.addEventListener('keydown', this._eventHandlers.keydown);
         this._touchInput.addEventListener('keyup', this._eventHandlers.keyup);
         this._touchInput.addEventListener('compositionstart', this._eventHandlers.compositionstart);
+        this._touchInput.addEventListener('compositionupdate', this._eventHandlers.compositionupdate);
         this._touchInput.addEventListener('compositionend', this._eventHandlers.compositionend);
         this._touchInput.addEventListener('input', this._eventHandlers.input);
 
@@ -516,6 +554,7 @@ export default class Keyboard {
 
     ungrab() {
         //Log.Debug(">> Keyboard.ungrab");
+        console.log("=====================ungrab");
 
         this._screenInput.removeEventListener('keydown', this._eventHandlers.keydown);
         this._screenInput.removeEventListener('keyup', this._eventHandlers.keyup);
@@ -523,6 +562,7 @@ export default class Keyboard {
         this._touchInput.removeEventListener('keydown', this._eventHandlers.keydown);
         this._touchInput.removeEventListener('keyup', this._eventHandlers.keyup);
         this._touchInput.removeEventListener('compositionstart', this._eventHandlers.compositionstart);
+        this._touchInput.removeEventListener('compositionupdate', this._eventHandlers.compositionupdate);
         this._touchInput.removeEventListener('compositionend', this._eventHandlers.compositionend);
         this._touchInput.removeEventListener('input', this._eventHandlers.input);
 

@@ -655,17 +655,14 @@ const UI = {
  * ------v------*/
     // Ignore clicks that are propogated from child elements in sub panels
     isControlPanelItemClick(e) {
-        if (!(e && e.target && e.target.classList && e.target.parentNode &&
+        return e && e.target && e.target.classList && e.target.parentNode &&
             (
-                e.target.classList.contains('noVNC_button') && e.target.parentNode.id !== 'noVNC_modifiers' || 
+                e.target.classList.contains('noVNC_button') && e.target.parentNode.id !== 'noVNC_modifiers' ||
                 e.target.classList.contains('noVNC_button_div') ||
                 e.target.classList.contains('noVNC_heading')
-            )
-            )) {
-            return false;
-        }
+            );
 
-        return true;
+
     },
 
     // Disable/enable controls depending on connection state
@@ -1415,6 +1412,7 @@ const UI = {
  * ------v------*/
 
     connect(event, password) {
+        Log.Debug("UI.connect");
 
         // Ignore when rfb already exists
         if (typeof UI.rfb !== 'undefined') {
@@ -1553,7 +1551,7 @@ const UI = {
             UI._sessionTimeoutInterval = setInterval(function() {
                 if (UI.rfb) {
                     const timeSinceLastActivityInS = (Date.now() - UI.rfb.lastActiveAt) / 1000;
-                    let idleDisconnectInS = 1200; //20 minute default 
+                    let idleDisconnectInS = 1200; //20 minute default
                     if (Number.isFinite(parseFloat(UI.rfb.idleDisconnect))) {
                         idleDisconnectInS = parseFloat(UI.rfb.idleDisconnect) * 60;
                     }

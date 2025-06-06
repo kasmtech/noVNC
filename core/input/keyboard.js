@@ -199,6 +199,7 @@ export default class Keyboard {
     }
 
     _handleCompositionUpdate(e) {
+        console.log("composition update: " + e.data);
         const oldValue = this._lastKeyboardInput;
         const newValue = e.data;
         let diffStart = 0;
@@ -238,10 +239,10 @@ export default class Keyboard {
         //IME events will make this happen, for example
         //IME changes can back out old characters and replace, thus send differential if IME
         //otherwise send new characters
-        console.log("Input: " + e.data);
-        if (!this._enableIME) {
+        console.log("Input: " + e.data + " isComposing: " + e.isComposing);
+        if (!e.isComposing) {
             Log.Debug("Non-IME input change, sending new characters");
-            const newValue = e.target.value;
+            const newValue = e.data;
 
             if (!this._lastKeyboardInput) {
                 this._keyboardInputReset();
@@ -276,12 +277,10 @@ export default class Keyboard {
 
             // Send the key events
             for (let i = 0; i < backspaces; i++) {
-                this._sendKeyEvent(KeyTable.XK_BackSpace, "Backspace", true);
-                this._sendKeyEvent(KeyTable.XK_BackSpace, "Backspace", false);
+                this._sendKeyStroke(KeyTable.XK_BackSpace, "Backspace");
             }
             for (let i = newLen - inputs; i < newLen; i++) {
-                this._sendKeyEvent(keysyms.lookup(newValue.charCodeAt(i)), 'Unidentified', true);
-                this._sendKeyEvent(keysyms.lookup(newValue.charCodeAt(i)), 'Unidentified', false);
+                this._sendKeyStroke(keysyms.lookup(newValue.charCodeAt(i)), 'Unidentified');
             }
 
             // Control the text content length in the keyboardinput element

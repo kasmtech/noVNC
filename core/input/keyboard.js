@@ -18,6 +18,7 @@ import KeySenderWorker from './keysender.js?worker';
 // Keyboard event handler
 //
 
+const thresholdTime = 16;
 export default class Keyboard {
     constructor(screenInput, touchInput) {
         this._screenInput = screenInput;
@@ -119,7 +120,7 @@ export default class Keyboard {
 
         const process = (timestamp) => {
             const elapsed = timestamp - this._lastSendTime;
-            if (elapsed > 16) {
+            if (elapsed > thresholdTime) {
                 while (this._rfbKeyQueue.length > 0) {
                     const event = this._rfbKeyQueue.shift();
                     Log.Debug("onkeyevent " + (event.down ? "down" : "up") +
@@ -156,7 +157,6 @@ export default class Keyboard {
     }
 
     _sendKeyStroke(keySym, code) {
-        if (keySym === 13) {console.log("NEW LINE");}
         this._sendKeyEvent(keySym, code, true);
         this._sendKeyEvent(keySym, code, false);
     }
@@ -195,11 +195,11 @@ export default class Keyboard {
     _handleCompositionStart(e) {
         Log.Debug("composition started");
         this._imeStarted = true;
-        this._lastKeyboardInput = null;
+        this._lastKeyboardInput = "";
     }
 
     _handleCompositionUpdate(e) {
-        console.log("composition update: " + e.data);
+        Log.Debug("Composition update: " + e.data);
         const oldValue = this._lastKeyboardInput;
         const newValue = e.data;
         let diffStart = 0;
@@ -227,11 +227,12 @@ export default class Keyboard {
             }
         }
         this._lastKeyboardInput = newValue;
-        this._touchInput.focus();
+        //this._touchInput.focus();
     }
 
     _handleCompositionEnd(e) {
         Log.Debug("Composition ended");
+        this._touchInput.value = '';
     }
 
     _handleInput(e) {
@@ -239,76 +240,81 @@ export default class Keyboard {
         //IME events will make this happen, for example
         //IME changes can back out old characters and replace, thus send differential if IME
         //otherwise send new characters
-        console.log("Input: " + e.data + " isComposing: " + e.isComposing);
-        if (!e.isComposing) {
+        Log.Debug("Current buffer: " + this._touchInput.value + " Input: " + e.data + " isComposing: " + e.isComposing + " input.type: " + e.inputType);
+        if (!e.isComposing && e.inputType !== "insertCompositionText") {
             Log.Debug("Non-IME input change, sending new characters");
             const newValue = e.data;
 
-            if (!this._lastKeyboardInput) {
-                this._keyboardInputReset();
-            }
-
-            const oldValue = this._lastKeyboardInput;
-            let newLen;
-
-            try {
-                // Try to check caret position since whitespace at the end
-                // will not be considered by value.length in some browsers
-                newLen = Math.max(e.target.selectionStart, newValue.length);
-            } catch (err) {
-                // selectionStart is undefined in Google Chrome
-                Log.Error("_handleInput: " + err);
-                newLen = newValue.length;
-            }
-            const oldLen = oldValue.length;
-
-            let inputs = newLen - oldLen;
-            let backspaces = inputs < 0 ? -inputs : 0;
-
-            // Compare the old string with the new to account for
-            // text-corrections or other input that modify existing text
-            for (let i = 0; i < Math.min(oldLen, newLen); i++) {
-                if (newValue.charAt(i) !== oldValue.charAt(i)) {
-                    inputs = newLen - i;
-                    backspaces = oldLen - i;
-                    break;
-                }
-            }
-
-            // Send the key events
-            for (let i = 0; i < backspaces; i++) {
-                this._sendKeyStroke(KeyTable.XK_BackSpace, "Backspace");
-            }
-            for (let i = newLen - inputs; i < newLen; i++) {
+            for (let i = 0; i < newValue.length; i++) {
                 this._sendKeyStroke(keysyms.lookup(newValue.charCodeAt(i)), 'Unidentified');
             }
 
-            // Control the text content length in the keyboardinput element
-            if (newLen > 2 * this._defaultKeyboardInputLen) {
-                this._keyboardInputReset();
-            } else if (newLen < 1) {
-                // There always have to be some text in the keyboardinput
-                // element with which backspace can interact.
-                this._keyboardInputReset();
-                // This sometimes causes the keyboard to disappear for a second
-                // but it is required for the android keyboard to recognize that
-                // text has been added to the field
-                e.target.blur();
-                // This has to be ran outside of the input handler in order to work
-                setTimeout(e.target.focus.bind(e.target), 0);
-            } else {
-                this._lastKeyboardInput = newValue;
-            }
+            this._touchInput.value = '';
+            // if (!this._lastKeyboardInput) {
+            //     this._keyboardInputReset();
+            // }
+            //
+            // const oldValue = this._lastKeyboardInput;
+            // let newLen;
+            //
+            // try {
+            //     // Try to check caret position since whitespace at the end
+            //     // will not be considered by value.length in some browsers
+            //     newLen = Math.max(e.target.selectionStart, newValue.length);
+            // } catch (err) {
+            //     // selectionStart is undefined in Google Chrome
+            //     Log.Error("_handleInput: " + err);
+            //     newLen = newValue.length;
+            // }
+            // const oldLen = oldValue.length;
+            //
+            // let inputs = newLen - oldLen;
+            // let backspaces = inputs < 0 ? -inputs : 0;
+            //
+            // // Compare the old string with the new to account for
+            // // text-corrections or other input that modify existing text
+            // for (let i = 0; i < Math.min(oldLen, newLen); i++) {
+            //     if (newValue.charAt(i) !== oldValue.charAt(i)) {
+            //         inputs = newLen - i;
+            //         backspaces = oldLen - i;
+            //         break;
+            //     }
+            // }
+            //
+            // // Send the key events
+            // for (let i = 0; i < backspaces; i++) {
+            //     this._sendKeyStroke(KeyTable.XK_BackSpace, "Backspace");
+            // }
+            // for (let i = newLen - inputs; i < newLen; i++) {
+            //     this._sendKeyStroke(keysyms.lookup(newValue.charCodeAt(i)), 'Unidentified');
+            // }
+            //
+            // // Control the text content length in the keyboardinput element
+            // if (newLen > 2 * this._defaultKeyboardInputLen) {
+            //     this._keyboardInputReset();
+            // } else if (newLen < 1) {
+            //     // There always have to be some text in the keyboardinput
+            //     // element with which backspace can interact.
+            //     this._keyboardInputReset();
+            //     // This sometimes causes the keyboard to disappear for a second
+            //     // but it is required for the android keyboard to recognize that
+            //     // text has been added to the field
+            //     e.target.blur();
+            //     // This has to be ran outside of the input handler in order to work
+            //     setTimeout(e.target.focus.bind(e.target), 0);
+            // } else {
+            //     this._lastKeyboardInput = newValue;
+            // }
         }
     }
 
     _keyboardInputReset() {
-        this._touchInput.value = new Array(this._defaultKeyboardInputLen).join("_");
+        this._touchInput.value = "";
         this._lastKeyboardInput = this._touchInput.value;
     }
 
     _handleKeyDown(e) {
-        console.log("KEY CODE: " + e.keyCode + e.isComposing);
+        Log.Debug("Key Down: " + e.keyCode + " isComposing: " + e.isComposing);
         if (e.isComposing || e.keyCode === 229) {
             //skip event if IME related
             Log.Debug("Skipping keydown, IME interaction, keycode: " + e.keyCode);
@@ -318,7 +324,7 @@ export default class Keyboard {
         const code = this._getKeyCode(e);
         let keysym = KeyboardUtil.getKeysym(e);
         this.clearKeysDown(e);
-        console.log("KEY DOWN: " + e.keyCode + ' ' + code + ' ' + keysym);
+        console.log("Key Down: " + e.keyCode + " code: " + code + " keysym: " + keysym);
 
         // Windows doesn't have a proper AltGr, but handles it using
         // fake Ctrl+Alt. However the remote end might not be Windows,
@@ -441,6 +447,7 @@ export default class Keyboard {
     }
 
     _handleKeyUp(e) {
+        Log.Debug("Key Up: " + e.keyCode + " Buffer: " + this._touchInput.value);
         if (e.isComposing || e.keyCode === 229) {
             //skip IME related events
             // Log.Debug("Skipping keyup, IME interaction, code: " + code + " keycode: " + e.keyCode);
@@ -533,8 +540,6 @@ export default class Keyboard {
 
     grab() {
         //Log.Debug(">> Keyboard.grab");
-        console.log("=====================grab");
-
         this._screenInput.addEventListener('keydown', this._eventHandlers.keydown);
         this._screenInput.addEventListener('keyup', this._eventHandlers.keyup);
 
@@ -553,8 +558,6 @@ export default class Keyboard {
 
     ungrab() {
         //Log.Debug(">> Keyboard.ungrab");
-        console.log("=====================ungrab");
-
         this._screenInput.removeEventListener('keydown', this._eventHandlers.keydown);
         this._screenInput.removeEventListener('keyup', this._eventHandlers.keyup);
 

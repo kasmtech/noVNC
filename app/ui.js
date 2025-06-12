@@ -1709,6 +1709,7 @@ const UI = {
     //receive message from parent window
     receiveMessage(event) {
         if (event.data && event.data.action) {
+            Log.Debug("Received message from parent window: " + event.data.action);
             switch (event.data.action) {
                 case 'clipboardsnd':
                     if (UI.rfb && UI.rfb.clipboardUp) {

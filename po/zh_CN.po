@@ -457,7 +457,7 @@ msgstr "拖动视口"
 msgid "KasmVNC encountered an error:"
 msgstr "KasmVNC 遇到错误："
 
-msgid "CLipboard Down"
+msgid "Clipboard Down"
 msgstr "剪贴板向下"
 
 msgid "Displays"

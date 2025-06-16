@@ -327,7 +327,7 @@ msgstr "遊戲模式已暫停，點擊螢幕以恢復遊戲模式。"
 msgid "Clipboard Up"
 msgstr "剪貼簿向上"
 
-msgid "CLipboard Down"
+msgid "Clipboard Down"
 msgstr "剪貼簿向下"
 
 msgid "Clipboard Seamless"

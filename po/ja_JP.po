@@ -335,7 +335,7 @@ msgstr "「ゲームモードが一時停止しました。ゲームモードを
 msgid "Clipboard Up"
 msgstr "「クリップボードアップ」"
 
-msgid "CLipboard Down"
+msgid "Clipboard Down"
 msgstr "「クリップボードダウン」"
 
 msgid "Clipboard Seamless"

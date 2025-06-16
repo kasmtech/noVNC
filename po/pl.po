@@ -369,7 +369,7 @@ msgstr "Tryb gry został wstrzymany, kliknij ekran, aby wznowić tryb gry."
 msgid "Clipboard Up"
 msgstr "Schowek w górę"
 
-msgid "CLipboard Down"
+msgid "Clipboard Down"
 msgstr "Schowek w dół"
 
 msgid "Clipboard Seamless"

@@ -354,7 +354,7 @@ msgstr "Spelmodus gepauzeerd, klik op het scherm om de spelmodus te hervatten."
 msgid "Clipboard Up"
 msgstr "Klembord omhoog"
 
-msgid "CLipboard Down"
+msgid "Clipboard Down"
 msgstr "Klembord naar beneden"
 
 msgid "Clipboard Seamless"

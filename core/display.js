@@ -757,30 +757,22 @@ export default class Display {
             return;
         }
 
-        let rect = {
-            'type': 'img',
+        const blob = new Blob([arr], { type: mime });
+        const rect = {
+            'type': 'bitmap',
             'img': null,
             'x': x,
             'y': y,
             'width': width,
             'height': height,
-            'frame_id': frame_id
-        }
+            'frame_id': frame_id,
+            'mime': mime
+        };
         this._processRectScreens(rect);
-
-        if (rect.inPrimary) {
-            const img = new Image();
-            img.src = "data: " + mime + ";base64," + Base64.encode(arr);
-            rect.img = img;
-        } else {
-            rect.type = "_img";
-        }
-        if (rect.inSecondary) {
-            rect.mime = mime;
-            rect.src = "data: " + mime + ";base64," + Base64.encode(arr);
-        }
-
-        this._asyncRenderQPush(rect);
+        createImageBitmap(blob).then((bitmapImg) => {
+            rect.img = bitmapImg;
+            this._asyncRenderQPush(rect);
+        });
     }
 
     transparentRect(x, y, width, height, img, frame_id, hashId) {
@@ -1027,6 +1019,9 @@ export default class Display {
                     this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
                     a.img.close();
                     break;
+                case 'bitmap':
+                    this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
+                    break;
                 default:
                     this._syncFrameQueue.shift();
                     continue;
@@ -1238,6 +1233,9 @@ export default class Display {
                             case 'vid':
                                 this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
                                 break;
+                            case 'bitmap':
+                                this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
+                                break;
                             default:
                                 continue;
                         }
@@ -1255,6 +1253,25 @@ export default class Display {
                                         eventType: 'rect',
                                         rect: {
                                            'type': 'vid',
+                                           'img': a.img,
+                                           'x': a.x,
+                                           'y': a.y,
+                                           'width': a.width,
+                                           'height': a.height,
+                                           'frame_id': a.frame_id,
+                                           'screenLocations': a.screenLocations
+                                        },
+                                        screenLocationIndex: sI
+                                    }, [a.img]);
+                                }
+                                break;
+                            case 'bitmap':
+                                secondaryScreenRects++;
+                                if (this._screens[screenLocation.screenIndex].channel) {
+                                    this._screens[screenLocation.screenIndex].channel.postMessage({
+                                        eventType: 'rect',
+                                        rect: {
+                                           'type': 'bitmap',
                                            'img': a.img,
                                            'x': a.x,
                                            'y': a.y,

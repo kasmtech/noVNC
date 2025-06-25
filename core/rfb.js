@@ -3591,6 +3591,32 @@ export default class RFB extends EventTargetMixin {
         return true;
     }
 
+    _handleUserJoin() {
+        const length = this._sock.rQshift32();
+        if (this._sock.rQwait("KASM Shared Session Join", length, 32)) { return false; }
+
+        const text = this._sock.rQshiftStr(length);
+        Log.Debug("Received KASM Shared Session Join:");
+        Log.Debug(text);
+        this.dispatchEvent(new CustomEvent(
+            "shared_user_join",
+            { detail: { text: text } }));
+        return true;
+    }
+
+    _handleUserLeft() {
+        const length = this._sock.rQshift32();
+        if (this._sock.rQwait("KASM Shared Session Left", length, 32)) { return false; }
+
+        const text = this._sock.rQshiftStr(length);
+        Log.Debug("Received KASM Shared Session Left:");
+        Log.Debug(text);
+        this.dispatchEvent(new CustomEvent(
+            "shared_user_left",
+            { detail: { text: text } }));
+        return true;
+    }
+
     _normalMsg() {
         let msgType;
         if (this._FBU.rects > 0) {
@@ -3666,6 +3692,12 @@ export default class RFB extends EventTargetMixin {
 
             case 250:  // XVP
                 return this._handleXvpMsg();
+
+            case 253: // KASM user joined a shared session
+                return this._handleUserJoin();
+
+            case 254: // KASM user left a shared session
+                return this._handleUserLeft();    
 
             default:
                 this._fail("Unexpected server message (type " + msgType + ")");

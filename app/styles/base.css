@@ -19,11 +19,8 @@
  * 10000: Max (used for polyfills)
  */
  
- *, *::before, *::after {
-  box-sizing: border-box;
-}
-
 html, body, #screen {
+  box-sizing: border-box;
   margin: 0;
   padding: 0;
   width: 100%;

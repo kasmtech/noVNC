@@ -799,6 +799,21 @@ export default class Display {
         }
     }
 
+    videoFrameRect(frame) {
+        if (frame.displayWidth === 0 || frame.displayHeight === 0) {
+            return false;
+        }
+        const rect = {
+            type: 'video_frame',
+            frame,
+        };
+        // TODO: REMoVE
+        this.drawVideoFrame(frame);
+
+        this._processRectScreens(rect);
+        this._asyncRenderQPush(rect);
+    }
+
     transparentRect(x, y, width, height, img, frame_id, hashId) {
         /* The internal logic cannot handle empty images, so bail early */
         if ((width === 0) || (height === 0)) {
@@ -923,6 +938,15 @@ export default class Display {
             }
         } catch (error) {
             Log.Error('Invalid image recieved.'); //KASM-2090
+        }
+    }
+
+    drawVideoFrame(videoFrame) {
+        try {
+            let targetCtx = ((this._enableCanvasBuffer) ? this._drawCtx : this._targetCtx);
+            targetCtx.drawImage(videoFrame, 0, 0, videoFrame.displayWidth, videoFrame.displayHeight);
+        } catch (error) {
+            Log.Error('Invalid video frame recieved.', error);
         }
     }
 
@@ -1076,6 +1100,10 @@ export default class Display {
                     this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
                     a.img.close();
                     break;
+                case 'video_frame':
+                    this.drawVideoFrame(a.frame);
+                    a.frame.close();
+                    break;
                 default:
                     this._syncFrameQueue.shift();
                     continue;
@@ -1180,7 +1208,6 @@ export default class Display {
 
             }
         }
-
     }
 
     /*
@@ -1293,6 +1320,10 @@ export default class Display {
                             case 'bitmap':
                                 this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
                                 break;
+                            case 'video_frame':
+                                this.drawVideoFrame(a.frame);
+                                a.frame.close();
+                                break;
                             default:
                                 continue;
                         }
@@ -1343,6 +1374,21 @@ export default class Display {
                                         },
                                         screenLocationIndex: sI
                                     }, [a.img]);
+                                }
+                                break;
+                            case 'vid':
+                                secondaryScreenRects++;
+                                if (this._screens[screenLocation.screenIndex].channel) {
+                                    this._screens[screenLocation.screenIndex].channel.postMessage({
+                                        eventType: 'rect',
+                                        rect: {
+                                            'type': 'video_frame',
+                                            'img': a.frame,
+                                            'frame_id': a.frame_id,
+                                            'screenLocations': a.screenLocations
+                                        },
+                                        screenLocationIndex: sI
+                                    }, [a.frame]);
                                 }
                                 break;
                             case 'blit':

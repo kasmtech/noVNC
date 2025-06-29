@@ -48,7 +48,7 @@ const CLIENT_MSG_TYPE_KEEPALIVE = 184;
 const SERVER_MSG_TYPE_DISCONNECT_NOTIFY = 185;
 
 // Minimum wait (ms) between two mouse moves
-const MOUSE_MOVE_DELAY = 17; 
+const MOUSE_MOVE_DELAY = 17;
 
 // Wheel thresholds
 let WHEEL_LINE_HEIGHT = 19; // Pixels for one line step (on Windows)
@@ -230,7 +230,7 @@ export default class RFB extends EventTargetMixin {
             this._controlChannel = new BroadcastChannel(this._connectionID);
             this._controlChannel.addEventListener('message', this._handleControlMessage.bind(this));
             Log.Debug("Attached to registrationChannel for secondary displays.")
-            
+
         }
         if (!this._isPrimaryDisplay) {
             this._screenIndex = 2;
@@ -313,7 +313,7 @@ export default class RFB extends EventTargetMixin {
 
         if (this._isPrimaryDisplay) {
             this._setupWebSocket();
-        } 
+        }
 
         Log.Debug("<< RFB.constructor");
 
@@ -340,7 +340,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     // ===== PROPERTIES =====
-    
+
     get connectionID() { return this._connectionID; }
 
     get translateShortcuts() { return this._keyboard.translateShortcuts; }
@@ -370,9 +370,9 @@ export default class RFB extends EventTargetMixin {
     }
 
     get pointerRelative() { return this._pointerRelativeEnabled; }
-    set pointerRelative(value) 
-    { 
-        this._pointerRelativeEnabled = value; 
+    set pointerRelative(value)
+    {
+        this._pointerRelativeEnabled = value;
         if (value) {
             let max_w = ((this._display.scale === 1) ? this._fbWidth : (this._fbWidth * this._display.scale));
             let max_h = ((this._display.scale === 1) ? this._fbHeight : (this._fbHeight * this._display.scale));
@@ -391,8 +391,8 @@ export default class RFB extends EventTargetMixin {
     set clipboardBinary(val) { this._clipboardMode = val; }
 
     get videoQuality() { return this._videoQuality; }
-    set videoQuality(quality) 
-    { 
+    set videoQuality(quality)
+    {
         //if changing to or from a video quality mode that uses a fixed resolution server side
         if (this._videoQuality <= 1 || quality <= 1) {
             this._pendingApplyResolutionChange = true;
@@ -402,8 +402,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     get preferBandwidth() { return this._preferBandwidth; }
-    set preferBandwidth(val) { 
-        this._preferBandwidth = val; 
+    set preferBandwidth(val) {
+        this._preferBandwidth = val;
         this._pendingApplyEncodingChanges = true;
     }
 
@@ -459,11 +459,11 @@ export default class RFB extends EventTargetMixin {
     set background(cssValue) { this._screen.style.background = cssValue; }
 
     get enableWebP() { return this._enableWebP; }
-    set enableWebP(enabled) { 
+    set enableWebP(enabled) {
         if (this._enableWebP === enabled) {
             return;
         }
-        this._enableWebP = enabled; 
+        this._enableWebP = enabled;
         this._pendingApplyEncodingChanges = true;
     }
 
@@ -475,11 +475,11 @@ export default class RFB extends EventTargetMixin {
 
         this._decoders[encodings.encodingTight].enableQOI = enabled;
         this._enableQOI = this._decoders[encodings.encodingTight].enableQOI
-        
+
         if (this._enableQOI === enabled) {
             this._pendingApplyEncodingChanges = true;
         }
-        
+
     }
 
     get antiAliasing() { return this._display.antiAliasing; }
@@ -736,7 +736,7 @@ export default class RFB extends EventTargetMixin {
         if (!value) {
             if (this._rfbConnectionState === 'connected' && (this._transitConnectionState !== this.TransitConnectionStates.Tcp)) {
                 this._sendUdpDowngrade();
-            } 
+            }
         } else {
             if (this._rfbConnectionState === 'connected' && (this._transitConnectionState !== this.TransitConnectionStates.Udp)) {
                 this._sendUdpUpgrade();
@@ -828,7 +828,7 @@ export default class RFB extends EventTargetMixin {
             } else {
                 Log.Debug("Screen plan did not apply, no changes detected.");
             }
-            
+
             return changes;
         }
     }
@@ -862,7 +862,7 @@ export default class RFB extends EventTargetMixin {
     */
     updateConnectionSettings() {
         if (this._rfbConnectionState === 'connected' && this._isPrimaryDisplay) {
-            
+
             if (this._pendingApplyVideoRes) {
                 RFB.messages.setMaxVideoResolution(this._sock, this._maxVideoResolutionX, this._maxVideoResolutionY);
             }
@@ -881,7 +881,7 @@ export default class RFB extends EventTargetMixin {
 
                 if (this._display.screens.length > 1) {
                     this.refreshSecondaryDisplays();
-                } 
+                }
 
                 if (this._resizeSession || (this._forcedResolutionX && this._forcedResolutionY)) {
                     this.dispatchEvent(new CustomEvent("screenregistered", {}));
@@ -912,7 +912,7 @@ export default class RFB extends EventTargetMixin {
                 this._requestRemoteResize();
             }
         }
-        
+
     }
 
     disconnect() {
@@ -973,7 +973,7 @@ export default class RFB extends EventTargetMixin {
         if (code !== null) {
             this._setLastActive();
         }
-        
+
         if (down === undefined) {
             this.sendKey(keysym, code, true);
             this.sendKey(keysym, code, false);
@@ -1031,7 +1031,7 @@ export default class RFB extends EventTargetMixin {
                     this.clipboardPasteDataFrom(data);
                 }, (err) => {
                     Log.Debug("No data in clipboard: " + err);
-                }); 
+                });
             } else {
                 if (navigator.clipboard && navigator.clipboard.readText) {
                     navigator.clipboard.readText().then(function (text) {
@@ -1068,7 +1068,7 @@ export default class RFB extends EventTargetMixin {
         } else {
             this._proxyRFBMessage('sendBinaryClipboard', [ dataset, mimes ]);
         }
-        
+
     }
 
     async clipboardPasteDataFrom(clipdata) {
@@ -1107,7 +1107,7 @@ export default class RFB extends EventTargetMixin {
                             continue;
                         }
 
-                        mimes.push(mime); 
+                        mimes.push(mime);
                         dataset.push(data);
                         Log.Debug('Sending mime type: ' + mime);
                         break;
@@ -1138,7 +1138,7 @@ export default class RFB extends EventTargetMixin {
                 this._proxyRFBMessage('sendBinaryClipboard', [ dataset, mimes ]);
             }
         }
-        
+
     }
 
     requestBottleneckStats() {
@@ -1406,7 +1406,7 @@ export default class RFB extends EventTargetMixin {
                     me._handleUdpRect(u8.slice(20), frame_id);
                 } else { // Use buffer
                     const now = Date.now();
-		    
+
                     if (udpBuffer.has(id)) {
                         let item = udpBuffer.get(id);
                         item.recieved_pieces += 1;
@@ -1485,7 +1485,7 @@ export default class RFB extends EventTargetMixin {
                 this._primaryDisplayChannel = null;
             }
         }
-        
+
         try {
             this._target.removeChild(this._screen);
         } catch (e) {
@@ -1526,7 +1526,7 @@ export default class RFB extends EventTargetMixin {
             } else {
                 Log.Debug("Window focused while user switched between tabs.");
             }
-            
+
         }
 
         if (document.visibilityState === "visible" && this._lastVisibilityState === "hidden") {
@@ -1669,7 +1669,7 @@ export default class RFB extends EventTargetMixin {
                     top: window.screenTop
                 }
             }
- 
+
             this._registerSecondaryDisplay(this._display.screens[0], details);
         }
     }
@@ -1779,7 +1779,7 @@ export default class RFB extends EventTargetMixin {
                 this._sock.off('close');
             }
         }
-        
+
         switch (state) {
             case 'connecting':
                 this._connect();
@@ -1852,7 +1852,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _proxyRFBMessage(messageType, data) {
-        let message = { 
+        let message = {
             eventType: messageType,
             args: data,
             screenID: this._display.screenID,
@@ -1993,7 +1993,7 @@ export default class RFB extends EventTargetMixin {
                             this.scaleViewport = event.data.args[3];
                             this.updateConnectionSettings();
                         }
-                        
+
                 break;
                 case 'applyScreenPlan':
                     if (event.data.args[0] == this._display.screenID) {
@@ -2002,7 +2002,7 @@ export default class RFB extends EventTargetMixin {
                         this._display.screens[0].height = event.data.args[3];
                         this._display.screens[0].x = event.data.args[4];
                         this._display.screens[0].y = event.data.args[5];
-                        
+
                         this.updateConnectionSettings();
                     }
                     break;
@@ -2013,7 +2013,6 @@ export default class RFB extends EventTargetMixin {
                     break;
             }
         }
-        
     }
 
     _unregisterSecondaryDisplay() {
@@ -2024,7 +2023,6 @@ export default class RFB extends EventTargetMixin {
             }
             this._controlChannel.postMessage(message);
         }
-        
     }
 
     _registerSecondaryDisplay(currentScreen = false, details = null) {
@@ -2034,7 +2032,7 @@ export default class RFB extends EventTargetMixin {
             let size = this._screenSize();
             this._display.resize(size.screens[0].serverWidth, size.screens[0].serverHeight);
             this._display.autoscale(size.screens[0].serverWidth, size.screens[0].serverHeight, size.screens[0].scale);
-            
+
             let screen = size.screens[0];
             const windowId = new URLSearchParams(document.location.search).get('windowId');
 
@@ -2061,7 +2059,6 @@ export default class RFB extends EventTargetMixin {
             // return screen.screenID
             return screen
         }
-        
     }
 
     identify(screens) {
@@ -2123,9 +2120,8 @@ export default class RFB extends EventTargetMixin {
                 } else {
                     this._requestRemoteResize();
                 }
-                
             }
-        } 
+        }
     }
 
     _handleMouse(ev) {
@@ -2212,7 +2208,7 @@ export default class RFB extends EventTargetMixin {
                 } else {
                     this._proxyRFBMessage('mousedown', [ pos.x, pos.y, xvncButtonToMask(mappedButton) ]);
                 }
-                
+
                 Log.Debug('Mouse Down');
                 break;
             case 'mouseup':
@@ -2222,7 +2218,7 @@ export default class RFB extends EventTargetMixin {
                 } else {
                     this._proxyRFBMessage('mouseup', [ pos.x, pos.y, xvncButtonToMask(mappedButton) ]);
                 }
-                
+
                 Log.Debug('Mouse Up');
                 break;
             case 'mousemove':
@@ -2376,14 +2372,14 @@ export default class RFB extends EventTargetMixin {
             var rel_16_y = toSignedRelative16bit(y - this._pointerLockPos.y);
 
             RFB.messages.pointerEvent(this._sock, rel_16_x, rel_16_y, mask);
-            
+
             // reset the cursor position to center
             this._mousePos = { x: this._pointerLockPos.x , y: this._pointerLockPos.y };
             this._cursor.move(this._pointerLockPos.x, this._pointerLockPos.y);
         } else {
             RFB.messages.pointerEvent(this._sock, this._display.absX(x), this._display.absY(y), mask);
         }
-        
+
     }
 
     _sendScroll(x, y, dX, dY) {
@@ -3227,7 +3223,7 @@ export default class RFB extends EventTargetMixin {
             encs.push(encodings.pseudoEncodingWEBP);
         if (this._enableQOI)
             encs.push(encodings.pseudoEncodingQOI);
-            
+
 
         // kasm settings; the server may be configured to ignore these
         encs.push(encodings.pseudoEncodingJpegVideoQualityLevel0 + this.jpegVideoQuality);
@@ -3241,7 +3237,7 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingVideoScalingLevel0 + this.videoScaling);
         encs.push(encodings.pseudoEncodingFrameRateLevel10 + this.frameRate - 10);
         encs.push(encodings.pseudoEncodingMaxVideoResolution);
-        
+
 	// preferBandwidth choses preset settings. Since we expose all the settings, lets not pass this
         if (this.preferBandwidth) // must be last - server processes in reverse order
             encs.push(encodings.pseudoEncodingPreferBandwidth);
@@ -3484,7 +3480,7 @@ export default class RFB extends EventTargetMixin {
         Log.Info(num + ' Clipboard items recieved.');
 	    Log.Debug('Started clipbooard processing with Client sockjs buffer size ' + this._sock.rQlen);
 
-        
+
 
         for (let i = 0; i < num; i++) {
             if (this._sock.rQwait("Binary Clipboard op id", 4, buffByteLen)) { return false; }
@@ -3506,7 +3502,7 @@ export default class RFB extends EventTargetMixin {
             if (this._sock.rQwait("Binary Clipboard data", Math.abs(len), buffByteLen)) { return false; }
             let data = this._sock.rQshiftBytes(len);
             buffByteLen+=len;
-            
+
             switch(mime) {
                 case "image/png":
                 case "text/html":
@@ -3528,9 +3524,9 @@ export default class RFB extends EventTargetMixin {
                         }
 
                     Log.Info("Processed binary clipboard (ID: " + clipid + ")  of MIME " + mime + " of length " + len);
-                    
+
 	            if (!this.clipboardBinary) { continue; }
-                    
+
                     clipItemData[mime] = new Blob([data], { type: mime });
                     break;
                 default:
@@ -3563,7 +3559,7 @@ export default class RFB extends EventTargetMixin {
                     this._clipHash = hashUInt8Array(textdata);
                 }
             },
-            (err) => { 
+            (err) => {
                 Log.Error("Error writing to client clipboard: " + err);
                 // Lets try writeText
                 if (textdata.length > 0) {
@@ -3704,7 +3700,7 @@ export default class RFB extends EventTargetMixin {
                     RFB.messages.sendFrameStats(this._sock, this._display.fps, this._display.renderMs);
                     this._trackFrameStats = false;
                 }
-                
+
                 return ret;
 
             case 1:  // SetColorMapEntries
@@ -3765,7 +3761,7 @@ export default class RFB extends EventTargetMixin {
                 return this._handleUserJoin();
 
             case 254: // KASM user left a shared session
-                return this._handleUserLeft();   
+                return this._handleUserLeft();
 
             default:
                 this._fail("Unexpected server message (type " + msgType + ")");
@@ -3791,7 +3787,7 @@ export default class RFB extends EventTargetMixin {
             encoding: parseInt((data[8] << 24) + (data[9] << 16) +
                                             (data[10] << 8) + data[11], 10)
         };
-        
+
         switch (frame.encoding) {
             case encodings.pseudoEncodingLastRect:
                 this._display.flip(frame_id, frame.x + 1); //Last Rect message, first 16 bytes contain rect count
@@ -3976,8 +3972,8 @@ export default class RFB extends EventTargetMixin {
                 this._FBU.encoding = parseInt((hdr[8] << 24) + (hdr[9] << 16) +
                                               (hdr[10] << 8) + hdr[11], 10);
             }
-            
-            
+
+
             if (!this._handleRect()) {
                 return false;
             }
@@ -3989,7 +3985,7 @@ export default class RFB extends EventTargetMixin {
         if (this._FBU.rect_total > 1) {
             this._display.flip(this._FBU.frame_id, this._FBU.rect_total);
         }
-        
+
         return true;  // We finished this FBU
     }
 
@@ -4027,7 +4023,7 @@ export default class RFB extends EventTargetMixin {
                 if (this._handleDataRect()) {
                     this._FBU.rect_total++; //only track rendered rects and last rect
                     return true;
-                } 
+                }
                 return false;
         }
     }
@@ -4665,7 +4661,7 @@ RFB.messages = {
 
     sendBinaryClipboard(sock, dataset, mimes) {
 
-        
+
         const buff = sock._sQ;
         let offset = sock._sQlen;
 

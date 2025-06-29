@@ -10,79 +10,82 @@
  */
 
 import * as Log from '../util/logging.js';
-import Inflator from "../inflator.js";
-import { hashUInt8Array } from '../util/int.js';
+// import Inflator from "../inflator.js";
+// import { hashUInt8Array } from '../util/int.js';
 
-var videoCanvas = null;
-var offscreen = null;
-var codec;
-
+// var videoCanvas = null;
+// var offscreen = null;
+const VIDEO_CODEC = 'avc1.4d002a';
+const TARGET_FPS = 60;
+const FRAME_DURATION_US = Math.round(1_000_000 / TARGET_FPS);
+//avc1.4d002a - main
+/// avc1.42001E - baseline
 // ===== Worker init =====
 
-var workerScript = URL.createObjectURL( new Blob([ '(',
-function(){
-    var canvas;
-    var ctx;
-    var frameBuffer = [];
-    var decoder;
-    function handleChunk(chunk, metadata) {
-        frameBuffer.push(chunk);
-        if (frameBuffer.length > 3) {
-            ctx.drawImage(frameBuffer[0],0,0);
-            frameBuffer[0].close();
-            frameBuffer.shift();
-        }
-    }
+// var workerScript = URL.createObjectURL(new Blob(['(',
+//     function () {
+//         var canvas;
+//         var ctx;
+//         var frameBuffer = [];
+//         var decoder;
+//         function handleChunk(chunk, metadata) {
+//             frameBuffer.push(chunk);
+//             if (frameBuffer.length > 3) {
+//                 ctx.drawImage(frameBuffer[0], 0, 0);
+//                 frameBuffer[0].close();
+//                 frameBuffer.shift();
+//             }
+//         }
 
-    self.addEventListener('message', function(event) {
-        if (event.data.hasOwnProperty('canvas')) {
-            canvas = event.data.canvas;
-            ctx = canvas.getContext("2d");
-        }
-        if (event.data.hasOwnProperty('frame')) {
-            let vidChunk = new EncodedVideoChunk({
-                type: event.data.frame.type,
-                data: event.data.frame.data,
-                timestamp: 1,
-                duration: 0
-            })
-            event.data.frame.data = null;
-            try {
-                decoder.decode(vidChunk);
-            } catch (e) {
-                //pass
-            }
-            // Send data back for garbage collection
-            postMessage({freemem: event.data.frame.data});
-        }
-        if (event.data.hasOwnProperty('config')) {
-            if (decoder) {
-                decoder.close();
-            }
-            decoder = new VideoDecoder({
-                output: handleChunk,
-                error: e => {
-                    console.log(e.message);
-                }
-            });
-            decoder.configure({
-                codec: event.data.config.codec,
-                width: event.data.config.width,
-                height: event.data.config.height,
-                optimizeForLatency: true
-            });
-        }
-    });
-}.toString(),
-')()' ], { type: 'application/javascript' } ) ), worker = new Worker(workerScript);
-URL.revokeObjectURL(workerScript);
+//         self.addEventListener('message', function (event) {
+//             if (event.data.hasOwnProperty('canvas')) {
+//                 canvas = event.data.canvas;
+//                 ctx = canvas.getContext("2d");
+//             }
+//             if (event.data.hasOwnProperty('frame')) {
+//                 let vidChunk = new EncodedVideoChunk({
+//                     type: event.data.frame.type,
+//                     data: event.data.frame.data,
+//                     timestamp: 1,
+//                     duration: 0
+//                 })
+//                 event.data.frame.data = null;
+//                 try {
+//                     decoder.decode(vidChunk);
+//                 } catch (e) {
+//                     //pass
+//                 }
+//                 // Send data back for garbage collection
+//                 postMessage({ freemem: event.data.frame.data });
+//             }
+//             if (event.data.hasOwnProperty('config')) {
+//                 if (decoder) {
+//                     decoder.close();
+//                 }
+//                 decoder = new VideoDecoder({
+//                     output: handleChunk,
+//                     error: e => {
+//                         console.log(e.message);
+//                     }
+//                 });
+//                 decoder.configure({
+//                     codec: event.data.config.codec,
+//                     width: event.data.config.width,
+//                     height: event.data.config.height,
+//                     optimizeForLatency: true
+//                 });
+//             }
+//         });
+//     }.toString(),
+//     ')()'], { type: 'application/javascript' })), worker = new Worker(workerScript);
+// URL.revokeObjectURL(workerScript);
 
 // Plug memory leaks by sending transferable objects to main thread
-worker.onmessage = function (event) {
-    if (event.data.hasOwnProperty('freemem')) {
-        event.data.freemem = null;
-    }
-};
+// worker.onmessage = function (event) {
+//     if (event.data.hasOwnProperty('freemem')) {
+//         event.data.freemem = null;
+//     }
+// };
 
 // ===== Functions =====
 
@@ -90,7 +93,18 @@ export default class KasmVideoDecoder {
     constructor(display) {
         this._len = 0;
         this._ctl = null;
-        this._displayGlobal = display;
+        this._display = display;
+        this._codedWidth = null;
+        this._codedHeight = null;
+        this._timestamp = 0;
+        this._decoder = new VideoDecoder({
+            output: (frame) => {
+                this._handleProcessVideoChunk(frame);
+            },
+            error: (e) => {
+                Log.Error(`There was an error inside KasmVideoDecoder`, e)
+            }
+        });
     }
 
     // ===== Public Methods =====
@@ -106,15 +120,15 @@ export default class KasmVideoDecoder {
             // Figure out filter
             this._ctl = this._ctl >> 4;
         }
-        
+
         let ret;
 
         if (this._ctl === 0x00) {
             ret = this._skipRect(x, y, width, height,
                                  sock, display, depth, frame_id);
         } else if (this._ctl === 0x01) {
-            ret = this._vp8Rect(x, y, width, height,
-                                 sock, display, depth, frame_id);
+            ret = this._processVideoFrameRect(x, y, width, height,
+                sock, display, depth, frame_id);
         } else {
             throw new Error("Illegal KasmVideo compression received (ctl: " +
                                    this._ctl + ")");
@@ -128,54 +142,60 @@ export default class KasmVideoDecoder {
     }
 
     resize(width, height) {
-        if (codec) {
-            this._setupCanvas(width, height, true);
-            worker.postMessage({ config: {width: width,height: height, codec: codec} });
-        }
+        this._updateSize(width, height);
     }
 
     // ===== Private Methods =====
 
-    _skipRect(x, y, width, height, sock, display, depth, frame_id) {
+    _configureDecoder() {
+        this._decoder.configure({
+            codec: VIDEO_CODEC,
+            codedWidth: this._codedWidth,
+            codedHeight: this._codedHeight,
+            optimizeForLatency: true,
+        })
+    }
+
+    _updateSize(width, height) {
+        const actualWidth = width % 2 === 0 ? width : Math.max(width - 1, 0);
+        if (this._codedHeight !== actualWidth || this._codedHeight !== height) {
+            this._codedWidth = actualWidth;
+            this._codedHeight = height;
+            this._configureDecoder();
+        }
+    }
+
+    _skipRect(x, y, width, height, _sock, display, _depth, frame_id) {
         display.clearRect(x, y, width, height, 0, frame_id, false);
         return true;
     }
 
-    _setupCanvas(width, height, destroy) {
-        if ((! offscreen) || (destroy)) {
-            try {
-                videoCanvas.remove();
-            } catch (e) {
-                //pass
-            }
-            videoCanvas = null;
-            offscreen = null;
-            videoCanvas = document.createElement('canvas');
-            videoCanvas.width = width;
-            videoCanvas.height = height;
-            videoCanvas.style.position = 'absolute';
-            videoCanvas.style.top = '0px';
-            videoCanvas.style.left = '0px';
-            videoCanvas.style.zIndex = "1";
-            offscreen = videoCanvas.transferControlToOffscreen();
-            worker.postMessage({ canvas: offscreen }, [offscreen]);
-            worker.postMessage({ config: {width: width,height: height,codec: codec} });
-            document.body.appendChild(videoCanvas);
-        }
+    _handleProcessVideoChunk(frame) {
+        console.log(frame);
+        this._display.videoFrameRect(frame)
     }
 
-    _vp8Rect(x, y, width, height, sock, display, depth, frame_id) {
-        codec = 'vp8';
-        this._setupCanvas(width, height, false);
-        let data = this._readData(sock);
-        if (data === null) {
+    _processVideoFrameRect(x, y, width, height, sock, display, depth, frame_id) {
+
+        let dataArr = this._readData(sock);
+        if (dataArr === null) {
             return false;
         }
 
-        let type = data[0] ? "key" : "delta";
-        let vidData = data.slice(1).buffer;
-        data = null;
-        worker.postMessage({ frame: {data: vidData, type: type, id: frame_id} }, [vidData]);
+
+        this._updateSize(width, height)
+
+        console.log('_processVideoFrameRect', dataArr);
+
+        // const type = dataArr[0] ? "key" : "delta";
+        // const vidData = dataArr.slice(1).buffer; //// ???? ТУТ ОШИБКА TODO: поправить
+        const vidChunk = new EncodedVideoChunk({
+            type: dataArr[0] === 0 ? 'key' : 'delta',
+            data: dataArr,
+            timestamp: this._timestamp,
+        });
+        this._timestamp += FRAME_DURATION_US;
+        this._decoder.decode(vidChunk);
         return true;
     }
 
@@ -185,9 +205,7 @@ export default class KasmVideoDecoder {
                 return null;
             }
 
-            let byte;
-
-            byte = sock.rQshift8();
+            let byte = sock.rQshift8();
             this._len = byte & 0x7f;
             if (byte & 0x80) {
                 byte = sock.rQshift8();
@@ -209,4 +227,7 @@ export default class KasmVideoDecoder {
         return data;
     }
 
+    dispose() {
+        this._decoder.close();
+    }
 }

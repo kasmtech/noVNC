@@ -1477,6 +1477,8 @@ const UI = {
         UI.rfb.addEventListener("inputlock", UI.inputLockChanged);
         UI.rfb.addEventListener("inputlockerror", UI.inputLockError);
         UI.rfb.addEventListener("screenregistered", UI.screenRegistered);
+        UI.rfb.addEventListener("shared_user_join", UI.sharedUserJoin);
+        UI.rfb.addEventListener("shared_user_left", UI.sharedUserLeft);
         UI.rfb.translateShortcuts = UI.getSetting('translate_shortcuts');
         UI.rfb.clipViewport = UI.getSetting('view_clip');
         UI.rfb.scaleViewport = UI.getSetting('resize') === 'scale';
@@ -3002,6 +3004,17 @@ const UI = {
         
     },
 
+    sharedUserJoin(e) {
+        console.log('share user joined')
+        UI.sendMessage('shared_user_join', e.detail)
+
+    },
+    
+    sharedUserLeft(e) {
+        console.log('shared user left')
+        UI.sendMessage('shared_user_left', e.detail)
+    },
+    
     //Helper to add options to dropdown.
     addOption(selectbox, text, value) {
         const optn = document.createElement("OPTION");

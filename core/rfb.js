@@ -3599,7 +3599,7 @@ export default class RFB extends EventTargetMixin {
         Log.Debug("Received KASM Shared Session Join:");
         Log.Debug(text);
         this.dispatchEvent(new CustomEvent(
-            "shared_user_join",
+            "sharedSessionUserJoin",
             { detail: { text: text } }));
         return true;
     }
@@ -3612,7 +3612,7 @@ export default class RFB extends EventTargetMixin {
         Log.Debug("Received KASM Shared Session Left:");
         Log.Debug(text);
         this.dispatchEvent(new CustomEvent(
-            "shared_user_left",
+            "sharedSessionUserLeft",
             { detail: { text: text } }));
         return true;
     }

@@ -3600,7 +3600,7 @@ export default class RFB extends EventTargetMixin {
         Log.Debug(text);
         this.dispatchEvent(new CustomEvent(
             "sharedSessionUserJoin",
-            { detail: { text: text } }));
+            { detail: text }));
         return true;
     }
 
@@ -3613,7 +3613,7 @@ export default class RFB extends EventTargetMixin {
         Log.Debug(text);
         this.dispatchEvent(new CustomEvent(
             "sharedSessionUserLeft",
-            { detail: { text: text } }));
+            { detail: text }));
         return true;
     }
 

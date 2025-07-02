@@ -217,6 +217,8 @@ export default class Keyboard {
             }
 
             //send backspaces if needed
+            Log.Debug("Backspace diffStart: " + diffStart);
+            Log.Debug("Old value: " + oldValue + " Old value length: " + oldValue.length + " New value: " + newValue);
             for (let bs = oldValue.length - diffStart; bs > 0; bs--) {
                 this._sendKeyStroke(KeyTable.XK_BackSpace, "Backspace");
             }

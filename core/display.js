@@ -1021,6 +1021,7 @@ export default class Display {
                     break;
                 case 'bitmap':
                     this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
+                    a.img.close();
                     break;
                 default:
                     this._syncFrameQueue.shift();

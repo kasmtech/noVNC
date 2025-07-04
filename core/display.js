@@ -432,14 +432,17 @@ export default class Display {
                 pixelRatio: pixelRatio,
                 containerHeight: containerHeight,
                 containerWidth: containerWidth,
-                channel: UI.displayWindows[this.screens.length],
+                channel: UI.displayWindows.find((win) => typeof win === 'object' ? win.name === screenID : win === screenID),
                 scale: scale,
                 x2: x + serverWidth,
                 y2: serverHeight
             }
 
             this._screens.push(new_screen);
-            new_screen.channel.postMessage({ eventType: "registered", screenIndex: new_screen.screenIndex });
+            if (new_screen) {
+                new_screen.channel.postMessage({eventType: "registered", screenIndex: new_screen.screenIndex});
+            } else
+                Log.Debug(`Channel not found for screenId ${screenID}`);
 
             return new_screen.screenIndex;
         }
@@ -454,7 +457,7 @@ export default class Display {
                 if (this._screens[i].screenID == screenID) {
                     //flush all rects on target screen
                     this._flushRectsScreen(i);
-                    UI.displayWindows.splice(i, 1);
+                    UI.displayWindows = UI.displayWindows.filter((win) => typeof win === 'object' ? win.name !== screenID : win !== screenID);
                     this._screens.splice(i, 1);
                     removed = true;
                     break;
@@ -1452,6 +1455,8 @@ export default class Display {
             this._target.style.imageRendering = 'auto'; //auto is really smooth (blurry) using trilinear of linear
             Log.Debug('Smoothing enabled');
         }
+
+        requestAnimationFrame( () => { this._pushAsyncFrame(); });
     }
 
     _setFillColor(color) {

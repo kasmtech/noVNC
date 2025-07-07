@@ -1817,7 +1817,7 @@ export default class RFB extends EventTargetMixin {
                         ...event.data.details,
                         screenID: event.data.screenID
                     }
-                    let screenIndex = this._display.addScreen(event.data.screenID, event.data.width, event.data.height, event.data.pixelRatio, event.data.containerHeight, event.data.containerWidth, event.data.scale, event.data.serverWidth, event.data.serverHeight, event.data.x, event.data.y);
+                    let screenIndex = this._display.addScreen(event.data.screenID, event.data.width, event.data.height, event.data.pixelRatio, event.data.containerHeight, event.data.containerWidth, event.data.scale, event.data.serverWidth, event.data.serverHeight, event.data.x, event.data.y, event.data.windowId);
                     this._proxyRFBMessage('screenRegistrationConfirmed', [ this._display.screens[screenIndex].screenID, screenIndex ]);
                     this._sendEncodings();
                     clearTimeout(this._resizeTimeout);
@@ -1826,8 +1826,8 @@ export default class RFB extends EventTargetMixin {
                     Log.Info(`Secondary monitor (${event.data.screenID}) has been registered.`);
                     break;
                 case 'reattach':
-                    let changes = this._display.addScreen(event.data.screenID, event.data.width, event.data.height, event.data.pixelRatio, event.data.containerHeight, event.data.containerWidth, event.data.scale, event.data.serverWidth, event.data.serverHeight, event.data.x, event.data.y);
-                    
+                    let changes = this._display.addScreen(event.data.screenID, event.data.width, event.data.height, event.data.pixelRatio, event.data.containerHeight, event.data.containerWidth, event.data.scale, event.data.serverWidth, event.data.serverHeight, event.data.x, event.data.y, event.data.windowId);
+
                     clearTimeout(this._resizeTimeout);
                     this._resizeTimeout = setTimeout(this._requestRemoteResize.bind(this), 500);
                     this.dispatchEvent(new CustomEvent("screenregistered", {}));

@@ -1458,6 +1458,9 @@ const UI = {
         }
         url += '/' + path;
 
+        UI.monitors = [];
+        UI.sortedMonitors = [];
+
         UI.rfb = new RFB(document.getElementById('noVNC_container'),
                         document.getElementById('noVNC_keyboardinput'),
                         url,

@@ -376,7 +376,7 @@ export default class Display {
         return changes;
     }
 
-    addScreen(screenID, width, height, pixelRatio, containerHeight, containerWidth, scale, serverWidth, serverHeight, x, y) {
+    addScreen(screenID, width, height, pixelRatio, containerHeight, containerWidth, scale, serverWidth, serverHeight, x, y, windowId) {
         if (!this._isPrimaryDisplay) {
             throw new Error("Cannot add a screen to a secondary display.");
         }
@@ -432,14 +432,15 @@ export default class Display {
                 pixelRatio: pixelRatio,
                 containerHeight: containerHeight,
                 containerWidth: containerWidth,
-                channel: UI.displayWindows.find((win) => typeof win === 'object' ? win.name === screenID : win === screenID),
+                channel: UI.displayWindows.get(windowId),
                 scale: scale,
                 x2: x + serverWidth,
                 y2: serverHeight
             }
 
             this._screens.push(new_screen);
-            if (new_screen) {
+            if (new_screen.channel) {
+                UI.registeredWindows.set(screenID, windowId);
                 new_screen.channel.postMessage({eventType: "registered", screenIndex: new_screen.screenIndex});
             } else
                 Log.Debug(`Channel not found for screenId ${screenID}`);
@@ -457,7 +458,11 @@ export default class Display {
                 if (this._screens[i].screenID == screenID) {
                     //flush all rects on target screen
                     this._flushRectsScreen(i);
-                    UI.displayWindows = UI.displayWindows.filter((win) => typeof win === 'object' ? win.name !== screenID : win !== screenID);
+                    const windowId = UI.registeredWindows.get(screenID);
+                    if (windowId) {
+                        UI.registeredWindows.delete(screenID);
+                        UI.displayWindows.delete(windowId);
+                    }
                     this._screens.splice(i, 1);
                     removed = true;
                     break;
@@ -1245,6 +1250,10 @@ export default class Display {
                         }
                         primaryScreenRects++;
                     } else {
+                        if (!this._screens[screenLocation.screenIndex]) {
+                            continue;
+                        }
+
                         switch (a.type) {
                             case 'dummy':
                             case 'transparent':
@@ -1252,7 +1261,7 @@ export default class Display {
                                 break;
                             case 'vid':
                                 secondaryScreenRects++;
-                                if (this._screens[screenLocation.screenIndex].channel) {
+                                if (this._screens[screenLocation.screenIndex]?.channel) {
                                     this._screens[screenLocation.screenIndex].channel.postMessage({
                                         eventType: 'rect',
                                         rect: {

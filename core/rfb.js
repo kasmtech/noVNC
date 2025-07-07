@@ -1971,10 +1971,12 @@ export default class RFB extends EventTargetMixin {
             this._display.autoscale(size.screens[0].serverWidth, size.screens[0].serverHeight, size.screens[0].scale);
             
             let screen = size.screens[0];
-            
+            const windowId = new URLSearchParams(document.location.search).get('windowId');
+
             let message = {
                 eventType: registerType,
                 screenID: screen.screenID,
+                windowId,
                 width: screen.width,
                 height: screen.height,
                 x: currentScreen.x || 0,

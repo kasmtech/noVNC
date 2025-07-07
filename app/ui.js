@@ -2047,7 +2047,7 @@ const UI = {
         const { scale } = UI.multiMonitorSettings()
         let monitors = []
         let showNativeResolution = false
-        let num = 1
+        let num = 1;
         screenPlan.screens.forEach(screen => {
             if (parseFloat(screen.pixelRatio) != 1) {
                 showNativeResolution = true
@@ -2228,7 +2228,9 @@ const UI = {
             serverWidth: Math.round(width * scale),
             screens
         }
-        UI.rfb.applyScreenPlan(screenPlan);
+        if (UI.rfb) {
+            UI.rfb.applyScreenPlan(screenPlan);
+        }
     },
 
 

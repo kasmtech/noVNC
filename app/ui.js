@@ -3005,13 +3005,13 @@ const UI = {
     },
 
     sharedSessionUserJoin(e) {
-        console.log('shared session user joined: ' + e.detail)
+        Log.Info('shared session user joined: ' + e.detail)
         UI.sendMessage('sharedSessionUserJoin', e.detail)
 
     },
     
     sharedSessionUserLeft(e) {
-        console.log('shared session user left: ' + e.detail)
+        Log.Info('shared session user left: ' + e.detail)
         UI.sendMessage('sharedSessionUserLeft', e.detail)
     },
     

@@ -3596,8 +3596,6 @@ export default class RFB extends EventTargetMixin {
         if (this._sock.rQwait("KASM Shared Session Join", length, 32)) { return false; }
 
         const text = this._sock.rQshiftStr(length);
-        Log.Debug("Received KASM Shared Session Join:");
-        Log.Debug(text);
         this.dispatchEvent(new CustomEvent(
             "sharedSessionUserJoin",
             { detail: text }));
@@ -3609,8 +3607,6 @@ export default class RFB extends EventTargetMixin {
         if (this._sock.rQwait("KASM Shared Session Left", length, 32)) { return false; }
 
         const text = this._sock.rQshiftStr(length);
-        Log.Debug("Received KASM Shared Session Left:");
-        Log.Debug(text);
         this.dispatchEvent(new CustomEvent(
             "sharedSessionUserLeft",
             { detail: text }));

@@ -2023,6 +2023,7 @@ const UI = {
         let new_display_path = window.location.pathname.replace(/[^/]*$/, '');
         const windowId = uuidv4();
         let new_display_url = `${window.location.protocol}//${window.location.host}${new_display_path}screen.html?windowId=${windowId}`;
+        const topWindow = window.top === window.self ? window : window.top || window;
 
         const auto_placement = document.getElementById('noVNC_auto_placement').checked
         if (auto_placement && 'getScreenDetails' in window) {
@@ -2034,8 +2035,8 @@ const UI = {
                     const details = await window.getScreenDetails()
                     const current = UI.increaseCurrentDisplay(details)
                     let screen = details.screens[current]
-                    const options = 'left='+screen.availLeft+',top='+screen.availTop+',width='+screen.availWidth+',height='+screen.availHeight+',fullscreen'
-                    let newdisplay = window.open(new_display_url, '_blank', options);
+                    const options = 'left='+screen.availLeft+',top='+screen.availTop+',width='+screen.availWidth+',height='+screen.availHeight+',fullscreen';
+                    let newdisplay = topWindow.open(new_display_url, '_blank', options);
                     UI.displayWindows.set(windowId, newdisplay);
                     return;
                 }
@@ -2045,8 +2046,8 @@ const UI = {
             }
         }
 
-        Log.Debug(`Opening a secondary display ${new_display_url}`)
-        let newdisplay = window.open(new_display_url, '_blank', 'toolbar=0,location=0,menubar=0');
+        Log.Debug(`Opening a secondary display ${new_display_url}`);
+        let newdisplay = topWindow.open(new_display_url, '_blank', 'toolbar=0,location=0,menubar=0');
         if (newdisplay) {
             UI.displayWindows.set(windowId, newdisplay);
         }

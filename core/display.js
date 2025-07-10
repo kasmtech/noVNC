@@ -135,8 +135,9 @@ export default class Display {
 
         this.onflush = () => {  }; // A flush request has finished
 
+        this._broadcastChannel = new BroadcastChannel(`channel_${this.screenID}`);
         if (!this._isPrimaryDisplay) {
-            window.addEventListener('message', this._handleSecondaryDisplayMessage.bind(this));
+            this._broadcastChannel.addEventListener('message', this._handleSecondaryDisplayMessage.bind(this));
         }
 
         Log.Debug("<< Display.constructor");

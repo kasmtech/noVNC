@@ -433,7 +433,7 @@ export default class Display {
                 pixelRatio: pixelRatio,
                 containerHeight: containerHeight,
                 containerWidth: containerWidth,
-                channel: UI.displayWindows.get(windowId),
+                channel: new BroadcastChannel(`channel_${screenID}`),
                 scale: scale,
                 x2: x + serverWidth,
                 y2: serverHeight

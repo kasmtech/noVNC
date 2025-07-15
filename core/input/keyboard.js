@@ -11,8 +11,6 @@ import KeyTable from "./keysym.js";
 import keysyms from "./keysymdef.js";
 import imekeys from "./imekeys.js";
 import * as browser from "../util/browser.js";
-import { isChromiumBased } from '../util/browser.js';
-import KeySenderWorker from './keysender.js?worker';
 
 //
 // Keyboard event handler
@@ -30,14 +28,6 @@ export default class Keyboard {
 
         this._rfbKeyQueue = [];
         this._lastSendTime = 0;
-
-        this._keySenderWorker = new KeySenderWorker();
-
-        this._keySenderWorker.onmessage = (e) => {
-            const msg = e.data;
-            this._rfbKeyQueue.push({ keysym: msg.keysym, code: msg.code, down: msg.down });
-            this._scheduleRfbKeySend();
-        };
 
         // keep these here so we can refer to them later
         this._eventHandlers = {
@@ -149,11 +139,8 @@ export default class Keyboard {
             delete this._keyDownList[code];
         }
 
-        this._keySenderWorker.postMessage({
-            keysym: keysym, // your symbol
-            code: code,
-            down: down       // true or false
-        });
+        this._rfbKeyQueue.push({keysym: keysym, code: code, down: down});
+        this._scheduleRfbKeySend();
     }
 
     _sendKeyStroke(keySym, code) {
@@ -193,7 +180,7 @@ export default class Keyboard {
     }
 
     _handleCompositionStart(e) {
-        Log.Debug("composition started");
+        Log.Debug("Composition started: " + e.data);
         this._imeStarted = true;
         this._lastKeyboardInput = "";
     }
@@ -233,7 +220,7 @@ export default class Keyboard {
     }
 
     _handleCompositionEnd(e) {
-        Log.Debug("Composition ended");
+        Log.Debug("Composition ended: " + e.data);
         this._touchInput.value = '';
     }
 
@@ -252,61 +239,6 @@ export default class Keyboard {
             }
 
             this._touchInput.value = '';
-            // if (!this._lastKeyboardInput) {
-            //     this._keyboardInputReset();
-            // }
-            //
-            // const oldValue = this._lastKeyboardInput;
-            // let newLen;
-            //
-            // try {
-            //     // Try to check caret position since whitespace at the end
-            //     // will not be considered by value.length in some browsers
-            //     newLen = Math.max(e.target.selectionStart, newValue.length);
-            // } catch (err) {
-            //     // selectionStart is undefined in Google Chrome
-            //     Log.Error("_handleInput: " + err);
-            //     newLen = newValue.length;
-            // }
-            // const oldLen = oldValue.length;
-            //
-            // let inputs = newLen - oldLen;
-            // let backspaces = inputs < 0 ? -inputs : 0;
-            //
-            // // Compare the old string with the new to account for
-            // // text-corrections or other input that modify existing text
-            // for (let i = 0; i < Math.min(oldLen, newLen); i++) {
-            //     if (newValue.charAt(i) !== oldValue.charAt(i)) {
-            //         inputs = newLen - i;
-            //         backspaces = oldLen - i;
-            //         break;
-            //     }
-            // }
-            //
-            // // Send the key events
-            // for (let i = 0; i < backspaces; i++) {
-            //     this._sendKeyStroke(KeyTable.XK_BackSpace, "Backspace");
-            // }
-            // for (let i = newLen - inputs; i < newLen; i++) {
-            //     this._sendKeyStroke(keysyms.lookup(newValue.charCodeAt(i)), 'Unidentified');
-            // }
-            //
-            // // Control the text content length in the keyboardinput element
-            // if (newLen > 2 * this._defaultKeyboardInputLen) {
-            //     this._keyboardInputReset();
-            // } else if (newLen < 1) {
-            //     // There always have to be some text in the keyboardinput
-            //     // element with which backspace can interact.
-            //     this._keyboardInputReset();
-            //     // This sometimes causes the keyboard to disappear for a second
-            //     // but it is required for the android keyboard to recognize that
-            //     // text has been added to the field
-            //     e.target.blur();
-            //     // This has to be ran outside of the input handler in order to work
-            //     setTimeout(e.target.focus.bind(e.target), 0);
-            // } else {
-            //     this._lastKeyboardInput = newValue;
-            // }
         }
     }
 
@@ -452,7 +384,7 @@ export default class Keyboard {
         Log.Debug("Key Up: " + e.keyCode + " Buffer: " + this._touchInput.value);
         if (e.isComposing || e.keyCode === 229) {
             //skip IME related events
-            // Log.Debug("Skipping keyup, IME interaction, code: " + code + " keycode: " + e.keyCode);
+            Log.Debug("Skipping keyup, IME interaction, keycode: " + e.keyCode);
             return;
         }
         const code = this._getKeyCode(e);

@@ -657,14 +657,12 @@ const UI = {
  * ------v------*/
     // Ignore clicks that are propogated from child elements in sub panels
     isControlPanelItemClick(e) {
-        return e && e.target && e.target.classList && e.target.parentNode &&
-            (
-                e.target.classList.contains('noVNC_button') && e.target.parentNode.id !== 'noVNC_modifiers' ||
+        if (!e?.target?.classList || !e?.target?.parentNode)
+            return false;
+
+        return e.target.classList.contains('noVNC_button') && e.target.parentNode?.id !== 'noVNC_modifiers' ||
                 e.target.classList.contains('noVNC_button_div') ||
-                e.target.classList.contains('noVNC_heading')
-            );
-
-
+                e.target.classList.contains('noVNC_heading');
     },
 
     // Disable/enable controls depending on connection state

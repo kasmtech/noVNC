@@ -258,7 +258,7 @@ export default class Keyboard {
         const code = this._getKeyCode(e);
         let keysym = KeyboardUtil.getKeysym(e);
         this.clearKeysDown(e);
-        console.log("Key Down: " + e.keyCode + " code: " + code + " keysym: " + keysym);
+        Log.Debug("Key Down: " + e.keyCode + " code: " + code + " keysym: " + keysym);
 
         // Windows doesn't have a proper AltGr, but handles it using
         // fake Ctrl+Alt. However the remote end might not be Windows,

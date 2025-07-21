@@ -10,96 +10,31 @@
  */
 
 import * as Log from '../util/logging.js';
-// import Inflator from "../inflator.js";
-// import { hashUInt8Array } from '../util/int.js';
 
-// var videoCanvas = null;
-// var offscreen = null;
-const VIDEO_CODEC = 'avc1.4d002a';
+const VIDEO_CODEC = 'avc1.42E01E';
 const TARGET_FPS = 60;
 const FRAME_DURATION_US = Math.round(1_000_000 / TARGET_FPS);
 //avc1.4d002a - main
 /// avc1.42001E - baseline
-// ===== Worker init =====
-
-// var workerScript = URL.createObjectURL(new Blob(['(',
-//     function () {
-//         var canvas;
-//         var ctx;
-//         var frameBuffer = [];
-//         var decoder;
-//         function handleChunk(chunk, metadata) {
-//             frameBuffer.push(chunk);
-//             if (frameBuffer.length > 3) {
-//                 ctx.drawImage(frameBuffer[0], 0, 0);
-//                 frameBuffer[0].close();
-//                 frameBuffer.shift();
-//             }
-//         }
-
-//         self.addEventListener('message', function (event) {
-//             if (event.data.hasOwnProperty('canvas')) {
-//                 canvas = event.data.canvas;
-//                 ctx = canvas.getContext("2d");
-//             }
-//             if (event.data.hasOwnProperty('frame')) {
-//                 let vidChunk = new EncodedVideoChunk({
-//                     type: event.data.frame.type,
-//                     data: event.data.frame.data,
-//                     timestamp: 1,
-//                     duration: 0
-//                 })
-//                 event.data.frame.data = null;
-//                 try {
-//                     decoder.decode(vidChunk);
-//                 } catch (e) {
-//                     //pass
-//                 }
-//                 // Send data back for garbage collection
-//                 postMessage({ freemem: event.data.frame.data });
-//             }
-//             if (event.data.hasOwnProperty('config')) {
-//                 if (decoder) {
-//                     decoder.close();
-//                 }
-//                 decoder = new VideoDecoder({
-//                     output: handleChunk,
-//                     error: e => {
-//                         console.log(e.message);
-//                     }
-//                 });
-//                 decoder.configure({
-//                     codec: event.data.config.codec,
-//                     width: event.data.config.width,
-//                     height: event.data.config.height,
-//                     optimizeForLatency: true
-//                 });
-//             }
-//         });
-//     }.toString(),
-//     ')()'], { type: 'application/javascript' })), worker = new Worker(workerScript);
-// URL.revokeObjectURL(workerScript);
-
-// Plug memory leaks by sending transferable objects to main thread
-// worker.onmessage = function (event) {
-//     if (event.data.hasOwnProperty('freemem')) {
-//         event.data.freemem = null;
-//     }
-// };
-
-// ===== Functions =====
 
 export default class KasmVideoDecoder {
     constructor(display) {
         this._len = 0;
+        this._key_frame = 0;
         this._ctl = null;
         this._display = display;
         this._codedWidth = null;
         this._codedHeight = null;
+
+        this._width = null;
+        this._height = null;
+
         this._timestamp = 0;
+        this._timestampMap = new Map();
         this._decoder = new VideoDecoder({
             output: (frame) => {
                 this._handleProcessVideoChunk(frame);
+                frame.close();
             },
             error: (e) => {
                 Log.Error(`There was an error inside KasmVideoDecoder`, e)
@@ -147,22 +82,26 @@ export default class KasmVideoDecoder {
 
     // ===== Private Methods =====
 
-    _configureDecoder() {
+    _configureDecoder(width, height) {
         this._decoder.configure({
             codec: VIDEO_CODEC,
-            codedWidth: this._codedWidth,
-            codedHeight: this._codedHeight,
+            codedWidth: width,
+            codedHeight: height,
             optimizeForLatency: true,
         })
     }
 
     _updateSize(width, height) {
-        const actualWidth = width % 2 === 0 ? width : Math.max(width - 1, 0);
-        if (this._codedHeight !== actualWidth || this._codedHeight !== height) {
-            this._codedWidth = actualWidth;
-            this._codedHeight = height;
-            this._configureDecoder();
-        }
+        console.log('_updateSize' + width + ' ' + height);
+        /*if (width % 2 !== 0)
+            this._codedWidth = width & ~1;
+        if (height % 2 !== 0)
+            this._codedHeight = height & ~1;*/
+
+        this._width = width;
+        this._height = height;
+
+        this._configureDecoder(width, height);
     }
 
     _skipRect(x, y, width, height, _sock, display, _depth, frame_id) {
@@ -172,27 +111,37 @@ export default class KasmVideoDecoder {
 
     _handleProcessVideoChunk(frame) {
         console.log(frame);
-        this._display.videoFrameRect(frame)
+        const { frame_id, x, y, width, height } = this._timestampMap.get(frame.timestamp);
+        this._display.videoFrameRect(frame, frame_id, x, y, width, height);
+        this._timestampMap.delete(frame.timestamp);
     }
 
     _processVideoFrameRect(x, y, width, height, sock, display, depth, frame_id) {
 
-        let dataArr = this._readData(sock);
+        let [key_frame, dataArr] = this._readData(sock);
+        console.log('key_frame: ' + key_frame);
         if (dataArr === null) {
             return false;
         }
 
-
-        this._updateSize(width, height)
+        if (width !== this._width && height !== this._height)
+            this._updateSize(width, height)
 
         console.log('_processVideoFrameRect', dataArr);
 
         // const type = dataArr[0] ? "key" : "delta";
         // const vidData = dataArr.slice(1).buffer; //// ???? ТУТ ОШИБКА TODO: поправить
         const vidChunk = new EncodedVideoChunk({
-            type: dataArr[0] === 0 ? 'key' : 'delta',
+            type: key_frame ? 'key' : 'delta',
             data: dataArr,
             timestamp: this._timestamp,
+        });
+        this._timestampMap.set(this._timestamp, {
+            frame_id,
+            x,
+            y,
+            width,
+            height
         });
         this._timestamp += FRAME_DURATION_US;
         this._decoder.decode(vidChunk);
@@ -201,10 +150,12 @@ export default class KasmVideoDecoder {
 
     _readData(sock) {
         if (this._len === 0) {
-            if (sock.rQwait("KasmVideo", 3)) {
-                return null;
+            if (sock.rQwait("KasmVideo", 4)) {
+                console.log('need more data sock.rQwait("KasmVideo", 4)');
+                return [0, null];
             }
 
+            this._key_frame = sock.rQshift8();
             let byte = sock.rQshift8();
             this._len = byte & 0x7f;
             if (byte & 0x80) {
@@ -218,13 +169,14 @@ export default class KasmVideoDecoder {
         }
 
         if (sock.rQwait("KasmVideo", this._len)) {
-            return null;
+            return [0, null];
         }
 
         let data = sock.rQshiftBytes(this._len);
         this._len = 0;
+        this._key_frame = 0;
 
-        return data;
+        return [this._key_frame, data];
     }
 
     dispose() {

@@ -98,14 +98,33 @@ class SmartcardSession {
   }
 
   async transmit(apdu) {
-    const response = await this._callExtension(
-      "transmit",
-      this.context,
-      this.cardHandle,
-      this.activeProtocol,
-      toHex(apdu)
-    ).then(([status, context, card, protocol, response]) => response);
-    return fromHex(response);
+    try {
+      await this._beginTransaction();
+    } catch (error) {
+      throw new Error("Failed to begin transaction");
+    }
+
+    try {
+      return await this._callExtension(
+        "transmit",
+        this.context,
+        this.cardHandle,
+        this.activeProtocol,
+        toHex(apdu)
+      ).then(([status, context, card, protocol, response]) => fromHex(response));
+    } catch (error) {
+      throw error;
+    } finally {
+      await this._endTransaction();
+    }
+  }
+
+  async _beginTransaction() {
+    return await this._callExtension("begin_transaction", this.context, this.cardHandle).then(([status]) => status);
+  }
+
+  async _endTransaction(disposition = 0) {
+    return await this._callExtension("end_transaction", this.context, this.cardHandle, disposition).then(([status]) => status);
   }
 
   async _establishContext() {

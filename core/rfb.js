@@ -1595,6 +1595,35 @@ export default class RFB extends EventTargetMixin {
         this._fixScrollbars();
     }
 
+
+    _forceRemoteResize() {
+        if (this._isPrimaryDisplay) {
+            //zero out the server reported resolution
+            for (let i=0; i < this._display.screens.length; i++) {
+                this._display.applyServerResolution(0, 0, this._display.screens[i].screenIndex);
+            }
+
+            const size = this._screenSize();
+            this._forceFullFrameUpdateAfterResize = true;
+            RFB.messages.setDesktopSize(this._sock, size, this._screenFlags);
+
+            Log.Debug('Requested new desktop size: ' +
+                size.serverWidth + 'x' + size.serverHeight);
+        } else if (this._display.screenIndex > 0) {
+            //re-register the secondary display with new resolution
+            let details = null
+            const initialAutoPlacementValue = window.localStorage.getItem('autoPlacement')
+            if (initialAutoPlacementValue === null) {
+                details = {
+                    left: window.screenLeft,
+                    top: window.screenTop
+                }
+            }
+
+            this._registerSecondaryDisplay(this._display.screens[0], details);
+        }
+    }
+
     // Requests a change of remote desktop size. This message is an extension
     // and may only be sent if we have received an ExtendedDesktopSize message
     _requestRemoteResize() {
@@ -1608,31 +1637,9 @@ export default class RFB extends EventTargetMixin {
             ) {
                 return;
             }
-
-            //zero out the server reported resolution
-            for (let i=0; i < this._display.screens.length; i++) {
-                this._display.applyServerResolution(0, 0, this._display.screens[i].screenIndex);
-            }
-
-            const size = this._screenSize();
-            this._forceFullFrameUpdateAfterResize = true;
-            RFB.messages.setDesktopSize(this._sock, size, this._screenFlags);
-
-            Log.Debug('Requested new desktop size: ' +
-                   size.serverWidth + 'x' + size.serverHeight);
-        } else if (this._display.screenIndex > 0) {
-            //re-register the secondary display with new resolution
-            let details = null
-            const initialAutoPlacementValue = window.localStorage.getItem('autoPlacement')
-            if (initialAutoPlacementValue === null) {
-                details = {
-                    left: window.screenLeft,
-                    top: window.screenTop
-                }
-            }
- 
-            this._registerSecondaryDisplay(this._display.screens[0], details);
         }
+
+        this._forceRemoteResize();
     }
 
     // Gets the the size of the available screen
@@ -1821,7 +1828,7 @@ export default class RFB extends EventTargetMixin {
                     this._proxyRFBMessage('screenRegistrationConfirmed', [ this._display.screens[screenIndex].screenID, screenIndex ]);
                     this._sendEncodings();
                     clearTimeout(this._resizeTimeout);
-                    this._resizeTimeout = setTimeout(this._requestRemoteResize.bind(this), 500);
+                    this._forceRemoteResize();
                     this.dispatchEvent(new CustomEvent("screenregistered", { detail: details }));
                     Log.Info(`Secondary monitor (${event.data.screenID}) has been registered.`);
                     break;

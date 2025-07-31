@@ -1,3 +1,6 @@
+import * as Log from "../../core/util/logging.js";
+import * as WebUtil from "../../app/webutil.js";
+
 // utilities
 const toHex = (data) => {
   return Array.from(data)
@@ -19,6 +22,21 @@ const REQUEST_TRANSMIT = 0x05;
 const REQUEST_INITIALIZE = 0x06;
 const RESPONSE_ACK = 0x80;
 const RESPONSE_ERROR = 0x81;
+
+const commandToString = (command) => {
+  return {
+    [REQUEST_STATUS]: "REQUEST_STATUS",
+    [REQUEST_POWER_ON]: "REQUEST_POWER_ON",
+    [REQUEST_POWER_OFF]: "REQUEST_POWER_OFF",
+    [REQUEST_RESET]: "REQUEST_RESET",
+    [REQUEST_TRANSMIT]: "REQUEST_TRANSMIT",
+    [REQUEST_INITIALIZE]: "REQUEST_INITIALIZE",
+    [RESPONSE_ACK]: "RESPONSE_ACK",
+    [RESPONSE_ERROR]: "RESPONSE_ERROR",
+  }[command];
+
+  return `0x${command.toString(16).toUpperCase()}`;
+};
 
 const createRelayPacket = (command, payload = new Uint8Array(0)) => {
   if (command !== RESPONSE_ACK && command !== RESPONSE_ERROR) {
@@ -56,25 +74,54 @@ const KASM_SMARTCARD_EXTENSION_ID = "cjkohjfgidilbllbjkdhpoeonjanpomo";
 class SmartcardSession {
   constructor() {
     this.context = null;
-    this.readers = null;
+    this.readers = [];
     this.cardAtr = null;
     this.cardHandle = null;
     this.activeProtocol = null;
+    this.lastTransmitAt = null;
   }
 
   async refresh() {
-    this.context = await this._establishContext();
-    this.readers = await this._listReaders(this.context);
-
-    if (!this.readers || this.readers.length === 0) {
-      this.cardAtr = null;
-      this.cardHandle = null;
-      this.activeProtocol = null;
+    // skip check if we have sent data in the last second
+    if (this.lastTransmitAt && Date.now() - this.lastTransmitAt < 1000) {
       return;
     }
 
-    const { atr } = await this._getStatusChange(this.context, this.readers[0]);
-    this.cardAtr = atr;
+    try {
+      this.context = this.context || (await this._establishContext());
+      this.readers = await this._listReaders(this.context);
+
+      if (this.readers.length > 0) {
+        this.cardAtr = await this._getStatusChange(this.context, this.readers[0]).then(({ atr }) => atr);
+      } else {
+        this.cardAtr = null;
+        this.cardHandle = null;
+        this.activeProtocol = null;
+      }
+    } catch (error) {
+      this.context = null;
+      this.readers = [];
+      this.cardAtr = null;
+      this.cardHandle = null;
+      this.activeProtocol = null;
+    }
+
+    // log status
+    const smartcardStatus = {
+      isExtensionEnabled: !!this.context,
+      isReaderConnected: this.readers.length > 0,
+      isCardPresent: !!this.cardAtr,
+    };
+
+    Log.Info(`smartcard.refresh: ${JSON.stringify(smartcardStatus, null, 2)}`);
+
+    // update web ui
+    if (WebUtil.isInsideKasmVDI()) {
+      window.parent.postMessage({
+        action: "smartcard_status",
+        value: smartcardStatus,
+      }, "*");
+    }
   }
 
   async powerOn() {
@@ -90,6 +137,7 @@ class SmartcardSession {
   async powerOff() {
     if (this.context && this.cardHandle) {
       await this._disconnect(this.context, this.cardHandle);
+      await this._releaseContext(this.context);
     }
 
     this.cardHandle = null;
@@ -100,47 +148,32 @@ class SmartcardSession {
   async transmit(apdu) {
     try {
       await this._beginTransaction();
-    } catch (error) {
-      throw new Error("Failed to begin transaction");
-    }
+    } catch (error) {}
 
     try {
-      return await this._callExtension(
-        "transmit",
-        this.context,
-        this.cardHandle,
-        this.activeProtocol,
-        toHex(apdu)
-      ).then(([status, context, card, protocol, response]) => fromHex(response));
+      this.lastTransmitAt = Date.now();
+      return await this._transmit(apdu);
     } catch (error) {
+      this.lastTransmitAt = null;
       throw error;
     } finally {
       await this._endTransaction();
     }
   }
 
-  async _beginTransaction() {
-    return await this._callExtension("begin_transaction", this.context, this.cardHandle).then(([status]) => status);
-  }
-
-  async _endTransaction(disposition = 0) {
-    return await this._callExtension("end_transaction", this.context, this.cardHandle, disposition).then(([status]) => status);
-  }
-
   async _establishContext() {
     return await this._callExtension("establish_context", 0).then(([status, context]) => context);
   }
 
-  async _listReaders(context) {
-    return await this._callExtension("list_readers", context).then(([status, readers]) =>
-      readers.split(",").filter(Boolean)
-    );
+  async _releaseContext(context) {
+    return await this._callExtension("release_context", context).then(([status]) => status);
   }
 
-  async _getCardAtr(context, reader) {
-    return await this._callExtension("get_status_change", context, 0, 1, 0, 0, reader).then(
-      ([status, readerCount, currentState, eventState, atr]) => atr
-    );
+
+  async _listReaders(context) {
+    return (await this._callExtension("list_readers", context).then(([status, readers]) =>
+      readers.split(",").filter(Boolean)
+    ) || []);
   }
 
   async _getStatusChange(context, reader) {
@@ -168,8 +201,23 @@ class SmartcardSession {
     return await this._callExtension("disconnect", context, cardHandle, 0).then(([status]) => status);
   }
 
-  async _callExtension(name, ...args) {
+  async _beginTransaction() {
+    return await this._callExtension("begin_transaction", this.context, this.cardHandle).then(([status]) => status);
+  }
 
+  async _transmit(apdu) {
+    return await this._callExtension("transmit", this.context, this.cardHandle, this.activeProtocol, toHex(apdu)).then(
+      ([status, context, card, protocol, response]) => fromHex(response)
+    );
+  }
+
+  async _endTransaction(disposition = 0) {
+    return await this._callExtension("end_transaction", this.context, this.cardHandle, disposition).then(
+      ([status]) => status
+    );
+  }
+
+  async _callExtension(name, ...args) {
     return new Promise((resolve, reject) => {
       const deviceId = "smartcard-relay";
       const completionId = Date.now().toString() + Math.random().toString(36);
@@ -200,58 +248,58 @@ class SmartcardSession {
 }
 
 export default async (rfb) => {
-  console.log("smartcard.initializeSmartcardRelay");
+  Log.Info("smartcard.initializeSmartcardRelay");
 
-  const sendSmartcardCommand = (command, payload = new Uint8Array(0)) => {
-    console.log(`smartcard.sendSmartcardCommand: command=0x${command.toString(16)}, payloadLen=${payload.length}`);
+  const sendSmartcardResponse = (command, payload = new Uint8Array(0)) => {
+    Log.Debug(`smartcard.response: command=${commandToString(command)}, payloadLen=${payload.length}`);
     const packet = createRelayPacket(command, payload);
     rfb.sendUnixRelayData("smartcard", packet);
   };
 
   const clientSession = new SmartcardSession();
+  await clientSession.refresh();
 
   rfb.subscribeUnixRelay("smartcard", async (data) => {
     try {
       const { command, payload } = parseRelayPacket(data);
-      console.log(`smartcard.processBinaryCommand: command=0x${command.toString(16)}, payloadLen=${payload.length}`);
-      
+      Log.Debug(`smartcard.request: command=${commandToString(command)}, payloadLen=${payload.length}`);
+
       switch (command) {
         case REQUEST_INITIALIZE:
-          sendSmartcardCommand(RESPONSE_ACK);
+          sendSmartcardResponse(RESPONSE_ACK);
           break;
 
         case REQUEST_STATUS:
           await clientSession.refresh();
-          const atr = clientSession.cardAtr ? fromHex(clientSession.cardAtr) : new Uint8Array(0);
-          sendSmartcardCommand(RESPONSE_ACK, atr);
+          sendSmartcardResponse(RESPONSE_ACK, clientSession.cardAtr ? fromHex(clientSession.cardAtr) : new Uint8Array(0));
           break;
 
         case REQUEST_POWER_ON:
           await clientSession.powerOn();
-          sendSmartcardCommand(RESPONSE_ACK);
+          sendSmartcardResponse(RESPONSE_ACK);
           break;
 
         case REQUEST_POWER_OFF:
           await clientSession.powerOff();
-          sendSmartcardCommand(RESPONSE_ACK);
+          sendSmartcardResponse(RESPONSE_ACK);
           break;
 
         case REQUEST_RESET:
-          sendSmartcardCommand(RESPONSE_ACK);
+          sendSmartcardResponse(RESPONSE_ACK);
           break;
 
         case REQUEST_TRANSMIT:
           await clientSession.powerOn();
           const response = await clientSession.transmit(payload);
-          sendSmartcardCommand(RESPONSE_ACK, response);
+          sendSmartcardResponse(RESPONSE_ACK, response);
           break;
 
         default:
           throw new Error(`Unknown binary command: 0x${command.toString(16)}`);
       }
     } catch (error) {
-      console.error(`Failed to process command: ${error.message}`);
-      sendSmartcardCommand(RESPONSE_ERROR, new TextEncoder().encode(error.message));
+      Log.Error(`Failed to process command: ${error.message}`);
+      sendSmartcardResponse(RESPONSE_ERROR, new TextEncoder().encode(error.message));
     }
   });
 };

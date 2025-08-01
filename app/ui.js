@@ -1458,6 +1458,8 @@ const UI = {
         }
         url += '/' + path;
 
+        UI.monitors = [];
+        UI.sortedMonitors = [];
         UI.rfb = new RFB(document.getElementById('noVNC_container'),
                         document.getElementById('noVNC_keyboardinput'),
                         url,
@@ -1657,6 +1659,8 @@ const UI = {
         UI.connected = false;
 
         UI.rfb = undefined;
+        UI.monitors = [];
+        UI.sortedMonitors = [];
 
         if (!e.detail.clean) {
             UI.updateVisualState('disconnected');
@@ -1969,11 +1973,13 @@ const UI = {
 
     openDisplays() {
         document.getElementById('noVNC_displays').classList.add("noVNC_open");
-        if (UI.monitors.length < 1 ) {
+        if (UI.monitors.length < 1  && UI.rfb) {
             let screenPlan = UI.rfb.getScreenPlan();
-            UI.initMonitors(screenPlan)
+            UI.initMonitors(screenPlan);
         }
-        UI.displayMonitors()
+        if (UI.monitors.length > 0) {
+            UI.displayMonitors()
+        }
     },
 
     closeDisplays() {
@@ -2017,6 +2023,7 @@ const UI = {
         let new_display_path = window.location.pathname.replace(/[^/]*$/, '');
         const windowId = uuidv4();
         let new_display_url = `${window.location.protocol}//${window.location.host}${new_display_path}screen.html?windowId=${windowId}`;
+        const topWindow = window.top === window.self ? window : window.top || window;
 
         const auto_placement = document.getElementById('noVNC_auto_placement').checked
         if (auto_placement && 'getScreenDetails' in window) {
@@ -2028,8 +2035,8 @@ const UI = {
                     const details = await window.getScreenDetails()
                     const current = UI.increaseCurrentDisplay(details)
                     let screen = details.screens[current]
-                    const options = 'left='+screen.availLeft+',top='+screen.availTop+',width='+screen.availWidth+',height='+screen.availHeight+',fullscreen'
-                    let newdisplay = window.open(new_display_url, '_blank', options);
+                    const options = 'left='+screen.availLeft+',top='+screen.availTop+',width='+screen.availWidth+',height='+screen.availHeight+',fullscreen';
+                    let newdisplay = topWindow.open(new_display_url, '_blank', options);
                     UI.displayWindows.set(windowId, newdisplay);
                     return;
                 }
@@ -2039,8 +2046,8 @@ const UI = {
             }
         }
 
-        Log.Debug(`Opening a secondary display ${new_display_url}`)
-        let newdisplay = window.open(new_display_url, '_blank', 'toolbar=0,location=0,menubar=0');
+        Log.Debug(`Opening a secondary display ${new_display_url}`);
+        let newdisplay = topWindow.open(new_display_url, '_blank', 'toolbar=0,location=0,menubar=0');
         if (newdisplay) {
             UI.displayWindows.set(windowId, newdisplay);
         }
@@ -2106,6 +2113,9 @@ const UI = {
     recenter() {
         const monitors = UI.sortedMonitors
         UI.removeSpaces()
+        if (!monitors.length) {
+            return;
+        }
         const { startLeft, startTop } = UI.getSizes(monitors)
 
         for (var i = 0; i < monitors.length; i++) {
@@ -2183,11 +2193,12 @@ const UI = {
     },
 
     getSizes(monitors) {
-        const { canvasWidth, canvasHeight } = UI.multiMonitorSettings()
-        let top = monitors[0].y
-        let left = monitors[0].x
-        let width = monitors[0].w
-        let height = monitors[0].h
+        const { canvasWidth, canvasHeight } = UI.multiMonitorSettings();
+
+        let top = monitors[0].y;
+        let left = monitors[0].x;
+        let width = monitors[0].w;
+        let height = monitors[0].h;
         for (var i = 0; i < monitors.length; i++) {
             var m = monitors[i];
             if (m.x < left) {

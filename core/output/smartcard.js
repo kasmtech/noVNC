@@ -166,7 +166,16 @@ class SmartcardSession {
   }
 
   async _releaseContext(context) {
-    return await this._callExtension("release_context", context).then(([status]) => status);
+    try {
+      return await this._callExtension("release_context", context).then(([status]) => status);
+    } catch (error) {
+      throw error;
+    } finally {
+      this.context = null;
+      this.cardAtr = null;
+      this.cardHandle = null;
+      this.activeProtocol = null;
+    }
   }
 
 

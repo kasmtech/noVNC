@@ -1460,6 +1460,7 @@ const UI = {
 
         UI.monitors = [];
         UI.sortedMonitors = [];
+        UI.showControlInput('noVNC_displays_button')
         UI.rfb = new RFB(document.getElementById('noVNC_container'),
                         document.getElementById('noVNC_keyboardinput'),
                         url,
@@ -1606,6 +1607,7 @@ const UI = {
         UI.updateVisualState('disconnecting');
 
         clearInterval(UI._sessionTimeoutInterval);
+        UI.hideControlInput('noVNC_displays_button');
     },
 
     reconnect() {
@@ -3027,12 +3029,12 @@ const UI = {
         UI.sendMessage('sharedSessionUserJoin', e.detail)
 
     },
-    
+
     sharedSessionUserLeft(e) {
         Log.Info('shared session user left: ' + e.detail)
         UI.sendMessage('sharedSessionUserLeft', e.detail)
     },
-    
+
     //Helper to add options to dropdown.
     addOption(selectbox, text, value) {
         const optn = document.createElement("OPTION");

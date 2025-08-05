@@ -74,30 +74,36 @@ const KASM_SMARTCARD_EXTENSION_ID = "cjkohjfgidilbllbjkdhpoeonjanpomo";
 class SmartcardSession {
   constructor() {
     this.context = null;
-    this.readers = [];
     this.cardAtr = null;
     this.cardHandle = null;
     this.activeProtocol = null;
     this.lastTransmitAt = null;
+    this.lastRefreshAt = null;
   }
 
   async refresh() {
-    // skip check if we have sent data in the last second
+    // skip check if we have refreshed recently
+    if (this.lastRefreshAt && Date.now() - this.lastRefreshAt < 1000) {
+      return;
+    }
+
+    // skip check if we have sent data recently
     if (this.lastTransmitAt && Date.now() - this.lastTransmitAt < 1000) {
       return;
     }
 
-    try {
-      this.context = this.context || (await this._establishContext());
-      this.readers = await this._listReaders(this.context);
+    // query state
+    let refreshContext = null;
 
-      if (this.readers.length > 0) {
-        this.cardAtr = await this._getStatusChange(this.context, this.readers[0]).then(({ atr }) => atr);
-      } else {
-        this.cardAtr = null;
-        this.cardHandle = null;
-        this.activeProtocol = null;
+    try {
+      refreshContext = await this._establishContext();
+
+      this.readers = await this._listReaders(refreshContext);
+      if (this.readers.length == 0) {
+        throw new Error("no_readers");
       }
+
+      this.cardAtr = await this._getStatusChange(refreshContext, this.readers[0]).then(({ atr }) => atr);
     } catch (error) {
       this.context = null;
       this.readers = [];
@@ -106,21 +112,27 @@ class SmartcardSession {
       this.activeProtocol = null;
     }
 
-    // log status
+    // update web ui
     const smartcardStatus = {
-      isExtensionEnabled: !!this.context,
+      isExtensionEnabled: !!refreshContext,
       isReaderConnected: this.readers.length > 0,
       isCardPresent: !!this.cardAtr,
     };
 
-    Log.Info(`smartcard.refresh: ${JSON.stringify(smartcardStatus, null, 2)}`);
-
-    // update web ui
     if (WebUtil.isInsideKasmVDI()) {
       window.parent.postMessage({
         action: "smartcard_status",
         value: smartcardStatus,
       }, "*");
+    }
+
+    Log.Debug(`smartcard.refresh: ${JSON.stringify(smartcardStatus, null, 2)}`);
+
+    // clean up
+    this.lastRefreshAt = Date.now();
+
+    if (refreshContext) {
+      await this._releaseContext(refreshContext);
     }
   }
 
@@ -140,6 +152,7 @@ class SmartcardSession {
       await this._releaseContext(this.context);
     }
 
+    this.context = null;
     this.cardHandle = null;
     this.cardAtr = null;
     this.activeProtocol = null;
@@ -166,29 +179,14 @@ class SmartcardSession {
   }
 
   async _releaseContext(context) {
-    try {
-      return await this._callExtension("release_context", context).then(([status]) => status);
-    } catch (error) {
-      throw error;
-    } finally {
-      this.context = null;
-      this.cardAtr = null;
-      this.cardHandle = null;
-      this.activeProtocol = null;
-    }
+    return await this._callExtension("release_context", context).then(([status]) => status);
   }
 
 
   async _listReaders(context) {
-    let readers = [];
-
-    try {
-      readers = await this._callExtension("list_readers", context).then(
-        ([status, readers]) => Array.isArray(readers) ? readers : readers.split(",").filter(Boolean)
-      );
-    } catch (error) {}
-
-    return readers;
+    return await this._callExtension("list_readers", context).then(([status, readers]) => {
+      return Array.isArray(readers) ? readers : readers.split(",").filter(Boolean);
+    });
   }
 
   async _getStatusChange(context, reader) {
@@ -263,7 +261,7 @@ class SmartcardSession {
 }
 
 export default async (rfb) => {
-  Log.Info("smartcard.initializeSmartcardRelay");
+  Log.Debug("smartcard.initializeSmartcardRelay");
 
   const sendSmartcardResponse = (command, payload = new Uint8Array(0)) => {
     Log.Debug(`smartcard.response: command=${commandToString(command)}, payloadLen=${payload.length}`);

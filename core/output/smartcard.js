@@ -180,9 +180,15 @@ class SmartcardSession {
 
 
   async _listReaders(context) {
-    return (await this._callExtension("list_readers", context).then(([status, readers]) => {
-      return Array.isArray(readers) ? readers : readers.split(",").filter(Boolean);
-    }) || []);
+    let readers = [];
+
+    try {
+      readers = await this._callExtension("list_readers", context).then(
+        ([status, readers]) => Array.isArray(readers) ? readers : readers.split(",").filter(Boolean)
+      );
+    } catch (error) {}
+
+    return readers;
   }
 
   async _getStatusChange(context, reader) {

@@ -33,9 +33,7 @@ const commandToString = (command) => {
     [REQUEST_INITIALIZE]: "REQUEST_INITIALIZE",
     [RESPONSE_ACK]: "RESPONSE_ACK",
     [RESPONSE_ERROR]: "RESPONSE_ERROR",
-  }[command];
-
-  return `0x${command.toString(16).toUpperCase()}`;
+  }[command] || `0x${command.toString(16).toUpperCase()}`;
 };
 
 const createRelayPacket = (command, payload = new Uint8Array(0)) => {

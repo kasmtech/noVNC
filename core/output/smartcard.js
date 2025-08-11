@@ -9,7 +9,9 @@ const toHex = (data) => {
     .replace(/ /g, "");
 };
 
-const fromHex = (data) => {
+const fromHex = (data = "") => {
+  if (data.length === 0) return new Uint8Array(0);
+  if (!/^[0-9a-fA-F]*$/.test(data)) throw new Error(`invalid_hex_string: ${data}`);
   return new Uint8Array(data.match(/.{1,2}/g).map((b) => parseInt(b, 16)));
 };
 

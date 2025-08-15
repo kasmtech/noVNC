@@ -36,12 +36,11 @@ import { isTouchDevice, isSafari, hasScrollbarGutter, dragThreshold, supportsBin
     from '../core/util/browser.js';
 import { setCapture, getPointerEvent } from '../core/util/events.js';
 import KeyTable from "../core/input/keysym.js";
-import keysyms from "../core/input/keysymdef.js";
-import Keyboard from "../core/input/keyboard.js";
 import RFB from "../core/rfb.js";
 import { MouseButtonMapper, XVNC_BUTTONS } from "../core/mousebuttonmapper.js";
 import * as WebUtil from "./webutil.js";
 import { uuidv4 } from '../core/util/strings.js';
+import { UI_SETTINGS_CONTROL_ID } from './constants.js';
 
 const PAGE_TITLE = "KasmVNC";
 
@@ -286,6 +285,11 @@ const UI = {
         UI.initSetting('enable_ime', false);
         UI.initSetting('enable_webrtc', false);
         UI.initSetting('enable_hidpi', false);
+        UI.initSetting(UI_SETTINGS_CONTROL_ID.PROFILE, 'baseline');
+        UI.initSetting(UI_SETTINGS_CONTROL_ID.KEYFRAME_INTERVAL, 1);
+        UI.initSetting(UI_SETTINGS_CONTROL_ID.BITRATE, 30);
+        UI.initSetting(UI_SETTINGS_CONTROL_ID.PRESET, 3);
+        UI.initSetting(UI_SETTINGS_CONTROL_ID.BUFFER, 30);
         UI.toggleKeyboardControls();
 
         if ((WebUtil.isInsideKasmVDI()) && (! WebUtil.getConfigVar('show_control_bar'))) {
@@ -617,6 +621,11 @@ const UI = {
         UI.addSettingChangeHandler('enable_hidpi', UI.enableHiDpi);
         UI.addSettingChangeHandler('enable_threading');
         UI.addSettingChangeHandler('enable_threading', UI.threading);
+        UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.PROFILE);
+        UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.KEYFRAME_INTERVAL);
+        UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.BITRATE);
+        UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.PRESET);
+        UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.BUFFER);
     },
 
     addFullscreenHandlers() {

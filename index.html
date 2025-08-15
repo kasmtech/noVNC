@@ -141,7 +141,7 @@
                     <input type="image" alt="Shutdown/Reboot" src="app/images/power.svg"
                         id="noVNC_power_button" class="noVNC_button"
                         title="Shutdown/Reboot...">
-                        
+
                     <div class="noVNC_vcenter">
                         <div id="noVNC_power" class="noVNC_panel">
                             <div class="noVNC_heading">
@@ -211,13 +211,13 @@
                                     <img alt="" src="app/images/settings.svg"> Settings
                                 </li>
                                 <li>
-                                    <label class="switch"><input id="noVNC_setting_shared" type="checkbox"> 
+                                    <label class="switch"><input id="noVNC_setting_shared" type="checkbox">
                                         <span class="slider round"></span>
                                         <span class="slider-label">Shared Mode</span>
                                     </label>
                                 </li>
                                 <li>
-                                    <label class="switch"><input id="noVNC_setting_view_only" type="checkbox" /> 
+                                    <label class="switch"><input id="noVNC_setting_view_only" type="checkbox" />
                                         <span class="slider round"></span>
                                         <span class="slider-label">View Only</span>
                                     </label>
@@ -267,21 +267,21 @@
                                 </li>
                                 <li>
                                     <label class="switch">
-                                        <input id="noVNC_setting_enable_perf_stats" type="checkbox" /> 
+                                        <input id="noVNC_setting_enable_perf_stats" type="checkbox" />
                                         <span class="slider round"></span>
                                         <span class="slider-label">Enable Performance Stats</span>
                                     </label>
                                 </li>
                                 <li>
                                     <label class="switch">
-                                        <input id="noVNC_setting_enable_threading" type="checkbox" /> 
+                                        <input id="noVNC_setting_enable_threading" type="checkbox" />
                                         <span class="slider round"></span>
                                         <span class="slider-label">Enable Threaded Decoding</span>
                                     </label>
                                 </li>
                                 <li>
                                     <label class="switch">
-                                        <input type="checkbox" id="noVNC_setting_pointer_lock" /> 
+                                        <input type="checkbox" id="noVNC_setting_pointer_lock" />
                                         <span class="slider round"></span>
                                         <span class="slider-label">Enable Pointer Lock</span>
                                     </label>
@@ -298,7 +298,7 @@
                                     </label>
                                 </li>
                                 <li>
-                                    <label class="switch"><input id="noVNC_setting_toggle_control_panel" type="checkbox" /> 
+                                    <label class="switch"><input id="noVNC_setting_toggle_control_panel" type="checkbox" />
                                         <span class="slider round"></span>
                                         <span class="slider-label">Toggle Control Panel via Keystrokes</span>
                                     </label>
@@ -315,7 +315,7 @@
                                 <li><hr></li>
                                 <li>
                                     <label class="switch">
-                                        <input id="noVNC_setting_view_clip" type="checkbox"> 
+                                        <input id="noVNC_setting_view_clip" type="checkbox">
                                         <span class="slider round"></span>
                                         <span class="slider-label">Clip to Window</span>
                                     </label>
@@ -369,7 +369,7 @@
                                                 <label for="noVNC_setting_quality">Quality:</label>
                                                 <input id="noVNC_setting_quality" type="range" min="0" max="9" value="6">
                                             </li>
-                                            
+
                                             <li>
                                                 <label for="noVNC_setting_dynamic_quality_min">Dynamic Quality Min:</label>
                                                 <input id="noVNC_setting_dynamic_quality_min" type="range" min="0" max="9" value="3" onchange="noVNC_setting_dynamic_quality_min_output.value=value">
@@ -484,7 +484,7 @@
                                             <li><hr></li>
                                             <li>
                                                 <label class="switch">
-                                                    <input id="noVNC_setting_reconnect" type="checkbox"> 
+                                                    <input id="noVNC_setting_reconnect" type="checkbox">
                                                     <span class="slider-label">Automatic Reconnect</span>
                                                 </label>
                                             </li>
@@ -494,7 +494,7 @@
                                             </li>
                                             <li><hr></li>
                                             <li>
-                                                <label class="switch"><input id="noVNC_setting_show_dot" type="checkbox"> 
+                                                <label class="switch"><input id="noVNC_setting_show_dot" type="checkbox">
                                                     <span class="slider round"></span>
                                                     <span class="slider-label">Show Dot when No Cursor</span>
                                                 </label>
@@ -506,6 +506,42 @@
                                                     <select id="noVNC_setting_logging" name="vncLogging">
                                                     </select>
                                                 </label>
+                                            </li>
+                                            <li><hr></li>
+                                            <li>
+                                                <label for="noVNC_setting_profile">Profile:
+                                                    <select id="noVNC_setting_profile" name="vncProfile">
+                                                        <option value="high">High</option>
+                                                        <option value="baseline">Baseline</option>
+                                                        <option value="main">Main</option>
+                                                    </select>
+                                                </label>
+                                            </li>
+                                            <li><hr></li>
+                                            <li>
+                                                <label for="noVNC_setting_keyframeInterval">Keyframe interval
+                                                    (GOP):</label>
+                                                <input id="noVNC_setting_keyframeInterval" type="range" min="1" max="60"
+                                                       value="1">
+                                            </li>
+                                            <li><hr></li>
+                                            <li>
+                                                <label for="noVNC_setting_bitrate">Bitrate:</label>
+                                                <!-- TODO: add min/max -->
+                                                <input id="noVNC_setting_bitrate" type="number" value="0">
+                                            </li>
+                                            <li><hr></li>
+                                            <li>
+                                                <label for="noVNC_setting_preset">Preset:</label>
+                                                <span style="display: flex; align-items: center; gap: 2px;">Speed<input
+                                                        id="noVNC_setting_preset" type="range" min="1" max="5"
+                                                        value="3">Quality</span>
+                                            </li>
+                                            <li><hr></li>
+                                            <li>
+                                                <label for="noVNC_setting_buffer">Buffer:</label>
+                                                <!-- TODO: add min/max -->
+                                                <input id="noVNC_setting_buffer" type="number" value="0">
                                             </li>
                                         </ul>
                                     </div>
@@ -626,7 +662,7 @@
             <div class="button escape"></div>
             <div class="button ctrlaltdel"></div>
         </div>
-        
+
         <div id="noVNC_keyboard_control_handle" class="button keyboard handle"></div>
     </div>
     <div id="noVNC_identify_monitor">0</div>

@@ -287,6 +287,7 @@ const UI = {
         UI.initSetting('enable_hidpi', false);
         UI.initSetting(UI_SETTINGS_CONTROL_ID.PROFILE, 'baseline');
         UI.initSetting(UI_SETTINGS_CONTROL_ID.KEYFRAME_INTERVAL, 1);
+        UI.initSetting(UI_SETTINGS_CONTROL_ID.CRF, 23);
         UI.initSetting(UI_SETTINGS_CONTROL_ID.BITRATE, 30);
         UI.initSetting(UI_SETTINGS_CONTROL_ID.PRESET, 3);
         UI.initSetting(UI_SETTINGS_CONTROL_ID.BUFFER, 30);
@@ -623,6 +624,7 @@ const UI = {
         UI.addSettingChangeHandler('enable_threading', UI.threading);
         UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.PROFILE);
         UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.KEYFRAME_INTERVAL);
+        UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.CRF);
         UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.BITRATE);
         UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.PRESET);
         UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.BUFFER);

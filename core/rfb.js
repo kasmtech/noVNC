@@ -1924,22 +1924,22 @@ export default class RFB extends EventTargetMixin {
                     window.close();
                     break;
                 case 'applySettings':
-                        if (!this._isPrimaryDisplay) {
-                            this.enableHiDpi = event.data.args[0];
-                            this.clipViewport = event.data.args[1];
-                            this.scaleViewport = event.data.args[2];
-                            this.resizeSession = event.data.args[3];
-                            this.videoQuality = event.data.args[4];
-                            //TODO: add support for forced static resolution for multiple monitors
-                            //this._forcedResolutionX = event.data.args[5];
-                            //this._forcedResolutionY = event.data.args[6];
+                    if (!this._isPrimaryDisplay) {
+                        this.enableHiDpi = event.data.args[0];
+                        this.clipViewport = event.data.args[1];
+                        this.scaleViewport = event.data.args[2];
+                        this.resizeSession = event.data.args[3];
+                        this.videoQuality = event.data.args[4];
+                        //TODO: add support for forced static resolution for multiple monitors
+                        //this._forcedResolutionX = event.data.args[5];
+                        //this._forcedResolutionY = event.data.args[6];
 
-                            //TODO, do we need to do this twice
-                            this.scaleViewport = event.data.args[3];
-                            this.updateConnectionSettings();
-                        }
+                        //TODO, do we need to do this twice
+                        this.scaleViewport = event.data.args[3];
+                        this.updateConnectionSettings();
+                    }
 
-                break;
+                    break;
                 case 'applyScreenPlan':
                     if (event.data.args[0] == this._display.screenID) {
                         this._display.screens[0].screenIndex = event.data.args[1];
@@ -1961,7 +1961,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _unregisterSecondaryDisplay() {
-        if (!this._isPrimaryDisplay){
+        if (!this._isPrimaryDisplay) {
             let message = {
                 eventType: 'unregister',
                 screenID: this._display.screenID

@@ -552,6 +552,42 @@
                                                     </select>
                                                 </label>
                                             </li>
+                                            <li><hr></li>
+                                            <li>
+                                                <label for="noVNC_setting_profile">Profile:
+                                                    <select id="noVNC_setting_profile" name="vncProfile">
+                                                        <option value="high">High</option>
+                                                        <option value="baseline">Baseline</option>
+                                                        <option value="main">Main</option>
+                                                    </select>
+                                                </label>
+                                            </li>
+                                            <li><hr></li>
+                                            <li>
+                                                <label for="noVNC_setting_keyframeInterval">Keyframe interval
+                                                    (GOP):</label>
+                                                <input id="noVNC_setting_keyframeInterval" type="range" min="1" max="60"
+                                                       value="1">
+                                            </li>
+                                            <li><hr></li>
+                                            <li>
+                                                <label for="noVNC_setting_bitrate">Bitrate:</label>
+                                                <!-- TODO: add min/max -->
+                                                <input id="noVNC_setting_bitrate" type="number" value="0">
+                                            </li>
+                                            <li><hr></li>
+                                            <li>
+                                                <label for="noVNC_setting_preset">Preset:</label>
+                                                <span style="display: flex; align-items: center; gap: 2px;">Speed<input
+                                                        id="noVNC_setting_preset" type="range" min="1" max="5"
+                                                        value="3">Quality</span>
+                                            </li>
+                                            <li><hr></li>
+                                            <li>
+                                                <label for="noVNC_setting_buffer">Buffer:</label>
+                                                <!-- TODO: add min/max -->
+                                                <input id="noVNC_setting_buffer" type="number" value="0">
+                                            </li>
                                         </ul>
                                     </div>
                                 </li>

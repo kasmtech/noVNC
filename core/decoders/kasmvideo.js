@@ -173,10 +173,11 @@ export default class KasmVideoDecoder {
         }
 
         let data = sock.rQshiftBytes(this._len);
+        let key_frame = this._key_frame;
         this._len = 0;
         this._key_frame = 0;
 
-        return [this._key_frame, data];
+        return [key_frame, data];
     }
 
     dispose() {

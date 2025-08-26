@@ -91,6 +91,7 @@ export default class RFB extends EventTargetMixin {
             this._url = null;
             this._rawChannel = urlOrChannel;
         }
+        this._url = 'wss://localhost:6901/websockify'; // TODO: pass through constructor args
 
         // Connection details
         options = options || {};
@@ -302,9 +303,9 @@ export default class RFB extends EventTargetMixin {
 
         this._gestures = new GestureHandler();
 
-        if (this._isPrimaryDisplay) {
+        // if (this._isPrimaryDisplay) {
             this._setupWebSocket();
-        } 
+        // } 
 
         Log.Debug("<< RFB.constructor");
 
@@ -907,21 +908,21 @@ export default class RFB extends EventTargetMixin {
     }
 
     disconnect() {
-        if (this._isPrimaryDisplay) {
+        // if (this._isPrimaryDisplay) {
             this._updateConnectionState('disconnecting');
             this._sock.off('error');
             this._sock.off('message');
             this._sock.off('open');
             this._proxyRFBMessage('disconnect');
-        } else {
-            this._updateConnectionState('disconnecting');
-            this._unregisterSecondaryDisplay();
-            this._rfbConnectionState = "";
-        }
+        // } else {
+        //     this._updateConnectionState('disconnecting');
+        // }
+        this._rfbConnectionState = "";
+        this._unregisterSecondaryDisplay();
     }
 
     terminate() {
-        if (this._isPrimaryDisplay) {
+        // if (this._isPrimaryDisplay) {
             //disconnect the rfb connection
             this._updateConnectionState('disconnecting');
             this._sock.off('error');
@@ -929,7 +930,7 @@ export default class RFB extends EventTargetMixin {
             this._sock.off('open');
             //close secondary display windows
             this._proxyRFBMessage('terminate');
-        }
+        // }
     }
 
     sendCtrlAltDel() {
@@ -1159,11 +1160,12 @@ export default class RFB extends EventTargetMixin {
             this._handleMessage();
         });
         this._sock.on('open', () => {
-            if ((this._rfbConnectionState === 'connecting') &&
-                (this._rfbInitState === '')) {
+            if ((this._rfbConnectionState === 'connecting' || this._rfbConnectionState === 'connected') &&
+                (this._rfbInitState === '' || this._rfbInitState === 'Security')) {
                 this._rfbInitState = 'ProtocolVersion';
                 Log.Debug("Starting VNC handshake");
             } else {
+                console.log('RFB_INIT_STATE', this._rfbInitState);
                 this._fail("Unexpected server connection while " +
                            this._rfbConnectionState);
             }
@@ -1214,7 +1216,7 @@ export default class RFB extends EventTargetMixin {
     _connect() {
         Log.Debug(">> RFB.connect");
 
-        if (this._url && this._isPrimaryDisplay) {
+        if (this._url) {
             try {
                 Log.Info(`connecting to ${this._url}`);
                 this._sock.open(this._url, this._wsProtocols);
@@ -1226,7 +1228,7 @@ export default class RFB extends EventTargetMixin {
                     this._fail("Error when opening socket (" + e + ")");
                 }
             }
-        } else if (this._isPrimaryDisplay) {
+        } else {
             try {
                 Log.Info(`attaching ${this._rawChannel} to Websock`);
                 this._sock.attach(this._rawChannel);
@@ -1297,7 +1299,7 @@ export default class RFB extends EventTargetMixin {
         this._resendClipboardNextUserDrivenEvent = true;
 
         // WebRTC UDP datachannel inits
-        if (typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
+        if (typeof RTCPeerConnection !== 'undefined') {
             this._udpBuffer = new Map();
 
             this._udpPeer = new RTCPeerConnection({
@@ -1402,7 +1404,7 @@ export default class RFB extends EventTargetMixin {
             }
         }
 
-	    if (this._useUdp && typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
+	    if (this._useUdp && typeof RTCPeerConnection !== 'undefined') {
             setTimeout(function() { this._sendUdpUpgrade() }.bind(this), 3000);
         }
 
@@ -1437,16 +1439,13 @@ export default class RFB extends EventTargetMixin {
 
         this._keyboard.ungrab();
         this._gestures.detach();
-        if (this._isPrimaryDisplay) {
-            this._sock.close();
-        } else {
+        this._sock.close();
             if (this._primaryDisplayChannel) {
                 this._primaryDisplayChannel.postMessage({eventType: 'unregister', screenID: this._display.screenID})
                 this._primaryDisplayChannel.removeEventListener('message', this._handleSecondaryDisplayMessage);
                 this._primaryDisplayChannel.close();
                 this._primaryDisplayChannel = null;
             }
-        }
         
         try {
             this._target.removeChild(this._screen);
@@ -1693,7 +1692,8 @@ export default class RFB extends EventTargetMixin {
                 break;
 
             case 'connecting':
-                if (oldstate !== '') {
+                // TODO: additional check for secondary display
+                if (oldstate !== '' && oldstate !== 'connected') {
                     Log.Error("Bad transition to connecting state, " +
                                "previous connection state: " + oldstate);
                     return;
@@ -1729,9 +1729,9 @@ export default class RFB extends EventTargetMixin {
             this._disconnTimer = null;
 
             // make sure we don't get a double event
-            if (this._isPrimaryDisplay) {
+            // if (this._isPrimaryDisplay) {
                 this._sock.off('close');
-            }
+            // }
         }
         
         switch (state) {
@@ -1767,13 +1767,14 @@ export default class RFB extends EventTargetMixin {
      * should be logged but not sent to the user interface.
      */
     _fail(details) {
+        console.log(details);
         switch (this._rfbConnectionState) {
             case 'disconnecting':
                 Log.Error("Failed when disconnecting: " + details);
                 break;
-            case 'connected':
-                Log.Error("Failed while connected: " + details);
-                break;
+            // case 'connected':
+            //     Log.Error("Failed while connected: " + details);
+            //     break;
             case 'connecting':
                 Log.Error("Failed when connecting: " + details);
                 break;
@@ -1819,7 +1820,11 @@ export default class RFB extends EventTargetMixin {
                         screenID: event.data.screenID
                     }
                     let screenIndex = this._display.addScreen(event.data.screenID, event.data.width, event.data.height, event.data.pixelRatio, event.data.containerHeight, event.data.containerWidth, event.data.scale, event.data.serverWidth, event.data.serverHeight, event.data.x, event.data.y, event.data.windowId);
-                    this._proxyRFBMessage('screenRegistrationConfirmed', [ this._display.screens[screenIndex].screenID, screenIndex ]);
+                    if (this._display.screens[screenIndex]) {
+                        this._proxyRFBMessage('screenRegistrationConfirmed', [ this._display.screens[screenIndex].screenID, screenIndex ]);
+                    } else {
+                        console.log('Failed to register', screenIndex, details, this._display.screens);
+                    }
                     this._sendEncodings();
                     clearTimeout(this._resizeTimeout);
                     this._resizeTimeout = setTimeout(this._requestRemoteResize.bind(this), 500);
@@ -1949,6 +1954,7 @@ export default class RFB extends EventTargetMixin {
                     }
                     break;
                 case 'screenRegistrationConfirmed':
+                    console.log('Screen registration confirmed', event.data);
                     if (event.data.args[0] == this._display.screenID) {
                         this._display.screens[0].screenIndex = event.data.args[1];
                     }
@@ -2149,32 +2155,32 @@ export default class RFB extends EventTargetMixin {
                 // Ensure keys down are synced between client and server
                 this._keyboard.clearKeysDown(ev);
 
-                if (this._isPrimaryDisplay) {
+                // if (this._isPrimaryDisplay) {
                     this._handleMouseButton(pos.x, pos.y, true, xvncButtonToMask(mappedButton));
-                } else {
-                    this._proxyRFBMessage('mousedown', [ pos.x, pos.y, xvncButtonToMask(mappedButton) ]);
-                }
+                // } else {
+                //     this._proxyRFBMessage('mousedown', [ pos.x, pos.y, xvncButtonToMask(mappedButton) ]);
+                // }
                 
                 Log.Debug('Mouse Down');
                 break;
             case 'mouseup':
                 ev.preventDefault();
-                if (this._isPrimaryDisplay) {
+                // if (this._isPrimaryDisplay) {
                     this._handleMouseButton(pos.x, pos.y, false, xvncButtonToMask(mappedButton));
-                } else {
-                    this._proxyRFBMessage('mouseup', [ pos.x, pos.y, xvncButtonToMask(mappedButton) ]);
-                }
+                // } else {
+                //     this._proxyRFBMessage('mouseup', [ pos.x, pos.y, xvncButtonToMask(mappedButton) ]);
+                // }
                 
                 Log.Debug('Mouse Up');
                 break;
             case 'mousemove':
             	ev.preventDefault();
-                if (this._isPrimaryDisplay) {
+                // if (this._isPrimaryDisplay) {
                     this._handleMouseMove(pos.x, pos.y, (ev.buttons > 0));
-                } else {
-                    this._proxyRFBMessage('mousemove', [ pos.x, pos.y, (ev.buttons > 0), this._sendLeftClickonNextMove ]);
-                    this._sendLeftClickonNextMove = false;
-                }
+                // } else {
+                //     this._proxyRFBMessage('mousemove', [ pos.x, pos.y, (ev.buttons > 0), this._sendLeftClickonNextMove ]);
+                //     this._sendLeftClickonNextMove = false;
+                // }
                 break;
             default:
                 ev.preventDefault();
@@ -2332,11 +2338,11 @@ export default class RFB extends EventTargetMixin {
         if (this._rfbConnectionState !== 'connected') { return; }
         if (this._viewOnly) { return; } // View only, skip mouse events
 
-        if (this._isPrimaryDisplay) {
+        // if (this._isPrimaryDisplay) {
             RFB.messages.pointerEvent(this._sock, this._display.absX(x), this._display.absY(y), 0, dX, dY);
-        } else {
-            this._proxyRFBMessage('scroll', [ x, y, dX, dY ]);
-        }
+        // } else {
+        //     this._proxyRFBMessage('scroll', [ x, y, dX, dY ]);
+        // }
     }
 
     _handleWheel(ev) {
@@ -2396,14 +2402,14 @@ export default class RFB extends EventTargetMixin {
     }
 
     _fakeMouseMove(ev, elementX, elementY) {
-        if (this._isPrimaryDisplay) {
+        // if (this._isPrimaryDisplay) {
             this._handleMouseMove(elementX, elementY, false, true);
             this._cursor.move(ev.detail.clientX, ev.detail.clientY);
-        } else {
-            this._proxyRFBMessage('mousemove', [ elementX, elementY, true, false ]);
-            this._cursor.move(ev.detail.clientX, ev.detail.clientY);
+        // } else {
+        //     this._proxyRFBMessage('mousemove', [ elementX, elementY, true, false ]);
+        //     this._cursor.move(ev.detail.clientX, ev.detail.clientY);
 
-        }
+        // }
     }
 
     _handleTapEvent(ev, bmask) {
@@ -2438,15 +2444,15 @@ export default class RFB extends EventTargetMixin {
     }
 
     _fakeMouseButton(x, y, down, mask) {
-        if (this._isPrimaryDisplay) {
+        // if (this._isPrimaryDisplay) {
             this._handleMouseButton(x, y, down, mask);
-        } else {
-            if (down) {
-                this._proxyRFBMessage('mousedown', [ x, y, mask ]);
-            } else {
-                this._proxyRFBMessage('mouseup', [ x, y, mask ]);
-            }
-        }
+        // } else {
+        //     if (down) {
+        //         this._proxyRFBMessage('mousedown', [ x, y, mask ]);
+        //     } else {
+        //         this._proxyRFBMessage('mouseup', [ x, y, mask ]);
+        //     }
+        // }
     }
 
     _handleGesture(ev) {
@@ -4299,9 +4305,9 @@ export default class RFB extends EventTargetMixin {
 
         this._refreshCursor();
 
-        if (this._isPrimaryDisplay) {
+        // if (this._isPrimaryDisplay) {
             this._proxyRFBMessage('updateCursor', [ rgba, hotx, hoty, w, h ]);
-        }
+        // }
     }
 
     _shouldShowDotCursor() {

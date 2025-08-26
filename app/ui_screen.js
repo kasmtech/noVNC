@@ -142,14 +142,27 @@ const UI = {
             }
         }
 
+        let url;
+
+        const host = UI.getSetting('host');
+        const port = UI.getSetting('port');
+        const path = UI.getSetting('path');
+        url = UI.getSetting('secure') ? 'wss' : 'ws';
+
+        url += '://' + host;
+        if (port) {
+            url += ':' + port;
+        }
+        url += '/' + path;
+
         if (!UI.rfb) {
             UI.rfb = new RFB(document.getElementById('noVNC_container'),
                         document.getElementById('noVNC_keyboardinput'),
-                        "", //URL
+                        url, //URL
                         { 
                             shared: UI.getSetting('shared', true),
                             repeaterID: UI.getSetting('repeaterID', false),
-                            credentials: { password: null },
+                            credentials: { password: UI.reconnectPassword },
                             hiDpi: UI.getSetting('enable_hidpi', true, false)
                         },
                         false // Not a primary display

@@ -411,7 +411,7 @@ export default class Display {
                 existing_screen.y = y;
                 existing_screen.x2 = existing_screen.x + existing_screen.serverWidth;
                 existing_screen.y2 = existing_screen.y + existing_screen.serverHeight;
-                return true;
+                return screenIdx; /// ????
             }
         } else {
             //New Screen, add to far right until user repositions it
@@ -958,43 +958,43 @@ export default class Display {
     _handleSecondaryDisplayMessage(event) {
         if (!this._isPrimaryDisplay && event.data) {
             switch (event.data.eventType) {
-                case 'rect':
-                    let rect = event.data.rect;
-                    //overwrite screen locations when received on the secondary display
-                    rect.screenLocations = [ rect.screenLocations[event.data.screenLocationIndex] ]
-                    rect.screenLocations[0].screenIndex = 0;
-                    switch (rect.type) {
-                        case 'img':
-                            rect.img = new Image();
-                            rect.img.src = rect.src;
-                            break;
-                        case '_img':
-                            rect.img = new Image();
-                            rect.img.src = rect.src;
-                            rect.type = 'img';
-                            break;
-                        case 'transparent':
-                            let imageBmpPromise = createImageBitmap(rect.arr);
-                            imageBmpPromise.then( function(img) {
-                                this._transparentOverlayImg = img;
-                                if (!this.enableCanvasBuffer) {
-                                    this._enableCanvasBuffer = true;
-                                }
-                            }.bind(this) );
-                            this._transparentOverlayRect = rect;
-                            break;
-                    }
-                    this._syncFrameQueue.push(rect);
+                // case 'rect':
+                //     let rect = event.data.rect;
+                //     //overwrite screen locations when received on the secondary display
+                //     rect.screenLocations = [ rect.screenLocations[event.data.screenLocationIndex] ]
+                //     rect.screenLocations[0].screenIndex = 0;
+                //     switch (rect.type) {
+                //         case 'img':
+                //             rect.img = new Image();
+                //             rect.img.src = rect.src;
+                //             break;
+                //         case '_img':
+                //             rect.img = new Image();
+                //             rect.img.src = rect.src;
+                //             rect.type = 'img';
+                //             break;
+                //         case 'transparent':
+                //             let imageBmpPromise = createImageBitmap(rect.arr);
+                //             imageBmpPromise.then( function(img) {
+                //                 this._transparentOverlayImg = img;
+                //                 if (!this.enableCanvasBuffer) {
+                //                     this._enableCanvasBuffer = true;
+                //                 }
+                //             }.bind(this) );
+                //             this._transparentOverlayRect = rect;
+                //             break;
+                //     }
+                //     this._syncFrameQueue.push(rect);
 
-                    //if the secondary display is not in focus, the browser may not call requestAnimationFrame, thus we need to limit our buffer
-                    if (this._syncFrameQueue.length > 5000) {
-                        this._syncFrameQueue.shift();
-                        this._droppedRects++;
-                    }
-                    break;
-                case 'frameComplete':
-                        window.requestAnimationFrame( () => { this._pushSyncRects(); });
-                        break;
+                //     //if the secondary display is not in focus, the browser may not call requestAnimationFrame, thus we need to limit our buffer
+                //     if (this._syncFrameQueue.length > 5000) {
+                //         this._syncFrameQueue.shift();
+                //         this._droppedRects++;
+                //     }
+                //     break;
+                // case 'frameComplete':
+                //         window.requestAnimationFrame( () => { this._pushSyncRects(); });
+                //         break;
                 case 'registered':
                         if (!this._isPrimaryDisplay) {
                             this._screens[0].screenIndex = event.data.screenIndex;

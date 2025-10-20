@@ -406,8 +406,7 @@ export default class RFB extends EventTargetMixin {
         Log.Debug("Setting viewOnly to " + viewOnly);
         this._viewOnly = viewOnly;
 
-        if (this._rfbConnectionState === "connecting" ||
-            this._rfbConnectionState === "connected") {
+        if (this.isConnecting || this.isConnected) {
             if (viewOnly) {
                 this._keyboard.ungrab();
             } else {
@@ -716,9 +715,17 @@ export default class RFB extends EventTargetMixin {
 
         this._compressionLevel = compressionLevel;
 
-        if (this._rfbConnectionState === 'connected') {
+        if (this.isConnected) {
             this._sendEncodings();
         }
+    }
+
+    get isConnected() {
+        return this._rfbConnectionState === 'connected';
+    }
+
+    get isConnecting() {
+        return this._rfbConnectionState === 'connecting';
     }
 
     get statsFps() { return this._display.fps; }
@@ -728,11 +735,11 @@ export default class RFB extends EventTargetMixin {
     set enableWebRTC(value) {
         this._useUdp = value;
         if (!value) {
-            if (this._rfbConnectionState === 'connected' && (this._transitConnectionState !== this.TransitConnectionStates.Tcp)) {
+            if (this.isConnected && (this._transitConnectionState !== this.TransitConnectionStates.Tcp)) {
                 this._sendUdpDowngrade();
             }
         } else {
-            if (this._rfbConnectionState === 'connected' && (this._transitConnectionState !== this.TransitConnectionStates.Udp)) {
+            if (this.isConnected && (this._transitConnectionState !== this.TransitConnectionStates.Udp)) {
                 this._sendUdpUpgrade();
             }
         }

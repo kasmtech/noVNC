@@ -34,9 +34,8 @@ export default class KasmVideoDecoder {
         this._decoder = new VideoDecoder({
             output: (frame) => {
                 this._handleProcessVideoChunk(frame);
-                frame.close();
-            },
-            error: (e) => {
+                // frame.close();
+            }, error: (e) => {
                 Log.Error(`There was an error inside KasmVideoDecoder`, e)
             }
         });
@@ -59,14 +58,11 @@ export default class KasmVideoDecoder {
         let ret;
 
         if (this._ctl === 0x00) {
-            ret = this._skipRect(x, y, width, height,
-                                 sock, display, depth, frame_id);
+            ret = this._skipRect(x, y, width, height, sock, display, depth, frame_id);
         } else if (this._ctl === 0x01) {
-            ret = this._processVideoFrameRect(x, y, width, height,
-                sock, display, depth, frame_id);
+            ret = this._processVideoFrameRect(x, y, width, height, sock, display, depth, frame_id);
         } else {
-            throw new Error("Illegal KasmVideo compression received (ctl: " +
-                                   this._ctl + ")");
+            throw new Error("Illegal KasmVideo compression received (ctl: " + this._ctl + ")");
         }
 
         if (ret) {
@@ -92,11 +88,7 @@ export default class KasmVideoDecoder {
     }
 
     _updateSize(width, height) {
-        console.log('_updateSize' + width + ' ' + height);
-        /*if (width % 2 !== 0)
-            this._codedWidth = width & ~1;
-        if (height % 2 !== 0)
-            this._codedHeight = height & ~1;*/
+        Log.Debug('Updated size: ', {width, height});
 
         this._width = width;
         this._height = height;
@@ -110,16 +102,15 @@ export default class KasmVideoDecoder {
     }
 
     _handleProcessVideoChunk(frame) {
-        console.log(frame);
-        const { frame_id, x, y, width, height } = this._timestampMap.get(frame.timestamp);
+        Log.Debug('Frame ', frame);
+        const {frame_id, x, y, width, height} = this._timestampMap.get(frame.timestamp);
         this._display.videoFrameRect(frame, frame_id, x, y, width, height);
         this._timestampMap.delete(frame.timestamp);
     }
 
     _processVideoFrameRect(x, y, width, height, sock, display, depth, frame_id) {
-
         let [key_frame, dataArr] = this._readData(sock);
-        console.log('key_frame: ' + key_frame);
+        Log.Debug('key_frame: ', key_frame);
         if (dataArr === null) {
             return false;
         }
@@ -127,10 +118,6 @@ export default class KasmVideoDecoder {
         if (width !== this._width && height !== this._height)
             this._updateSize(width, height)
 
-        console.log('_processVideoFrameRect', dataArr);
-
-        // const type = dataArr[0] ? "key" : "delta";
-        // const vidData = dataArr.slice(1).buffer; //// ???? ТУТ ОШИБКА TODO: поправить
         const vidChunk = new EncodedVideoChunk({
             type: key_frame ? 'key' : 'delta',
             data: dataArr,
@@ -151,7 +138,6 @@ export default class KasmVideoDecoder {
     _readData(sock) {
         if (this._len === 0) {
             if (sock.rQwait("KasmVideo", 4)) {
-                console.log('need more data sock.rQwait("KasmVideo", 4)');
                 return [0, null];
             }
 

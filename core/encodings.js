@@ -30,6 +30,25 @@ export const encodings = {
     pseudoEncodingCompressLevel9: -247,
     pseudoEncodingCompressLevel0: -256,
 
+    pseudoEncodingRenderFormat: -1040,
+    pseudoEncodingVideoQualityLevelBase: -1037,
+
+    // AV1
+    pseudoEncodingAV1QSV: -1036,
+    pseudoEncodingAV1NVENC: -1035,
+    pseudoEncodingAV1VAAPI: -1034,
+    pseudoEncodingAV1SW: -1033,
+    // h.265
+    pseudoEncodingHEVCQSV: -1032,
+    pseudoEncodingHEVCNVENC: -1031,
+    pseudoEncodingHEVCVAAPI: -1030,
+    pseudoEncodingHEVCSW: -1029,
+    // h.264
+    pseudoEncodingAVCQSV: -1028,
+    pseudoEncodingAVCNVENC: -1027,
+    pseudoEncodingAVCVAAPI: -1026,
+    pseudoEncodingAVCSW: -1025,
+
     pseudoEncodingWEBP: -1024,
     pseudoEncodingJpegVideoQualityLevel0: -1023,
     pseudoEncodingJpegVideoQualityLevel9: -1014,

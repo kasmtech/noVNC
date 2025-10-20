@@ -40,6 +40,7 @@ import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
 import UDPDecoder from './decoders/udp.js';
 import { toSignedRelative16bit } from './util/int.js';
+import { UI_SETTING_STREAM_MODES, UI_SETTING_PROFILE_OPTIONS } from '../app/constants.js';
 
 // How many seconds to wait for a disconnect to finish
 const DISCONNECT_TIMEOUT = 3;
@@ -331,6 +332,12 @@ export default class RFB extends EventTargetMixin {
         this._qualityLevel = 6;
         this._compressionLevel = 2;
         this._clipHash = 0;
+
+        this._hw_encoder_profile = UI_SETTING_PROFILE_OPTIONS.BASELINE;
+        this._gop = this._frameRate;
+        this._videoStreamQuality = 23;
+        this._qualityPreset = 3;
+        this._streamMode = UI_SETTING_STREAM_MODES.JPEG_WEBP;
     }
 
     // ===== PROPERTIES =====
@@ -759,6 +766,49 @@ export default class RFB extends EventTargetMixin {
         if (value !== this._threading) {
             this._threading = value;
             this._display.threading = value;
+        }
+    }
+
+    get hw_encoder_profile() { return this._hw_encoder_profile; }
+    set hw_encoder_profile(value) {
+        if (value !== this._hw_encoder_profile) {
+            this._hw_encoder_profile = value;
+            this._pendingApplyEncodingChanges = true
+        }
+    }
+
+    get gop() { return this._gop; }
+    set gop(value) {
+        if (value !== this._gop) {
+            this._gop = value;
+            this._pendingApplyEncodingChanges = true
+        }
+    }
+
+    get videoStreamQuality() {
+        return this._videoStreamQuality;
+    }
+
+    set videoStreamQuality(value) {
+        if (value !== this._videoStreamQuality) {
+            this._videoStreamQuality = value;
+            this._pendingApplyEncodingChanges = true;
+        }
+    }
+
+    get qualityPreset() { return this._qualityPreset; }
+    set qualityPreset(value) {
+        if (value !== this._qualityPreset) {
+            this._qualityPreset = value;
+            this._pendingApplyEncodingChanges = true
+        }
+    }
+
+    get streamMode() { return this._streamMode; }
+    set streamMode(value) {
+        if (value !== this._buffer) {
+            this._buffer = value;
+            this._pendingApplyEncodingChanges = true
         }
     }
 

@@ -1185,7 +1185,7 @@ export default class RFB extends EventTargetMixin {
             this._handleMessage();
         });
         this._sock.on('open', () => {
-            if ((this._rfbConnectionState === 'connecting') &&
+            if ((this.isConnecting) &&
                 (this._rfbInitState === '')) {
                 this._rfbInitState = 'ProtocolVersion';
                 Log.Debug("Starting VNC handshake");

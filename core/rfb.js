@@ -339,7 +339,7 @@ export default class RFB extends EventTargetMixin {
         this._compressionLevel = 2;
         this._clipHash = 0;
 
-        this._hw_encoder_profile = UI_SETTING_PROFILE_OPTIONS.BASELINE;
+        this._hwEncoderProfile = UI_SETTING_PROFILE_OPTIONS.BASELINE;
         this._gop = this._frameRate;
         this._videoStreamQuality = 23;
         this._qualityPreset = 3;
@@ -775,10 +775,10 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    get hw_encoder_profile() { return this._hw_encoder_profile; }
-    set hw_encoder_profile(value) {
-        if (value !== this._hw_encoder_profile) {
-            this._hw_encoder_profile = value;
+    get hwEncoderProfile() { return this._hwEncoderProfile; }
+    set hwEncoderProfile(value) {
+        if (value !== this._hwEncoderProfile) {
+            this._hwEncoderProfile = value;
             this._pendingApplyEncodingChanges = true
         }
     }
@@ -812,8 +812,8 @@ export default class RFB extends EventTargetMixin {
 
     get streamMode() { return this._streamMode; }
     set streamMode(value) {
-        if (value !== this._buffer) {
-            this._buffer = value;
+        if (value !== this._streamMode) {
+            this._streamMode = value;
             this._pendingApplyEncodingChanges = true
         }
     }
@@ -3294,7 +3294,12 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingFrameRateLevel10 + this.frameRate - 10);
         encs.push(encodings.pseudoEncodingMaxVideoResolution);
 
-	// preferBandwidth choses preset settings. Since we expose all the settings, lets not pass this
+        encs.push(encodings.pseudoEncodingStreamingMode + this.streamMode);
+        encs.push(encodings.pseudoEncodingHardwareProfile0 + this.hwEncoderProfile);
+        encs.push(encodings.pseudoEncodingGOP1 + this.gop + 1);
+        encs.push(encodings.pseudoEncodingStreamingVideoQualityLevel0 - this.videoQuality);
+
+	// preferBandwidth choses preset settings. Since we expose all the settings, let's not pass this
         if (this.preferBandwidth) // must be last - server processes in reverse order
             encs.push(encodings.pseudoEncodingPreferBandwidth);
 

@@ -42,7 +42,13 @@ import RFB from "../core/rfb.js";
 import { MouseButtonMapper, XVNC_BUTTONS } from "../core/mousebuttonmapper.js";
 import * as WebUtil from "./webutil.js";
 import { uuidv4 } from '../core/util/strings.js';
-import { UI_SETTINGS_CONTROL_ID, UI_SETTINGS_STREAM_MODE_QUALITY_SETTINGS_GROUPS, UI_SETTING_STREAM_MODES, UI_SETTING_PROFILE_OPTIONS } from './constants.js';
+import {
+    UI_SETTINGS_CONTROL_ID,
+    UI_SETTINGS_STREAM_MODE_QUALITY_SETTINGS_GROUPS,
+    UI_SETTING_STREAM_MODES,
+    UI_SETTING_PROFILE_OPTIONS,
+    UI_SETTINGS_CONTROL_ID as UI_SETTINGS
+} from './constants.js';
 
 const PAGE_TITLE = "KasmVNC";
 
@@ -297,11 +303,10 @@ const UI = {
         UI.initSetting('enable_hidpi', false);
 
         UI.initSetting(UI_SETTINGS_CONTROL_ID.STREAM_MODE, UI_SETTING_STREAM_MODES.JPEG_WEBP);
-        UI.initSetting(UI_SETTINGS_CONTROL_ID.HW_PROFILE, UI_SETTING_PROFILE_OPTIONS.BASELINE);
-        UI.initSetting(UI_SETTINGS_CONTROL_ID.HW_PROFILE, 'baseline');
-        UI.initSetting(UI_SETTINGS_CONTROL_ID.GOP, getSetting('framerate'));
+        // UI.initSetting(UI_SETTINGS_CONTROL_ID.HW_PROFILE, UI_SETTING_PROFILE_OPTIONS.BASELINE);
+        UI.initSetting(UI_SETTINGS_CONTROL_ID.GOP, this.getSetting('framerate'));
         UI.initSetting(UI_SETTINGS_CONTROL_ID.VIDEO_STREAM_QUALITY, 23);
-        UI.initSetting(UI_SETTINGS_CONTROL_ID.PRESET, 3);
+        // UI.initSetting(UI_SETTINGS_CONTROL_ID.PRESET, 3);
 
         UI.toggleKeyboardControls();
 
@@ -563,7 +568,7 @@ const UI = {
     },
 
     addSettingChangeHandlerByName(name) {
-        this.addSettingChangeHandler(name, UI.updateRfbProperty(name));
+        this.addSettingChangeHandler(name, UI.updatePropertyName(name));
     },
 
     addSettingsHandlers() {
@@ -643,10 +648,10 @@ const UI = {
         UI.addSettingChangeHandler('enable_threading', UI.threading);
 
         UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.STREAM_MODE, UI.streamMode);
-        UI.addSettingChangeHandlerByName(UI_SETTINGS_CONTROL_ID.HW_PROFILE);
+        // UI.addSettingChangeHandlerByName(UI_SETTINGS_CONTROL_ID.HW_PROFILE);
         UI.addSettingChangeHandlerByName(UI_SETTINGS_CONTROL_ID.GOP);
         UI.addSettingChangeHandlerByName(UI_SETTINGS_CONTROL_ID.VIDEO_STREAM_QUALITY);
-        UI.addSettingChangeHandlerByName(UI_SETTINGS_CONTROL_ID.PRESET);
+        // UI.addSettingChangeHandlerByName(UI_SETTINGS_CONTROL_ID.PRESET);
     },
 
     addFullscreenHandlers() {
@@ -799,7 +804,7 @@ const UI = {
     },
 
     updatePropertyName(propertyName) {
-        return this.updateRfbProperty(propertyName, propertyName);
+        return UI.updateRfbProperty(propertyName, propertyName);
     },
 
     updateRfbProperty(propertyName, settingId) {
@@ -808,6 +813,8 @@ const UI = {
                 UI.rfb  [propertyName] = Number(event.target.value);
             }
             UI.saveSetting(settingId);
+
+            UI.updateQuality();
         }
     },
 
@@ -835,7 +842,7 @@ const UI = {
     streamMode(event) {
         const value = Number(event.target.value);
         UI.toggleStreamModeGroupVisibility(value);
-        this.updateRfbProperty('streamMode', UI_SETTINGS_CONTROL_ID.STREAM_MODE);
+        UI.updatePropertyName(UI_SETTINGS_CONTROL_ID.STREAM_MODE);
     },
 
     showStatus(text, statusType, time, kasm = false) {
@@ -1495,6 +1502,32 @@ const UI = {
         Log.Debug("<< UI.clipboardSend");
     },
 
+    setConnectionQualityValues() {
+        UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
+        UI.rfb.antiAliasing = parseInt(UI.getSetting('anti_aliasing'));
+        UI.rfb.dynamicQualityMin = parseInt(UI.getSetting('dynamic_quality_min'));
+        UI.rfb.dynamicQualityMax = parseInt(UI.getSetting('dynamic_quality_max'));
+        UI.rfb.jpegVideoQuality = parseInt(UI.getSetting('jpeg_video_quality'));
+        UI.rfb.webpVideoQuality = parseInt(UI.getSetting('webp_video_quality'));
+        UI.rfb.videoArea = parseInt(UI.getSetting('video_area'));
+        UI.rfb.videoTime = parseInt(UI.getSetting('video_time'));
+        UI.rfb.videoOutTime = parseInt(UI.getSetting('video_out_time'));
+        UI.rfb.videoScaling = parseInt(UI.getSetting('video_scaling'));
+        UI.rfb.treatLossless = parseInt(UI.getSetting('treat_lossless'));
+        UI.rfb.maxVideoResolutionX = parseInt(UI.getSetting('max_video_resolution_x'));
+        UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
+        UI.rfb.frameRate = parseInt(UI.getSetting('framerate'));
+        UI.rfb.enableWebP = UI.getSetting('enable_webp');
+        UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
+        UI.rfb.enableHiDpi = UI.getSetting('enable_hidpi');
+        UI.rfb.threading = UI.getSetting('enable_threading');
+
+        UI.rfb.streamMode = parseInt(UI.getSetting(UI_SETTINGS_CONTROL_ID.STREAM_MODE));
+        // UI.rfb.hwEncoderProfile = parseInt(UI.getSetting(UI_SETTINGS_CONTROL_ID.HW_PROFILE));
+        UI.rfb.gop = parseInt(UI.getSetting(UI_SETTINGS_CONTROL_ID.GOP));
+        UI.rfb.videoStreamQuality = parseInt(UI.getSetting(UI_SETTINGS_CONTROL_ID.VIDEO_STREAM_QUALITY));
+    },
+
 /* ------^-------
  *  /CLIPBOARD
  * ==============
@@ -1570,45 +1603,29 @@ const UI = {
         UI.rfb.addEventListener("screenregistered", UI.screenRegistered);
         UI.rfb.addEventListener("sharedSessionUserJoin", UI.sharedSessionUserJoin);
         UI.rfb.addEventListener("sharedSessionUserLeft", UI.sharedSessionUserLeft);
+
         UI.rfb.translateShortcuts = UI.getSetting('translate_shortcuts');
         UI.rfb.clipViewport = UI.getSetting('view_clip');
         UI.rfb.scaleViewport = UI.getSetting('resize') === 'scale';
         UI.rfb.resizeSession = UI.getSetting('resize') === 'remote';
-        UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
-        UI.rfb.dynamicQualityMin = parseInt(UI.getSetting('dynamic_quality_min'));
-        UI.rfb.dynamicQualityMax = parseInt(UI.getSetting('dynamic_quality_max'));
-        UI.rfb.jpegVideoQuality = parseInt(UI.getSetting('jpeg_video_quality'));
-        UI.rfb.webpVideoQuality = parseInt(UI.getSetting('webp_video_quality'));
-        UI.rfb.videoArea = parseInt(UI.getSetting('video_area'));
-        UI.rfb.videoTime = parseInt(UI.getSetting('video_time'));
-        UI.rfb.videoOutTime = parseInt(UI.getSetting('video_out_time'));
-        UI.rfb.videoScaling = parseInt(UI.getSetting('video_scaling'));
-        UI.rfb.treatLossless = parseInt(UI.getSetting('treat_lossless'));
-        UI.rfb.maxVideoResolutionX = parseInt(UI.getSetting('max_video_resolution_x'));
-        UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
-        UI.rfb.frameRate = parseInt(UI.getSetting('framerate'));
+
+        UI.setConnectionQualityValues();
+
         UI.rfb.compressionLevel = parseInt(UI.getSetting('compression'));
         UI.rfb.showDotCursor = UI.getSetting('show_dot');
         UI.rfb.idleDisconnect = UI.getSetting('idle_disconnect');
         UI.rfb.pointerRelative = UI.getSetting('pointer_relative');
-        UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
-        UI.rfb.antiAliasing = UI.getSetting('anti_aliasing');
         UI.rfb.clipboardUp = UI.getSetting('clipboard_up');
         UI.rfb.clipboardDown = UI.getSetting('clipboard_down');
         UI.rfb.clipboardSeamless = UI.getSetting('clipboard_seamless');
         UI.rfb.keyboard.enableIME = UI.getSetting('enable_ime');
         UI.rfb.clipboardBinary = supportsBinaryClipboard() && UI.rfb.clipboardSeamless;
         UI.rfb.enableWebRTC = UI.getSetting('enable_webrtc');
-        UI.rfb.enableHiDpi = UI.getSetting('enable_hidpi');
-        UI.rfb.threading = UI.getSetting('enable_threading');
         UI.rfb.mouseButtonMapper = UI.initMouseButtonMapper();
-        UI.rfb.hw_encoder_profile = UI.getSetting(UI_SETTINGS_CONTROL_ID.HW_PROFILE);
-        UI.rfb.videoStreamQuality = UI.getSetting(UI_SETTINGS_CONTROL_ID.STREAM_MODE);
-        UI.rfb.gop = UI.getSetting(UI_SETTINGS_CONTROL_ID.GOP);
-        UI.rfb.qualityPreset = UI.getSetting(UI_SETTINGS_CONTROL_ID.PRESET);
+        // UI.rfb.qualityPreset = UI.getSetting(UI_SETTINGS_CONTROL_ID.PRESET);
         if (UI.rfb.videoQuality === 5) {
             UI.rfb.enableQOI = true;
-	    }
+        }
 
         //Only explicitly request permission to clipboard on browsers that support binary clipboard access
         if (supportsBinaryClipboard()) {
@@ -1623,7 +1640,6 @@ const UI = {
             UI.rfb.clipboardSeamless = false;
         }
         UI.rfb.preferLocalCursor = UI.getSetting('prefer_local_cursor');
-        UI.rfb.enableWebP = UI.getSetting('enable_webp');
         UI.updateViewOnly(); // requires UI.rfb
 
         /****
@@ -1935,6 +1951,18 @@ const UI = {
                     if (UI.rfb) {
                         UI.rfb.terminate();
                     }
+                    break;
+                case 'set_streaming_mode':
+                    UI.forceSetting(UI_SETTINGS_CONTROL_ID.STREAM_MODE, parseInt(event.data.value), false);
+                    UI.updateQuality();
+                    break;
+                case 'set_video_stream_quality':
+                    UI.forceSetting(UI_SETTINGS_CONTROL_ID.VIDEO_STREAM_QUALITY, parseInt(event.data.value), false);
+                    UI.updateQuality();
+                    break;
+                case 'set_gop':
+                    UI.forceSetting(UI_SETTINGS_CONTROL_ID.GOP, parseInt(event.data.value), false);
+                    UI.updateQuality();
                     break;
 
             }
@@ -2708,25 +2736,9 @@ const UI = {
         }
 
         if (UI.rfb) {
-            UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
-            UI.rfb.antiAliasing = parseInt(UI.getSetting('anti_aliasing'));
-            UI.rfb.dynamicQualityMin = parseInt(UI.getSetting('dynamic_quality_min'));
-            UI.rfb.dynamicQualityMax = parseInt(UI.getSetting('dynamic_quality_max'));
-            UI.rfb.jpegVideoQuality = parseInt(UI.getSetting('jpeg_video_quality'));
-            UI.rfb.webpVideoQuality = parseInt(UI.getSetting('webp_video_quality'));
-            UI.rfb.videoArea = parseInt(UI.getSetting('video_area'));
-            UI.rfb.videoTime = parseInt(UI.getSetting('video_time'));
-            UI.rfb.videoOutTime = parseInt(UI.getSetting('video_out_time'));
-            UI.rfb.videoScaling = parseInt(UI.getSetting('video_scaling'));
-            UI.rfb.treatLossless = parseInt(UI.getSetting('treat_lossless'));
-            UI.rfb.maxVideoResolutionX = parseInt(UI.getSetting('max_video_resolution_x'));
-            UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
-            UI.rfb.frameRate = parseInt(UI.getSetting('framerate'));
-            UI.rfb.enableWebP = UI.getSetting('enable_webp');
-            UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
+            UI.setConnectionQualityValues();
+
             UI.rfb.enableQOI = enable_qoi;
-            UI.rfb.enableHiDpi = UI.getSetting('enable_hidpi');
-            UI.rfb.threading = UI.getSetting('enable_threading');
 
             // Gracefully update settings server side
             UI.rfb.updateConnectionSettings();

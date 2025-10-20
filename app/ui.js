@@ -6,6 +6,8 @@
  *
  * See README.md for usage and integration instructions.
  */
+import CodecDetector from "../core/util/codecs";
+
 window._noVNC_has_module_support = true;
 window.addEventListener("load", function() {
     if (window._noVNC_has_module_support) return;
@@ -40,7 +42,7 @@ import RFB from "../core/rfb.js";
 import { MouseButtonMapper, XVNC_BUTTONS } from "../core/mousebuttonmapper.js";
 import * as WebUtil from "./webutil.js";
 import { uuidv4 } from '../core/util/strings.js';
-import { UI_SETTINGS_CONTROL_ID } from './constants.js';
+import { UI_SETTINGS_CONTROL_ID, UI_SETTINGS_STREAM_MODE_QUALITY_SETTINGS_GROUPS, UI_SETTING_STREAM_MODES, UI_SETTING_PROFILE_OPTIONS } from './constants.js';
 
 const PAGE_TITLE = "KasmVNC";
 
@@ -74,16 +76,26 @@ const UI = {
     registeredWindows: new Map([['primary', 'primary']]),
 
     supportsBroadcastChannel: (typeof BroadcastChannel !== "undefined"),
+    codecDetector: null,
+    codecs: null,
 
-    prime() {
-        return WebUtil.initSettings().then(() => {
-            if (document.readyState === "interactive" || document.readyState === "complete") {
-                return UI.start();
-            }
+    prime: async () => {
+        await WebUtil.initSettings();
+        try {
+            const detector = await (new CodecDetector()).detect();
+            UI.codecDetector = detector;
+            UI.codecs = detector.getSupportedCodecs();
+            Log.Debug('Supported Codecs: ', UI.codecs);
+        } catch (e) {
+            Log.Warn('Failed to detect codecs: ', e);
+        }
 
-            return new Promise((resolve, reject) => {
-                document.addEventListener('DOMContentLoaded', () => UI.start().then(resolve).catch(reject));
-            });
+        if (document.readyState === "interactive" || document.readyState === "complete") {
+            return UI.start();
+        }
+
+        return new Promise((resolve, reject) => {
+            document.addEventListener('DOMContentLoaded', () => UI.start().then(resolve).catch(reject));
         });
     },
 
@@ -145,10 +157,8 @@ const UI = {
         UI.addSettingsHandlers();
         UI.addDisplaysHandler();
         // UI.addMultiMonitorAddHandler();
-        document.getElementById("noVNC_status")
-            .addEventListener('click', UI.hideStatus);
+        document.getElementById("noVNC_status").addEventListener('click', UI.hideStatus);
         UI.openControlbar();
-
 
         UI.updateVisualState('init');
 
@@ -281,12 +291,14 @@ const UI = {
         UI.initSetting('enable_ime', false);
         UI.initSetting('enable_webrtc', false);
         UI.initSetting('enable_hidpi', false);
-        UI.initSetting(UI_SETTINGS_CONTROL_ID.PROFILE, 'baseline');
-        UI.initSetting(UI_SETTINGS_CONTROL_ID.KEYFRAME_INTERVAL, 1);
-        UI.initSetting(UI_SETTINGS_CONTROL_ID.CRF, 23);
-        UI.initSetting(UI_SETTINGS_CONTROL_ID.BITRATE, 30);
+
+        UI.initSetting(UI_SETTINGS_CONTROL_ID.STREAM_MODE, UI_SETTING_STREAM_MODES.JPEG_WEBP);
+        UI.initSetting(UI_SETTINGS_CONTROL_ID.HW_PROFILE, UI_SETTING_PROFILE_OPTIONS.BASELINE);
+        UI.initSetting(UI_SETTINGS_CONTROL_ID.HW_PROFILE, 'baseline');
+        UI.initSetting(UI_SETTINGS_CONTROL_ID.GOP, getSetting('framerate'));
+        UI.initSetting(UI_SETTINGS_CONTROL_ID.VIDEO_STREAM_QUALITY, 23);
         UI.initSetting(UI_SETTINGS_CONTROL_ID.PRESET, 3);
-        UI.initSetting(UI_SETTINGS_CONTROL_ID.BUFFER, 30);
+
         UI.toggleKeyboardControls();
 
         if ((WebUtil.isInsideKasmVDI()) && (! WebUtil.getConfigVar('show_control_bar'))) {
@@ -315,6 +327,9 @@ const UI = {
             UI.initSetting('enable_webp', true);
             UI.initSetting('resize', 'remote');
         }
+
+        const currentStreamMode = UI.getSetting(UI_SETTINGS_CONTROL_ID.STREAM_MODE);
+        UI.toggleStreamModeGroupVisibility(Number(currentStreamMode))
 
         UI.setupSettingLabels();
         UI.updateQuality();
@@ -543,6 +558,10 @@ const UI = {
         settingElem.addEventListener('change', changeFunc);
     },
 
+    addSettingChangeHandlerByName(name) {
+        this.addSettingChangeHandler(name, UI.updateRfbProperty(name));
+    },
+
     addSettingsHandlers() {
         UI.addClickHandle('noVNC_settings_button', UI.toggleSettingsPanel);
 
@@ -618,12 +637,12 @@ const UI = {
         UI.addSettingChangeHandler('enable_hidpi', UI.enableHiDpi);
         UI.addSettingChangeHandler('enable_threading');
         UI.addSettingChangeHandler('enable_threading', UI.threading);
-        UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.PROFILE);
-        UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.KEYFRAME_INTERVAL);
-        UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.CRF);
-        UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.BITRATE);
-        UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.PRESET);
-        UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.BUFFER);
+
+        UI.addSettingChangeHandler(UI_SETTINGS_CONTROL_ID.STREAM_MODE, UI.streamMode);
+        UI.addSettingChangeHandlerByName(UI_SETTINGS_CONTROL_ID.HW_PROFILE);
+        UI.addSettingChangeHandlerByName(UI_SETTINGS_CONTROL_ID.GOP);
+        UI.addSettingChangeHandlerByName(UI_SETTINGS_CONTROL_ID.VIDEO_STREAM_QUALITY);
+        UI.addSettingChangeHandlerByName(UI_SETTINGS_CONTROL_ID.PRESET);
     },
 
     addFullscreenHandlers() {
@@ -775,6 +794,46 @@ const UI = {
         UI.saveSetting('enable_threading');
     },
 
+    updatePropertyName(propertyName) {
+        return this.updateRfbProperty(propertyName, propertyName);
+    },
+
+    updateRfbProperty(propertyName, settingId) {
+        return (event) => {
+            if (UI.rfb) {
+                UI.rfb  [propertyName] = Number(event.target.value);
+            }
+            UI.saveSetting(settingId);
+        }
+    },
+
+    gop(event) {
+        if (UI.rfb) {
+            UI.rfb.gop = Number(event.target.value);
+        }
+        UI.saveSetting(UI_SETTINGS_CONTROL_ID.GOP);
+    },
+
+    videoStreamQuality(event) {
+        if (UI.rfb) {
+            UI.rfb.videoStreamQuality = Number(event.target.value);
+        }
+        UI.saveSetting(UI_SETTINGS_CONTROL_ID.VIDEO_STREAM_QUALITY);
+    },
+
+    qualityPreset(event) {
+        if (UI.rfb) {
+            UI.rfb.qualityPreset = Number(event.target.value);
+        }
+        UI.saveSetting(UI_SETTINGS_CONTROL_ID.PRESET);
+    },
+
+    streamMode(event) {
+        const value = Number(event.target.value);
+        UI.toggleStreamModeGroupVisibility(value);
+        this.updateRfbProperty('streamMode', UI_SETTINGS_CONTROL_ID.STREAM_MODE);
+    },
+
     showStatus(text, statusType, time, kasm = false) {
         // If inside the full Kasm CDI framework, don't show messages unless explicitly told to
         if (WebUtil.isInsideKasmVDI() && !kasm) {
@@ -916,6 +975,18 @@ const UI = {
 
         // Consider this a movement of the handle
         UI.controlbarDrag = true;
+    },
+
+    toggleStreamModeGroupVisibility(streamModeValue) {
+        const isImageGroupVisible = streamModeValue === UI_SETTING_STREAM_MODES.JPEG_WEBP;
+        const imageGroup = document.getElementById(UI_SETTINGS_STREAM_MODE_QUALITY_SETTINGS_GROUPS.IMAGE_GROUP);
+        const videoGroup = document.getElementById(UI_SETTINGS_STREAM_MODE_QUALITY_SETTINGS_GROUPS.VIDEO_GROUP);
+        if (imageGroup) {
+            imageGroup.style.display = isImageGroupVisible ? 'block' : 'none';
+        }
+        if (videoGroup) {
+            videoGroup.style.display = !isImageGroupVisible ? 'block' : 'none';
+        }
     },
 
     showControlbarHint(show) {
@@ -1527,6 +1598,10 @@ const UI = {
         UI.rfb.enableHiDpi = UI.getSetting('enable_hidpi');
         UI.rfb.threading = UI.getSetting('enable_threading');
         UI.rfb.mouseButtonMapper = UI.initMouseButtonMapper();
+        UI.rfb.hw_encoder_profile = UI.getSetting(UI_SETTINGS_CONTROL_ID.HW_PROFILE);
+        UI.rfb.videoStreamQuality = UI.getSetting(UI_SETTINGS_CONTROL_ID.STREAM_MODE);
+        UI.rfb.gop = UI.getSetting(UI_SETTINGS_CONTROL_ID.GOP);
+        UI.rfb.qualityPreset = UI.getSetting(UI_SETTINGS_CONTROL_ID.PRESET);
         if (UI.rfb.videoQuality === 5) {
             UI.rfb.enableQOI = true;
 	    }

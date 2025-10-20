@@ -868,7 +868,7 @@ export default class RFB extends EventTargetMixin {
     This function must be called after changing any properties that effect rendering quality
     */
     updateConnectionSettings() {
-        if (this._rfbConnectionState === 'connected' && this._isPrimaryDisplay) {
+        if (this.isConnected && this._isPrimaryDisplay) {
 
             if (this._pendingApplyVideoRes) {
                 RFB.messages.setMaxVideoResolution(this._sock, this._maxVideoResolutionX, this._maxVideoResolutionY);

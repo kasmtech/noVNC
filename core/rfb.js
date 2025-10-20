@@ -804,7 +804,7 @@ export default class RFB extends EventTargetMixin {
                 minX = Math.min(minX, screenPlan.screens[i].x);
                 minY = Math.min(minY, screenPlan.screens[i].y);
                 for (let z = 0; z < fullPlan.screens.length; z++) {
-                    if (screenPlan.screens[i].screenID == fullPlan.screens[z].screenID) {
+                    if (screenPlan.screens[i].screenID === fullPlan.screens[z].screenID) {
                         numScreensFound++;
                     }
                 }
@@ -825,7 +825,7 @@ export default class RFB extends EventTargetMixin {
                 //send updates to secondary screens
                 for (let i = 0; i < screenPlan.screens.length; i++) {
                     for (let z = 1; z < fullPlan.screens.length; z++) {
-                        if (screenPlan.screens[i].screenID == fullPlan.screens[z].screenID) {
+                        if (screenPlan.screens[i].screenID === fullPlan.screens[z].screenID) {
                             this._proxyRFBMessage('applyScreenPlan', [ fullPlan.screens[z].screenID, fullPlan.screens[z].screenIndex, screenPlan.screens[i].width, screenPlan.screens[i].height, screenPlan.screens[i].x, screenPlan.screens[i].y ]);
                         }
                     }
@@ -3204,7 +3204,7 @@ export default class RFB extends EventTargetMixin {
             Log.Debug("Multiple displays detected, disabling copyrect encoding.");
         }
         // Only supported with full depth support
-        if (this._fbDepth == 24) {
+        if (this._fbDepth === 24) {
             encs.push(encodings.encodingKasmVideo);
             encs.push(encodings.encodingTight);
             encs.push(encodings.encodingTightPNG);
@@ -3231,7 +3231,6 @@ export default class RFB extends EventTargetMixin {
         if (this._enableQOI)
             encs.push(encodings.pseudoEncodingQOI);
 
-
         // kasm settings; the server may be configured to ignore these
         encs.push(encodings.pseudoEncodingJpegVideoQualityLevel0 + this.jpegVideoQuality);
         encs.push(encodings.pseudoEncodingWebpVideoQualityLevel0 + this.webpVideoQuality);
@@ -3249,7 +3248,7 @@ export default class RFB extends EventTargetMixin {
         if (this.preferBandwidth) // must be last - server processes in reverse order
             encs.push(encodings.pseudoEncodingPreferBandwidth);
 
-        if (this._fbDepth == 24) {
+        if (this._fbDepth === 24) {
             encs.push(encodings.pseudoEncodingVMwareCursor);
             encs.push(encodings.pseudoEncodingCursor);
         }

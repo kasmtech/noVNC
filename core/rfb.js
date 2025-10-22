@@ -622,8 +622,8 @@ export default class RFB extends EventTargetMixin {
 
     get frameRate() { return this._frameRate; }
     set frameRate(value) {
-        if (!Number.isInteger(value) || value < 1 || value > 120) {
-            Log.Error("frame rate must be an integer between 1 and 120");
+        if (!Number.isInteger(value) || value < 10 || value > 120) {
+            Log.Error("frame rate must be an integer between 10 and 120");
             return;
         }
 
@@ -3179,7 +3179,11 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingVideoTimeLevel0 + this.videoTime);
         encs.push(encodings.pseudoEncodingVideoOutTimeLevel1 + this.videoOutTime - 1);
         encs.push(encodings.pseudoEncodingVideoScalingLevel0 + this.videoScaling);
-        encs.push(encodings.pseudoEncodingFrameRateLevel10 + this.frameRate - 10);
+        const frameRate = Math.round(Math.max(10, Math.min(120, this.frameRate)));
+        if (frameRate !== this.frameRate) {
+            Log.Warn("Frame rate value " + this.frameRate + " adjusted to " + frameRate);
+        }
+        encs.push(encodings.pseudoEncodingFrameRateLevel10 + frameRate - 10);
         encs.push(encodings.pseudoEncodingMaxVideoResolution);
         
 	// preferBandwidth choses preset settings. Since we expose all the settings, lets not pass this

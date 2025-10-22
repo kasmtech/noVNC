@@ -50,6 +50,7 @@ import {
     FPS
 } from './constants.js';
 import {encodings} from "../core/encodings.js";
+import { normalizeFrameRate } from "../core/frame-rate.js";
 import CodecDetector, {CODEC_VARIANT_NAMES, preferredCodecs} from "../core/codecs";
 import { perfLogger } from '../core/util/performance-logger.js';
 
@@ -1451,6 +1452,7 @@ const UI = {
         if (val === null) {
             val = WebUtil.readSetting(name, defVal);
         }
+        val = UI.sanitizeSetting(name, val);
         WebUtil.setSetting(name, val);
         UI.updateSetting(name);
         return val;
@@ -1458,6 +1460,7 @@ const UI = {
 
     // Set the new value, update and disable form control setting
     forceSetting(name, val, disable=true) {
+        val = UI.sanitizeSetting(name, val);
         WebUtil.setSetting(name, val);
         UI.updateSetting(name);
         if (disable) {
@@ -1497,6 +1500,18 @@ const UI = {
         }
     },
 
+    // Ensure settings stay within supported bounds
+    sanitizeSetting(name, value) {
+        switch (name) {
+            case 'framerate':
+            case 'framerate_image_mode':
+            case 'framerate_streaming_mode':
+                return String(normalizeFrameRate(value, FPS.MIN));
+            default:
+                return value;
+        }
+    },
+
     // Save control setting to cookie
     saveSetting(name) {
         const ctrl = document.getElementById('noVNC_setting_' + name);
@@ -1508,6 +1523,13 @@ const UI = {
             val = ctrl.options[ctrl.selectedIndex].value;
         } else {
             val = ctrl.value;
+        }
+        const sanitized = UI.sanitizeSetting(name, val);
+        if (sanitized !== val) {
+            if (ctrl && typeof ctrl.value !== 'undefined') {
+                ctrl.value = sanitized;
+            }
+            val = sanitized;
         }
         WebUtil.writeSetting(name, val);
         Log.Debug("Setting saved '" + name + "=" + val + "'");
@@ -1528,8 +1550,12 @@ const UI = {
                 val = true;
             }
         }
-
-        return val;
+        const sanitized = UI.sanitizeSetting(name, val);
+        const currentStr = (val === null || typeof val === 'undefined') ? null : String(val);
+        if (sanitized !== val && sanitized !== currentStr) {
+            WebUtil.writeSetting(name, sanitized);
+        }
+        return sanitized;
     },
 
     getSettingElement(name) {

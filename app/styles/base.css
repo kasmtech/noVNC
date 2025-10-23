@@ -354,6 +354,16 @@ select:active {
   visibility: hidden;
 }
 
+#noVNC_fps_chart {
+  top: 40px;
+  left: auto;
+  right: 0;
+  position: fixed;
+  background: #9fa5a2d4;
+  visibility: hidden;
+  display: flex;
+}
+
 /* ----------------------------------------
  * Control Bar
  * ----------------------------------------

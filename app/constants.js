@@ -21,5 +21,12 @@ export const UI_SETTING_STREAM_MODES = {
 export const UI_SETTING_PROFILE_OPTIONS = {
     MAIN: 0,
     BASELINE: 1,
-    HIGH: 2,
+    HIGH: 2
+};
+
+export const UI_FPS_CHART = {
+    WIDTH: 200,
+    HEIGHT: 50,
+    MAX_POINTS: 60,
+    MAX_FPS_VALUE: 120
 };

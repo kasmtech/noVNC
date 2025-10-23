@@ -39,13 +39,13 @@ export const encodings = {
     pseudoEncodingVideoOutTimeLevel100: -1887,
     pseudoEncodingQOI: -1886,
 
-    pseudoEncodingHardwareProfile4: -1169,
-    pseudoEncodingHardwareProfile0: -1165,
+    pseudoEncodingHardwareProfile0: -1170,
+    pseudoEncodingHardwareProfile4: -1166,
 
-    pseudoEncodingGOP59: -1164,
-    pseudoEncodingGOP1: -1105,
-    pseudoEncodingStreamingVideoQualityLevel63: -1104,
-    pseudoEncodingStreamingVideoQualityLevel0: -1041,
+    pseudoEncodingGOP1: -1165,
+    pseudoEncodingGOP60: -1105,
+    pseudoEncodingStreamingVideoQualityLevel0: -1104,
+    pseudoEncodingStreamingVideoQualityLevel63: -1041,
 
     // AV1
     pseudoEncodingAV1QSV: -1040,

@@ -3240,8 +3240,8 @@ export default class RFB extends EventTargetMixin {
 
         encs.push(encodings.pseudoEncodingStreamingMode + this.streamMode);
         encs.push(encodings.pseudoEncodingHardwareProfile0 + this.hwEncoderProfile);
-        encs.push(encodings.pseudoEncodingGOP1 + this.gop + 1);
-        encs.push(encodings.pseudoEncodingStreamingVideoQualityLevel0 - this.videoQuality);
+        encs.push(encodings.pseudoEncodingGOP1 + this.gop);
+        encs.push(encodings.pseudoEncodingStreamingVideoQualityLevel0 + this.videoStreamQuality);
 
 	// preferBandwidth choses preset settings. Since we expose all the settings, let's not pass this
         if (this.preferBandwidth) // must be last - server processes in reverse order

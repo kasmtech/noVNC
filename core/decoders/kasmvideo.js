@@ -20,7 +20,8 @@ const FRAME_DURATION_US = Math.round(1_000_000 / TARGET_FPS);
 export default class KasmVideoDecoder {
     constructor(display) {
         this._len = 0;
-        this._key_frame = 0;
+        this._keyFrame = 0;
+        this._screenId = 0;
         this._ctl = null;
         this._display = display;
         this._codedWidth = null;
@@ -109,8 +110,8 @@ export default class KasmVideoDecoder {
     }
 
     _processVideoFrameRect(x, y, width, height, sock, display, depth, frame_id) {
-        let [key_frame, dataArr] = this._readData(sock);
-        Log.Debug('key_frame: ', key_frame);
+        let [keyFrame, dataArr] = this._readData(sock);
+        Log.Debug('key_frame: ', keyFrame);
         if (dataArr === null) {
             return false;
         }
@@ -119,7 +120,7 @@ export default class KasmVideoDecoder {
             this._updateSize(width, height)
 
         const vidChunk = new EncodedVideoChunk({
-            type: key_frame ? 'key' : 'delta',
+            type: keyFrame ? 'key' : 'delta',
             data: dataArr,
             timestamp: this._timestamp,
         });
@@ -141,7 +142,8 @@ export default class KasmVideoDecoder {
                 return [0, null];
             }
 
-            this._key_frame = sock.rQshift8();
+            this._keyFrame = sock.rQshift8();
+            // this._screenId = sock.rQshift8();
             let byte = sock.rQshift8();
             this._len = byte & 0x7f;
             if (byte & 0x80) {
@@ -159,11 +161,11 @@ export default class KasmVideoDecoder {
         }
 
         let data = sock.rQshiftBytes(this._len);
-        let key_frame = this._key_frame;
+        let keyFrame = this._keyFrame;
         this._len = 0;
-        this._key_frame = 0;
+        this._keyFrame = 0;
 
-        return [key_frame, data];
+        return [keyFrame, data];
     }
 
     dispose() {

@@ -47,7 +47,8 @@ import {
     UI_SETTINGS_STREAM_MODE_QUALITY_SETTINGS_GROUPS,
     UI_SETTING_STREAM_MODES,
     UI_SETTING_PROFILE_OPTIONS,
-    UI_SETTINGS_CONTROL_ID as UI_SETTINGS
+    UI_SETTINGS_CONTROL_ID as UI_SETTINGS,
+    UI_FPS_CHART
 } from './constants.js';
 
 const PAGE_TITLE = "KasmVNC";
@@ -80,6 +81,7 @@ const UI = {
     currentDisplay: null,
     displayWindows: new Map([['primary', 'primary']]),
     registeredWindows: new Map([['primary', 'primary']]),
+    fpsChartTicks: [],
 
     supportsBroadcastChannel: (typeof BroadcastChannel !== "undefined"),
     codecDetector: null,
@@ -776,6 +778,7 @@ const UI = {
         let enable_stats = UI.getSetting('enable_perf_stats');
         if (enable_stats === true && UI.statsInterval == undefined) {
             document.getElementById("noVNC_connection_stats").style.visibility = "visible";
+            document.getElementById("noVNC_fps_chart").style.visibility = 'visible';
             UI.statsInterval = setInterval(function() {
                 if (UI.rfb !== undefined) {
                     UI.rfb.requestBottleneckStats();
@@ -783,6 +786,7 @@ const UI = {
             }  , 5000);
         } else {
             document.getElementById("noVNC_connection_stats").style.visibility = "hidden";
+            document.getElementById("noVNC_fps_chart").style.visibility = 'hidden';
             UI.statsInterval = null;
         }
 
@@ -1464,13 +1468,48 @@ const UI = {
        }
     },
 
-    //recieved bottleneck stats
+    generateFpsChartPath() {
+      if (this.fpsChartTicks.length === 0) {
+            return '';
+        }
+
+        const stepX = UI_FPS_CHART.WIDTH / (UI_FPS_CHART.MAX_POINTS - 1);
+        const scaleY = UI_FPS_CHART.HEIGHT / UI_FPS_CHART.MAX_FPS_VALUE;
+
+        let d = `M 0 ${UI_FPS_CHART.HEIGHT}`;
+
+        for (let i = 0; i < UI.fpsChartTicks.length; i++) {
+            const x = i * stepX;
+            const y = UI_FPS_CHART.HEIGHT - UI.fpsChartTicks[i] * scaleY;
+            d += ` L ${x} ${y}`;
+        }
+
+
+        d += ` L ${(UI.fpsChartTicks.length - 1) * stepX} ${UI_FPS_CHART.HEIGHT} L 0 ${UI_FPS_CHART.HEIGHT} Z`;
+
+        return d;
+    },
+
+    updateFpsChart(fpsValue) {
+        UI.fpsChartTicks.push(fpsValue);
+
+        if (UI.fpsChartTicks.length > UI_FPS_CHART.MAX_POINTS) {
+            UI.fpsChartTicks.shift();
+        }
+        const path = document.getElementById('noVNC_fps_chart_path');
+        if (path) {
+            path.setAttribute('d', UI.generateFpsChartPath());
+        }
+    },
+
+    //received bottleneck stats
     bottleneckStatsRecieve(e) {
         if (UI.rfb) {
             try {
                 let obj = JSON.parse(e.detail.text);
                 let fps = UI.rfb.statsFps;
                 document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
+                UI.updateFpsChart(Number(fps));
                 console.log(e.detail.text);
             } catch (err) {
                 console.log('Invalid bottleneck stats recieved from server.')

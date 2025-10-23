@@ -39,6 +39,7 @@ import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
 import UDPDecoder from './decoders/udp.js';
 import { toSignedRelative16bit } from './util/int.js';
+import { ACTIVE_STATE_EVENTS, RFB_CHANNEL_EVENTS } from './constants.js';
 
 // How many seconds to wait for a disconnect to finish
 const DISCONNECT_TIMEOUT = 3;
@@ -1808,12 +1809,16 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleControlMessage(event) {
+        if (event.data?.eventType && ACTIVE_STATE_EVENTS.has(event.data.eventType)) {
+            this._setLastActive();
+        }
+
         if (this._isPrimaryDisplay) {
             // Secondary to Primary screen message
             let size;
             let coords;
             switch (event.data.eventType) {
-                case 'register':
+                case RFB_CHANNEL_EVENTS.REGISTER:
                     const details = {
                         ...event.data.details,
                         screenID: event.data.screenID
@@ -1826,7 +1831,7 @@ export default class RFB extends EventTargetMixin {
                     this.dispatchEvent(new CustomEvent("screenregistered", { detail: details }));
                     Log.Info(`Secondary monitor (${event.data.screenID}) has been registered.`);
                     break;
-                case 'reattach':
+                case RFB_CHANNEL_EVENTS.REATTACH:
                     let changes = this._display.addScreen(event.data.screenID, event.data.width, event.data.height, event.data.pixelRatio, event.data.containerHeight, event.data.containerWidth, event.data.scale, event.data.serverWidth, event.data.serverHeight, event.data.x, event.data.y, event.data.windowId);
 
                     clearTimeout(this._resizeTimeout);
@@ -1834,7 +1839,7 @@ export default class RFB extends EventTargetMixin {
                     this.dispatchEvent(new CustomEvent("screenregistered", {}));
                     Log.Info(`Secondary monitor (${event.data.screenID}) has been reattached.`);
                     break;
-                case 'unregister':
+                case RFB_CHANNEL_EVENTS.UNREGISTER:
                     if (this._display.removeScreen(event.data.screenID)) {
                         this.dispatchEvent(new CustomEvent("screenregistered", {}));
                         Log.Info(`Secondary monitor (${event.data.screenID}) has been removed.`);
@@ -1847,7 +1852,7 @@ export default class RFB extends EventTargetMixin {
                         Log.Info(`Secondary monitor (${event.data.screenID}) not found.`);
                     }
                     break;
-                case 'mousemove':
+                case RFB_CHANNEL_EVENTS.MOUSEMOVE:
                     coords = this._display.getServerRelativeCoordinates(event.data.screenIndex, event.data.args[0], event.data.args[1]);
                     this._mouseLastScreenIndex = event.data.screenIndex;
                     this._mousePos = { 'x': coords[0], 'y': coords[1] };
@@ -1864,63 +1869,57 @@ export default class RFB extends EventTargetMixin {
                         RFB.messages.pointerEvent(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
                         Log.Debug('Simulated Left Click on secondary display.');
                     }
-
-                    this._setLastActive();
                     break;
-                case 'mousedown':
+                case RFB_CHANNEL_EVENTS.MOUSEDOWN:
                     coords = this._display.getServerRelativeCoordinates(event.data.screenIndex, event.data.args[0], event.data.args[1]);
                     this._mouseLastScreenIndex = event.data.screenIndex;
                     this._mousePos = { 'x': coords[0], 'y': coords[1] };
                     this._mouseButtonMask |= event.data.args[2];
                     RFB.messages.pointerEvent(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
-                    this._setLastActive();
                     break;
-                case 'mouseup':
+                case RFB_CHANNEL_EVENTS.MOUSEUP:
                     coords = this._display.getServerRelativeCoordinates(event.data.screenIndex, event.data.args[0], event.data.args[1]);
                     this._mouseLastScreenIndex = event.data.screenIndex;
                     this._mousePos = { 'x': coords[0], 'y': coords[1] };
                     this._mouseButtonMask &= ~event.data.args[2];
                     RFB.messages.pointerEvent(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
-                    this._setLastActive();
                     break;
-                case 'scroll':
+                case RFB_CHANNEL_EVENTS.SCROLL:
                     coords = this._display.getServerRelativeCoordinates(event.data.screenIndex, event.data.args[0], event.data.args[1]);
                     this._mouseLastScreenIndex = event.data.screenIndex;
                     this._mousePos = { 'x': coords[0], 'y': coords[1] };
                     RFB.messages.pointerEvent(this._sock, this._mousePos.x, this._mousePos.y, 0, event.data.args[2], event.data.args[3]);
-                    this._setLastActive();
                     break;
-                case 'keyEvent':
+                case RFB_CHANNEL_EVENTS.KEY_EVENT:
                     RFB.messages.keyEvent(this._sock, ...event.data.args);
-                    this._setLastActive();
                     break;
-                case 'sendBinaryClipboard':
+                case RFB_CHANNEL_EVENTS.SEND_BINARY_CLIPBOARD:
                     RFB.messages.sendBinaryClipboard(this._sock, ...event.data.args);
                     break;
                 // The following are primary to secondary messages that should be ignored on the primary
-                case 'updateCursor':
+                case RFB_CHANNEL_EVENTS.UPDATE_CURSOR:
                     break;
             }
         } else {
             // Primary to secondary screen message
             switch (event.data.eventType) {
-                case 'updateCursor':
+                case RFB_CHANNEL_EVENTS.UPDATE_CURSOR:
                     this._updateCursor(...event.data.args);
                     this._mouseLastScreenIndex = event.data.mouseLastScreenIndex;
                     break;
-                case 'receivedClipboard':
+                case RFB_CHANNEL_EVENTS.RECEIVED_CLIPBOARD:
                     if (event.data.mouseLastScreenIndex === this._display.screenIndex) {
                         this._write_binary_clipboard(...event.data.args);
                     }
                     break;
-                case 'disconnect':
+                case RFB_CHANNEL_EVENTS.DISCONNECT:
                     this.disconnect();
                     break;
-                case 'terminate':
+                case RFB_CHANNEL_EVENTS.TERMINATE:
                     this.disconnect();
                     window.close();
                     break;
-                case 'applySettings':
+                case  RFB_CHANNEL_EVENTS.APPLY_SETTINGS:
                         if (!this._isPrimaryDisplay) {
                             this.enableHiDpi = event.data.args[0];
                             this.clipViewport = event.data.args[1];
@@ -1937,7 +1936,7 @@ export default class RFB extends EventTargetMixin {
                         }
                         
                 break;
-                case 'applyScreenPlan':
+                case RFB_CHANNEL_EVENTS.APPLY_SCREEN_PLAN:
                     if (event.data.args[0] == this._display.screenID) {
                         this._display.screens[0].screenIndex = event.data.args[1];
                         this._display.screens[0].width = event.data.args[2];
@@ -1948,7 +1947,7 @@ export default class RFB extends EventTargetMixin {
                         this.updateConnectionSettings();
                     }
                     break;
-                case 'screenRegistrationConfirmed':
+                case RFB_CHANNEL_EVENTS.SCREEN_REGISTRATION_CONFIRMED:
                     if (event.data.args[0] == this._display.screenID) {
                         this._display.screens[0].screenIndex = event.data.args[1];
                     }

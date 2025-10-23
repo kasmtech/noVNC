@@ -54,8 +54,4 @@ export default class CodecDetector {
 
         return 'h264'; // fallback
     }
-
-    getCapabilities() {
-        return { ...this._capabilities };
-    }
 }

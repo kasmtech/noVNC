@@ -29,6 +29,7 @@ import DES from "./des.js";
 import KeyTable from "./input/keysym.js";
 import XtScancode from "./input/xtscancodes.js";
 import { encodings } from "./encodings.js";
+import { messages } from "./messages.js";
 import { MouseButtonMapper, xvncButtonToMask } from "./mousebuttonmapper.js";
 
 import RawDecoder from "./decoders/raw.js";
@@ -75,7 +76,7 @@ const extendedClipboardActionNotify  = 1 << 27;
 const extendedClipboardActionProvide = 1 << 28;
 
 export default class RFB extends EventTargetMixin {
-    constructor(target, touchInput, urlOrChannel, options, isPrimaryDisplay) {
+    constructor(target, touchInput, urlOrChannel, options, videoCodecs, isPrimaryDisplay) {
         if (!target) {
             throw new Error("Must specify target");
         }
@@ -101,6 +102,7 @@ export default class RFB extends EventTargetMixin {
         this._repeaterID = options.repeaterID || '';
         this._wsProtocols = options.wsProtocols || ['binary'];
         this._isPrimaryDisplay = (isPrimaryDisplay !== false);
+        this.videoCodecs = videoCodecs;
 
         // Internal state
         this._rfbConnectionState = '';
@@ -337,7 +339,7 @@ export default class RFB extends EventTargetMixin {
         this._gop = this._frameRate;
         this._videoStreamQuality = 23;
         this._qualityPreset = 3;
-        this._streamMode = UI_SETTING_STREAM_MODES.JPEG_WEBP;
+        this._streamMode = encodings.pseudoEncodingStreamingModeJpegWebp;
     }
 
     // ===== PROPERTIES =====
@@ -3152,6 +3154,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         RFB.messages.pixelFormat(this._sock, this._fbDepth, true);
+        RFB.messages.videoEncodersRequest(this._sock, this.videoCodecs);
         this._sendEncodings();
         RFB.messages.fbUpdateRequest(this._sock, false, 0, 0, this._fbWidth, this._fbHeight);
 
@@ -3200,7 +3203,7 @@ export default class RFB extends EventTargetMixin {
         }
         // Only supported with full depth support
         if (this._fbDepth === 24) {
-            encs.push(encodings.encodingKasmVideo);
+            encs.push(encodings.encodingKasmVideoAVC);
             encs.push(encodings.encodingTight);
             encs.push(encodings.encodingTightPNG);
             encs.push(encodings.encodingHextile);
@@ -3240,8 +3243,8 @@ export default class RFB extends EventTargetMixin {
 
         encs.push(encodings.pseudoEncodingStreamingMode + this.streamMode);
         encs.push(encodings.pseudoEncodingHardwareProfile0 + this.hwEncoderProfile);
-        encs.push(encodings.pseudoEncodingGOP1 + this.gop + 1);
-        encs.push(encodings.pseudoEncodingStreamingVideoQualityLevel0 - this.videoQuality);
+        encs.push(encodings.pseudoEncodingGOP1 + this.gop);
+        encs.push(encodings.pseudoEncodingStreamingVideoQualityLevel0 + this.videoStreamQuality);
 
 	// preferBandwidth choses preset settings. Since we expose all the settings, let's not pass this
         if (this.preferBandwidth) // must be last - server processes in reverse order
@@ -3754,6 +3757,9 @@ export default class RFB extends EventTargetMixin {
             case 183: // KASM unix relay data
                 return this._handleUnixRelay();
 
+            case messages.msgTypeVideoEncoders:
+                return this._handleServerVideoEncoders();
+
             case 248: // ServerFence
                 return this._handleServerFenceMsg();
 
@@ -3918,6 +3924,33 @@ export default class RFB extends EventTargetMixin {
         processRelay && processRelay(payload);
     }
 
+    _handleServerVideoEncoders() {
+        if (this._sock.rQwait("VideoEncoders header", 1, 1))
+            return false;
+
+        let num = this._sock.rQshift8();
+
+        if (this._sock.rQwait("VideoEncoders header", num * 4, 1))
+            return false;
+
+        const bytes = this._sock.rQshiftBytes(num * 4);
+        let serverSupportedEncoders = [];
+
+        for (let i = 0; i < num; i++) {
+            const base = i * 4;
+            const codec = (bytes[base] << 24 >>> 0) |
+                (bytes[base + 1] << 16) |
+                bytes[base + 2] << 8 |
+                bytes[base + 3];
+
+            serverSupportedEncoders.push(codec);
+        }
+
+        this.dispatchEvent(new CustomEvent("videocodecschange", {detail: {codecs: serverSupportedEncoders}}));
+
+        this.videoCodecs = serverSupportedEncoders;
+    }
+
     _framebufferUpdate() {
         if (this._FBU.rects === 0) {
             if (this._sock.rQwait("FBU header", 3, 1)) { return false; }
@@ -3949,7 +3982,6 @@ export default class RFB extends EventTargetMixin {
                 this._FBU.encoding = parseInt((hdr[8] << 24) + (hdr[9] << 16) +
                                               (hdr[10] << 8) + hdr[11], 10);
             }
-
 
             if (!this._handleRect()) {
                 return false;
@@ -4946,6 +4978,28 @@ RFB.messages = {
         let j = offset + 4;
         for (let i = 0; i < encodings.length; i++) {
             const enc = encodings[i];
+            buff[j] = enc >> 24;
+            buff[j + 1] = enc >> 16;
+            buff[j + 2] = enc >> 8;
+            buff[j + 3] = enc;
+
+            j += 4;
+        }
+
+        sock._sQlen += j - offset;
+        sock.flush();
+    },
+
+    videoEncodersRequest(sock, codecs) {
+        const buff = sock._sQ;
+        const offset = sock._sQlen;
+
+        buff[offset] = messages.msgTypeVideoEncoders; // msg-type
+        buff[offset + 1] = codecs.length;
+
+        let j = offset + 2;
+        for (let i = 0; i < codecs.length; i++) {
+            const enc = codecs[i];
             buff[j] = enc >> 24;
             buff[j + 1] = enc >> 16;
             buff[j + 2] = enc >> 8;

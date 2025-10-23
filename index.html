@@ -355,10 +355,7 @@
                                             <li>
                                                 <label for="noVNC_setting_stream_mode">Streaming render mode</label>
                                                 <select id="noVNC_setting_stream_mode" name="vncStreamMode">
-                                                    <option value="0">JPEG/WEBP</option>
-                                                    <option value="1">h.264</option>
-                                                    <option value="2">h.265</option>
-                                                    <option value="3">av1</option>
+                                                    <option value="0" data-name="jpeg-webp">JPEG/WEBP (Images)</option>
                                                 </select>
                                             <li>
                                         </ul>
@@ -452,36 +449,31 @@
                                             </li>
                                         </ul>
                                         <ul id="noVNC_setting_render_mode_video_quality_group" style="display: none;">
+<!--                                            <li>-->
+<!--                                                <label for="noVNC_setting_hw_encoder_profile">Profile:-->
+<!--                                                    <select id="noVNC_setting_hw_encoder_profile" name="vncProfile">-->
+<!--                                                        <option value="0">High</option>-->
+<!--                                                        <option value="1">Baseline</option>-->
+<!--                                                        <option value="2">Main</option>-->
+<!--                                                    </select>-->
+<!--                                                </label>-->
+<!--                                            </li>-->
                                             <li>
-                                                <label for="noVNC_setting_hw_encoder_profile">Profile:
-                                                    <select id="noVNC_setting_hw_encoder_profile" name="vncProfile">
-                                                        <option value="high">High</option>
-                                                        <option value="baseline">Baseline</option>
-                                                        <option value="main">Main</option>
-                                                    </select>
-                                                </label>
+                                                <label for="noVNC_setting_gop">Keyframe interval (GOP):</label>
+                                                <input id="noVNC_setting_gop" type="range" min="1" max="60" value="24" onchange="noVNC_setting_gop_output.value=value">
+                                                <output id="noVNC_setting_gop_output">24</output>
                                             </li>
-                                            <li><hr></li>
-                                            <li>
-                                                <label for="noVNC_setting_gop">Keyframe interval (GOP):
-                                                </label>
-                                                <input id="noVNC_setting_gop" type="range" min="1" max="60"
-                                                       value="1">
-                                            </li>
-                                            <li><hr></li>
                                             <li>
                                                 <label for="noVNC_setting_video_stream_quality">Video quality:</label>
-                                                <input id="noVNC_setting_video_stream_quality" type="range" min="1" max="60"
-                                                       value="23">
+                                                <input id="noVNC_setting_video_stream_quality" type="range" min="1" max="63" value="23" onchange="noVNC_setting_video_stream_quality_output.value=value">
+                                                <output id="noVNC_setting_video_stream_quality_output">23</output>
                                             </li>
-                                            <li><hr></li>
-                                            <li>
-                                                <label for="noVNC_setting_preset">Preset:</label>
-                                                <span style="display: flex; align-items: center; gap: 2px;">Speed<input
-                                                        id="noVNC_setting_preset" type="range" min="1" max="5"
-                                                        value="3">Quality</span>
-                                            </li>
-
+<!--                                            <li>-->
+<!--                                                <label for="noVNC_setting_preset">Preset:</label>-->
+<!--                                                <span style="display: flex; align-items: center; gap: 2px;">Speed<input-->
+<!--                                                        id="noVNC_setting_preset" type="range" min="1" max="5"-->
+<!--                                                        value="3">Quality</span>-->
+<!--                                            </li>-->
                                         </ul>
                                     </div>
                                 </li>

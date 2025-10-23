@@ -40,34 +40,34 @@ export const encodings = {
     pseudoEncodingQOI: -1886,
     pseudoEncodingKasmDisconnectNotify: -1885,
 
-    pseudoEncodingHardwareProfile4: -1169,
-    pseudoEncodingHardwareProfile0: -1165,
+    pseudoEncodingHardwareProfile0: -1170,
+    pseudoEncodingHardwareProfile4: -1166,
 
-    pseudoEncodingGOP59: -1164,
-    pseudoEncodingGOP1: -1105,
-    pseudoEncodingStreamingVideoQualityLevel63: -1104,
-    pseudoEncodingStreamingVideoQualityLevel0: -1041,
+    pseudoEncodingGOP1: -1165,
+    pseudoEncodingGOP60: -1105,
+    pseudoEncodingStreamingVideoQualityLevel0: -1104,
+    pseudoEncodingStreamingVideoQualityLevel63: -1041,
 
     // AV1
-    pseudoEncodingAV1QSV: -1040,
-    pseudoEncodingAV1NVENC: -1039,
-    pseudoEncodingAV1VAAPI: -1038,
-    pseudoEncodingAV1SW: -1037,
-    pseudoEncodingAV1: -1036,
+    pseudoEncodingStreamingModeAV1QSV: -1040,
+    pseudoEncodingStreamingModeAV1NVENC: -1039,
+    pseudoEncodingStreamingModeAV1VAAPI: -1038,
+    pseudoEncodingStreamingModeAV1SW: -1037,
+    pseudoEncodingStreamingModeAV1: -1036,
     // h.265
-    pseudoEncodingHEVCQSV: -1035,
-    pseudoEncodingHEVCNVENC: -1034,
-    pseudoEncodingHEVCVAAPI: -1033,
-    pseudoEncodingHEVCSW: -1032,
-    pseudoEncodingHEVC: -1031,
+    pseudoEncodingStreamingModeHEVCQSV: -1035,
+    pseudoEncodingStreamingModeHEVCNVENC: -1034,
+    pseudoEncodingStreamingModeHEVCVAAPI: -1033,
+    pseudoEncodingStreamingModeHEVCSW: -1032,
+    pseudoEncodingStreamingModeHEVC: -1031,
     // h.264
-    pseudoEncodingAVCQSV: -1030,
-    pseudoEncodingAVCNVENC: -1029,
-    pseudoEncodingAVCVAAPI: -1028,
-    pseudoEncodingAVCSW: -1027,
-    pseudoEncodingAVC: -1026,
+    pseudoEncodingStreamingModeAVCQSV: -1030,
+    pseudoEncodingStreamingModeAVCNVENC: -1029,
+    pseudoEncodingStreamingModeAVCVAAPI: -1028,
+    pseudoEncodingStreamingModeAVCSW: -1027,
+    pseudoEncodingStreamingModeAVC: -1026,
 
-    pseudoEncodingStreamingMode: -1025,
+    pseudoEncodingStreamingModeJpegWebp: -1025,
 
     pseudoEncodingWEBP: -1024,
     pseudoEncodingJpegVideoQualityLevel0: -1023,
@@ -93,13 +93,15 @@ export const encodings = {
 
 export function encodingName(num) {
     switch (num) {
-        case encodings.encodingRaw:         return "Raw";
-        case encodings.encodingCopyRect:    return "CopyRect";
-        case encodings.encodingRRE:         return "RRE";
-        case encodings.encodingHextile:     return "Hextile";
-        case encodings.encodingTight:       return "Tight";
-        case encodings.encodingTightPNG:    return "TightPNG";
-        case encodings.encodingKasmVideo:   return "KasmVideo";
-        default:                            return "[unknown encoding " + num + "]";
+        case encodings.encodingRaw:             return "Raw";
+        case encodings.encodingCopyRect:        return "CopyRect";
+        case encodings.encodingRRE:             return "RRE";
+        case encodings.encodingHextile:         return "Hextile";
+        case encodings.encodingTight:           return "Tight";
+        case encodings.encodingTightPNG:        return "TightPNG";
+        case encodings.encodingKasmVideoAVC:    return "KasmVideo AVC";
+        case encodings.encodingKasmVideoHEVC:   return "KasmVideo HEVC";
+        case encodings.encodingKasmVideoAV1:    return "KasmVideo AV1";
+        default:                                return "[unknown encoding " + num + "]";
     }
 }

@@ -11,7 +11,12 @@
 
 import * as Log from '../util/logging.js';
 
-const VIDEO_CODEC = 'avc1.42E01E';
+const VIDEO_CODEC_NAMES = {
+    1: 'avc1.42E01E',
+    2: 'hev1.1.6.L93.B0',
+    3: 'av01.0.04M.08'
+}
+
 const TARGET_FPS = 60;
 const FRAME_DURATION_US = Math.round(1_000_000 / TARGET_FPS);
 //avc1.4d002a - main
@@ -20,8 +25,10 @@ const FRAME_DURATION_US = Math.round(1_000_000 / TARGET_FPS);
 export default class KasmVideoDecoder {
     constructor(display) {
         this._len = 0;
-        this._key_frame = 0;
+        this._keyFrame = 0;
+        this._screenId = 0;
         this._ctl = null;
+        this.codec = 0;
         this._display = display;
         this._codedWidth = null;
         this._codedHeight = null;
@@ -59,8 +66,8 @@ export default class KasmVideoDecoder {
 
         if (this._ctl === 0x00) {
             ret = this._skipRect(x, y, width, height, sock, display, depth, frame_id);
-        } else if (this._ctl === 0x01) {
-            ret = this._processVideoFrameRect(x, y, width, height, sock, display, depth, frame_id);
+        } else if ((this._ctl === 0x01) || (this._ctl === 0x02) || (this._ctl === 0x03)) {
+            ret = this._processVideoFrameRect(x, y, this._ctl, width, height, sock, display, depth, frame_id);
         } else {
             throw new Error("Illegal KasmVideo compression received (ctl: " + this._ctl + ")");
         }
@@ -72,28 +79,29 @@ export default class KasmVideoDecoder {
         return ret;
     }
 
-    resize(width, height) {
-        this._updateSize(width, height);
+    resize(codec, width, height) {
+        this._updateSize(codec, width, height);
     }
 
     // ===== Private Methods =====
 
-    _configureDecoder(width, height) {
+    _configureDecoder(codec, width, height) {
         this._decoder.configure({
-            codec: VIDEO_CODEC,
+            codec: VIDEO_CODEC_NAMES[codec],
             codedWidth: width,
             codedHeight: height,
             optimizeForLatency: true,
         })
     }
 
-    _updateSize(width, height) {
+    _updateSize(codec, width, height) {
         Log.Debug('Updated size: ', {width, height});
 
         this._width = width;
         this._height = height;
+        this.codec = codec;
 
-        this._configureDecoder(width, height);
+        this._configureDecoder(codec, width, height);
     }
 
     _skipRect(x, y, width, height, _sock, display, _depth, frame_id) {
@@ -108,18 +116,18 @@ export default class KasmVideoDecoder {
         this._timestampMap.delete(frame.timestamp);
     }
 
-    _processVideoFrameRect(x, y, width, height, sock, display, depth, frame_id) {
-        let [key_frame, dataArr] = this._readData(sock);
-        Log.Debug('key_frame: ', key_frame);
+    _processVideoFrameRect(x, y, codec, width, height, sock, display, depth, frame_id) {
+        let [keyFrame, dataArr] = this._readData(sock);
+        Log.Debug('key_frame: ', keyFrame);
         if (dataArr === null) {
             return false;
         }
 
-        if (width !== this._width && height !== this._height)
-            this._updateSize(width, height)
+        if (width !== this._width && height !== this._height || codec !== this.codec)
+            this._updateSize(codec, width, height)
 
         const vidChunk = new EncodedVideoChunk({
-            type: key_frame ? 'key' : 'delta',
+            type: keyFrame ? 'key' : 'delta',
             data: dataArr,
             timestamp: this._timestamp,
         });
@@ -141,7 +149,8 @@ export default class KasmVideoDecoder {
                 return [0, null];
             }
 
-            this._key_frame = sock.rQshift8();
+            this._keyFrame = sock.rQshift8();
+            // this._screenId = sock.rQshift8();
             let byte = sock.rQshift8();
             this._len = byte & 0x7f;
             if (byte & 0x80) {
@@ -159,11 +168,11 @@ export default class KasmVideoDecoder {
         }
 
         let data = sock.rQshiftBytes(this._len);
-        let key_frame = this._key_frame;
+        let keyFrame = this._keyFrame;
         this._len = 0;
-        this._key_frame = 0;
+        this._keyFrame = 0;
 
-        return [key_frame, data];
+        return [keyFrame, data];
     }
 
     dispose() {

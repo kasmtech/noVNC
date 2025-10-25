@@ -799,6 +799,27 @@ export default class Display {
         }
     }
 
+    videoFrameRect(frame, frame_id, x, y, width, height) {
+        if (frame.displayWidth === 0 || frame.displayHeight === 0 || frame.codedWidth === 0 || frame.codedHeight === 0) {
+            return false;
+        }
+
+        const rect = {
+            type: 'video_frame',
+            frame,
+            x,
+            y,
+            width,
+            height,
+            frame_id
+        };
+        // TODO: REMoVE
+        // this.drawVideoFrame(frame, x, y, width, height);
+
+        this._processRectScreens(rect);
+        this._asyncRenderQPush(rect);
+    }
+
     transparentRect(x, y, width, height, img, frame_id, hashId) {
         /* The internal logic cannot handle empty images, so bail early */
         if ((width === 0) || (height === 0)) {
@@ -922,7 +943,45 @@ export default class Display {
                 targetCtx.drawImage(img, x, y);
             }
         } catch (error) {
-            Log.Error('Invalid image recieved.'); //KASM-2090
+            Log.Error('Invalid image received.'); //KASM-2090
+        }
+    }
+
+    drawVideoFrame(videoFrame, x, y, w, h) {
+        try {
+            let targetCtx = ((this._enableCanvasBuffer) ? this._drawCtx : this._targetCtx);
+            targetCtx.drawImage(videoFrame, x, y, w, h);
+        } catch (error) {
+            Log.Error('Invalid video frame received.', error);
+        }
+    }
+
+    putImage(img, x, y) {
+        try {
+            let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
+            targetCtx.putImageData(img, x, y);
+            img = null;
+        } catch (error) {
+            Log.Error('Invalid image recieved.');
+            img = null;
+        }
+    }
+
+    clearRect(x, y, width, height, offset, frame_id, fromQueue) {
+        let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
+        if (!fromQueue) {
+            let rect = {
+                'type': 'clear',
+                'x': x,
+                'y': y,
+                'width': width,
+                'height': height,
+                'frame_id': frame_id
+            }
+            this._processRectScreens(rect);
+            this._asyncRenderQPush(rect);
+        } else {
+            this._targetCtx.clearRect(x, y, width, height);
         }
     }
 
@@ -1047,6 +1106,10 @@ export default class Display {
                     this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
                     a.img.close();
                     break;
+                case 'video_frame':
+                    this.drawVideoFrame(a.frame, pos.x, pos.y, a.frame.codedWidth, a.frame.codedHeight);
+                    a.frame.close();
+                    break;
                 default:
                     this._syncFrameQueue.shift();
                     continue;
@@ -1151,7 +1214,6 @@ export default class Display {
 
             }
         }
-
     }
 
     /*
@@ -1238,7 +1300,7 @@ export default class Display {
 
                 for (let sI = 0; sI < a.screenLocations.length; sI++) {
                     let screenLocation = a.screenLocations[sI];
-                    if (screenLocation.screenIndex == 0) {
+                    if (screenLocation.screenIndex === 0) {
                         switch (a.type) {
                             case 'copy':
                                 this.copyImage(screenLocation.oldX, screenLocation.oldY, screenLocation.x, screenLocation.y, a.width, a.height, a.frame_id, true);
@@ -1255,11 +1317,18 @@ export default class Display {
                             case 'img':
                                 this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
                                 break;
+                            case 'clear':
+                                this.clearRect(screenLocation.x, screenLocation.y, a.width, a.height, 0, a.frame_id, true);
+                                break;
                             case 'vid':
                                 this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
                                 break;
                             case 'bitmap':
                                 this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
+                                break;
+                            case 'video_frame':
+                                this.drawVideoFrame(a.frame, screenLocation.x, screenLocation.y, a.frame.codedWidth, a.frame.codedHeight);
+                                a.frame.close();
                                 break;
                             default:
                                 continue;
@@ -1311,6 +1380,21 @@ export default class Display {
                                         },
                                         screenLocationIndex: sI
                                     }, [a.img]);
+                                }
+                                break;
+                            case 'vid':
+                                secondaryScreenRects++;
+                                if (this._screens[screenLocation.screenIndex].channel) {
+                                    this._screens[screenLocation.screenIndex].channel.postMessage({
+                                        eventType: 'rect',
+                                        rect: {
+                                            'type': 'video_frame',
+                                            'img': a.frame,
+                                            'frame_id': a.frame_id,
+                                            'screenLocations': a.screenLocations
+                                        },
+                                        screenLocationIndex: sI
+                                    }, [a.frame]);
                                 }
                                 break;
                             case 'blit':

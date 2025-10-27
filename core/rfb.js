@@ -1298,108 +1298,13 @@ export default class RFB extends EventTargetMixin {
 
         // WebRTC UDP datachannel inits
         if (typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
-            this._udpBuffer = new Map();
-
-            this._udpPeer = new RTCPeerConnection({
+            this._udpPeerConfig = {
                 iceServers: [{
                     urls: ["stun:stun.l.google.com:19302"]
                 }]
-            });
-            let peer = this._udpPeer;
-
-            peer.onicecandidate = function(e) {
-                if (e.candidate)
-                    Log.Debug("received ice candidate", e.candidate);
-                else
-                    Log.Debug("all candidates received");
-            }
-
-            peer.ondatachannel = function(e) {
-                Log.Debug("peer connection on data channel", e);
-            }
-
-            this._udpChannel = peer.createDataChannel("webudp", {
-                ordered: false,
-                maxRetransmits: 0
-            });
-            this._udpChannel.binaryType = "arraybuffer";
-
-            this._udpChannel.onerror = function(e) {
-                Log.Error("data channel error " + e.message);
-                this._udpTransitFailures+=1;
-                this._sendUdpDowngrade();
-            }
-
-            let sock = this._sock;
-            let udpBuffer = this._udpBuffer;
-            let me = this;
-            this._udpChannel.onmessage = function(e) {
-                //Log.Info("got udp msg", e.data);
-                const u8 = new Uint8Array(e.data);
-                // Got an UDP packet. Do we need reassembly?
-                const id = parseInt(u8[0] +
-                                    (u8[1] << 8) +
-                                    (u8[2] << 16) +
-                                    (u8[3] << 24), 10);
-                const i = parseInt(u8[4] +
-                                   (u8[5] << 8) +
-                                   (u8[6] << 16) +
-                                   (u8[7] << 24), 10);
-                const pieces = parseInt(u8[8] +
-                                        (u8[9] << 8) +
-                                        (u8[10] << 16) +
-                                        (u8[11] << 24), 10);
-                const hash = parseInt(u8[12] +
-                                        (u8[13] << 8) +
-                                        (u8[14] << 16) +
-                                        (u8[15] << 24), 10);
-                // TODO: check the hash. It's the low 32 bits of XXH64, seed 0
-                const frame_id = parseInt(u8[16] +
-                                        (u8[17] << 8) +
-                                        (u8[18] << 16) +
-                                        (u8[19] << 24), 10);
-
-                if (me._transitConnectionState !== me.TransitConnectionStates.Udp) {
-                    me._display.clear();
-                    me._changeTransitConnectionState(me.TransitConnectionStates.Udp);
-                }
-
-                if (pieces == 1) { // Handle it immediately
-                    me._handleUdpRect(u8.slice(20), frame_id);
-                } else { // Use buffer
-                    const now = Date.now();
-		    
-                    if (udpBuffer.has(id)) {
-                        let item = udpBuffer.get(id);
-                        item.recieved_pieces += 1;
-                        item.data[i] = u8.slice(20);
-                        item.total_bytes += item.data[i].length;
-
-                        if (item.total_pieces == item.recieved_pieces) {
-                            // Message is complete, combile data into a single array
-                            var finaldata = new Uint8Array(item.total_bytes);
-                            let z = 0;
-                            for (let x = 0; x < item.data.length; x++) {
-                                finaldata.set(item.data[x], z);
-                                z += item.data[x].length;
-                            }
-                            udpBuffer.delete(id);
-                            me._handleUdpRect(finaldata, frame_id);
-                        }
-                    } else {
-                        let item = {
-                            total_pieces: pieces,   // number of pieces expected
-                                arrival: now,       //time first piece was recieved
-                            recieved_pieces: 1,     // current number of pieces in data
-                            total_bytes: 0,         // total size of all data pieces combined
-                            data: new Array(pieces)
-                        }
-                        item.data[i] = u8.slice(20);
-                        item.total_bytes = item.data[i].length;
-                        udpBuffer.set(id, item);
-                    }
-                }
-            }
+            };
+            this._udpTurnConfig = null;
+            this._initUdpPeer();
         }
 
 	    if (this._useUdp && typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
@@ -3756,35 +3661,201 @@ export default class RFB extends EventTargetMixin {
         return true;
     }
 
+    _initUdpPeer() {
+        if (typeof RTCPeerConnection === 'undefined' || !this._isPrimaryDisplay) {
+            return;
+        }
+
+        if (this._udpChannel) {
+            try {
+                this._udpChannel.close();
+            } catch (e) {
+                // ignore
+            }
+            this._udpChannel = null;
+        }
+
+        if (this._udpPeer) {
+            try {
+                this._udpPeer.close();
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        this._udpBuffer = new Map();
+
+        const config = this._udpPeerConfig || { iceServers: [] };
+        Log.Info("Initializing UDP peer with " + (config.iceServers && config.iceServers.length ? "ICE servers" : "no ICE servers"));
+        this._udpPeer = new RTCPeerConnection(config);
+        const peer = this._udpPeer;
+
+        peer.onicecandidate = (e) => {
+            if (e.candidate) {
+                Log.Debug("received ice candidate", e.candidate);
+            } else {
+                Log.Debug("all candidates received");
+            }
+        };
+
+        peer.ondatachannel = (e) => {
+            Log.Debug("peer connection on data channel", e);
+        };
+
+        peer.oniceconnectionstatechange = () => {
+            Log.Debug("ICE connection state changed to " + peer.iceConnectionState);
+            if (peer.iceConnectionState === 'failed') {
+                this._udpConnectFailures++;
+                this._changeTransitConnectionState(this.TransitConnectionStates.Failure);
+            }
+        };
+
+        this._udpChannel = peer.createDataChannel("webudp", {
+            ordered: false,
+            maxRetransmits: 0
+        });
+        const channel = this._udpChannel;
+        channel.binaryType = "arraybuffer";
+
+        channel.onopen = () => {
+            Log.Info("UDP data channel opened");
+        };
+
+        channel.onclose = () => {
+            Log.Warn("UDP data channel closed");
+        };
+
+        channel.onerror = (e) => {
+            Log.Error("data channel error " + e.message);
+            this._udpTransitFailures += 1;
+            this._sendUdpDowngrade();
+        };
+
+        channel.onmessage = (e) => {
+            const u8 = new Uint8Array(e.data);
+            const id = parseInt(u8[0] +
+                                (u8[1] << 8) +
+                                (u8[2] << 16) +
+                                (u8[3] << 24), 10);
+            const i = parseInt(u8[4] +
+                               (u8[5] << 8) +
+                               (u8[6] << 16) +
+                               (u8[7] << 24), 10);
+            const pieces = parseInt(u8[8] +
+                                    (u8[9] << 8) +
+                                    (u8[10] << 16) +
+                                    (u8[11] << 24), 10);
+            const hash = parseInt(u8[12] +
+                                    (u8[13] << 8) +
+                                    (u8[14] << 16) +
+                                    (u8[15] << 24), 10);
+            const frame_id = parseInt(u8[16] +
+                                      (u8[17] << 8) +
+                                      (u8[18] << 16) +
+                                      (u8[19] << 24), 10);
+
+            if (this._transitConnectionState !== this.TransitConnectionStates.Udp) {
+                this._display.clear();
+                this._changeTransitConnectionState(this.TransitConnectionStates.Udp);
+            }
+
+            if (pieces === 1) {
+                this._handleUdpRect(u8.slice(20), frame_id);
+                return;
+            }
+
+            const now = Date.now();
+            const udpBuffer = this._udpBuffer;
+
+            if (udpBuffer.has(id)) {
+                const item = udpBuffer.get(id);
+                item.recieved_pieces += 1;
+                item.data[i] = u8.slice(20);
+                item.total_bytes += item.data[i].length;
+
+                if (item.total_pieces === item.recieved_pieces) {
+                    const finaldata = new Uint8Array(item.total_bytes);
+                    let z = 0;
+                    for (let x = 0; x < item.data.length; x++) {
+                        finaldata.set(item.data[x], z);
+                        z += item.data[x].length;
+                    }
+                    udpBuffer.delete(id);
+                    this._handleUdpRect(finaldata, frame_id);
+                }
+            } else {
+                const item = {
+                    total_pieces: pieces,
+                    arrival: now,
+                    recieved_pieces: 1,
+                    total_bytes: 0,
+                    data: new Array(pieces)
+                };
+                item.data[i] = u8.slice(20);
+                item.total_bytes = item.data[i].length;
+                udpBuffer.set(id, item);
+            }
+        };
+    }
+
     _sendUdpUpgrade() {
+        if (!this._udpPeer && typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
+            this._initUdpPeer();
+        }
+        if (!this._udpPeer) {
+            return;
+        }
         if (this._transitConnectionState == this.TransitConnectionStates.Upgrading) {
             return;
         }
         this._changeTransitConnectionState(this.TransitConnectionStates.Upgrading);
 
-        let peer = this._udpPeer;
-        let sock = this._sock;
+        const peer = this._udpPeer;
+        const sock = this._sock;
 
-        peer.createOffer().then(function(offer) {
-            return peer.setLocalDescription(offer);
-        }).then(function() {
-            const buff = sock._sQ;
-            const offset = sock._sQlen;
-            const str = Uint8Array.from(Array.from(peer.localDescription.sdp).map(letter => letter.charCodeAt(0)));
+        peer.createOffer()
+            .then((offer) => peer.setLocalDescription(offer))
+            .then(() => new Promise((resolve) => {
+                if (peer.iceGatheringState === 'complete') {
+                    resolve();
+                    return;
+                }
 
-            buff[offset] = 181; // msg-type
-            buff[offset + 1] = str.length >> 8; // u16 len
-            buff[offset + 2] = str.length;
+                const checkState = () => {
+                    if (peer.iceGatheringState === 'complete') {
+                        peer.removeEventListener('icegatheringstatechange', checkState);
+                        clearTimeout(timeoutId);
+                        resolve();
+                    }
+                };
 
-            buff.set(str, offset + 3);
+                const timeoutId = setTimeout(() => {
+                    peer.removeEventListener('icegatheringstatechange', checkState);
+                    resolve();
+                }, 2000);
 
-            sock._sQlen += 3 + str.length;
-            sock.flush();
-        }).catch(function(reason) {
-            Log.Error("Failed to create offer " + reason);
-            this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
-            this._udpConnectFailures++;
-        });
+                peer.addEventListener('icegatheringstatechange', checkState);
+            }))
+            .then(() => {
+                const buff = sock._sQ;
+                const offset = sock._sQlen;
+                const str = Uint8Array.from(Array.from(peer.localDescription.sdp).map(letter => letter.charCodeAt(0)));
+
+                buff[offset] = 181; // msg-type
+                buff[offset + 1] = str.length >> 8; // u16 len
+                buff[offset + 2] = str.length;
+
+                buff.set(str, offset + 3);
+
+                sock._sQlen += 3 + str.length;
+                sock.flush();
+                Log.Info("Sent UDP upgrade offer with SDP length " + str.length);
+            })
+            .catch((reason) => {
+                Log.Error("Failed to create offer " + reason);
+                this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
+                this._udpConnectFailures++;
+            });
     }
 
     _sendUdpDowngrade() {
@@ -3807,24 +3878,60 @@ export default class RFB extends EventTargetMixin {
 
         const payload = this._sock.rQshiftStr(len);
 
-        let peer = this._udpPeer;
-
         var response = JSON.parse(payload);
-        Log.Debug("UDP Upgrade recieved from server: " + payload);
-        peer.setRemoteDescription(new RTCSessionDescription(response.answer)).then(function() {
-            var candidate = new RTCIceCandidate(response.candidate);
-            peer.addIceCandidate(candidate).then(function() {
-                Log.Debug("success in addicecandidate");
-            }.bind(this)).catch(function(err) {
-                Log.Error("Failure in addIceCandidate", err);
-                this._changeTransitConnectionState(this.TransitConnectionStates.Failure)
+        Log.Info("UDP upgrade payload received (len=" + len + ")");
+        Log.Debug("UDP Upgrade payload: " + payload);
+
+        if (response.turn && !this._udpTurnConfig && typeof RTCPeerConnection !== 'undefined') {
+            const turnEntry = {
+                urls: response.turn.urls
+            };
+            if (response.turn.username) {
+                turnEntry.username = response.turn.username;
+            }
+            if (response.turn.credential) {
+                turnEntry.credential = response.turn.credential;
+            }
+
+            this._udpTurnConfig = Object.assign({}, response.turn);
+            if (!this._udpPeerConfig) {
+                this._udpPeerConfig = { iceServers: [] };
+            }
+            this._udpPeerConfig.iceServers = (this._udpPeerConfig.iceServers || []).concat([turnEntry]);
+
+            this._initUdpPeer();
+            this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
+            setTimeout(() => this._sendUdpUpgrade(), 0);
+            return true;
+        }
+
+        const peer = this._udpPeer;
+        if (!peer) {
+            this._changeTransitConnectionState(this.TransitConnectionStates.Failure);
+            return true;
+        }
+
+        Log.Info("Applying remote SDP answer; ICE state=" + peer.iceConnectionState + ", signaling=" + peer.signalingState);
+
+        peer.setRemoteDescription(new RTCSessionDescription(response.answer))
+            .then(() => {
+                Log.Info("Remote description applied; adding ICE candidate");
+                const candidate = new RTCIceCandidate(response.candidate);
+                if (!candidate || !candidate.candidate) {
+                    Log.Warn("Server response missing ICE candidate");
+                    return;
+                }
+                return peer.addIceCandidate(candidate);
+            })
+            .then(() => {
+                Log.Info("ICE candidate successfully added");
+            })
+            .catch((err) => {
+                Log.Error("WebRTC negotiation failure", err);
+                this._changeTransitConnectionState(this.TransitConnectionStates.Failure);
                 this._udpConnectFailures++;
-            }.bind(this));
-        }.bind(this)).catch(function(e) {
-            Log.Error("Failure in setRemoteDescription", e);
-            this._changeTransitConnectionState(this.TransitConnectionStates.Failure)
-            this._udpConnectFailures++;
-        }.bind(this));
+            });
+        return true;
     }
 
     _handleSubscribeUnixRelay() {

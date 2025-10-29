@@ -74,6 +74,10 @@ const UI = {
     displayWindows: new Map([['primary', 'primary']]),
     registeredWindows: new Map([['primary', 'primary']]),
 
+    _idleTimeoutWorker: null,
+    _idleTimeoutRedirectTimer: null,
+    idleTimeoutCheckIntervalMs: 5000,
+
     monitorDragOk: false,
     monitorStartX: 0,
     monitorStartY: 0,
@@ -191,6 +195,104 @@ const UI = {
         });
 
         return Promise.resolve(UI.rfb);
+    },
+
+    _getIdleDisconnectInSeconds() {
+        let idleDisconnectInS = 1200;
+
+        if (UI.rfb && Number.isFinite(parseFloat(UI.rfb.idleDisconnect))) {
+            idleDisconnectInS = parseFloat(UI.rfb.idleDisconnect) * 60;
+        }
+
+        return idleDisconnectInS;
+    },
+
+    _startIdleTimeoutMonitor() {
+        if (!WebUtil.isInsideKasmVDI()) {
+            return;
+        }
+
+        const idleDisconnectInS = UI._getIdleDisconnectInSeconds();
+
+        if (!UI._idleTimeoutWorker) {
+            const workerUrl = new URL('./idleTimeoutWorker.js', import.meta.url);
+            UI._idleTimeoutWorker = new Worker(workerUrl);
+            UI._idleTimeoutWorker.onmessage = (event) => UI._handleIdleTimeoutWorkerMessage(event);
+        }
+
+        UI._idleTimeoutWorker.postMessage({
+            type: 'configure',
+            idleDisconnectInS,
+            checkIntervalMs: UI.idleTimeoutCheckIntervalMs,
+            lastActiveAt: UI.rfb ? UI.rfb.lastActiveAt : Date.now()
+        });
+
+        if (UI.rfb) {
+            UI.rfb.onActivity = UI._notifyIdleTimeoutWorkerActivity;
+        }
+    },
+
+    _handleIdleTimeoutWorkerMessage(event) {
+        const data = event.data || {};
+
+        if (!data.type) {
+            return;
+        }
+
+        switch (data.type) {
+            case 'keep-alive':
+                if (UI.rfb) {
+                    UI.rfb.sendKey(1, null, false);
+                }
+                break;
+            case 'idle-timeout':
+                Log.Warn("Idle Disconnect reached, disconnecting rfb session...");
+                parent.postMessage({ action: 'idle_session_timeout', value: 'Idle session timeout exceeded'}, '*' );
+                if (UI._idleTimeoutRedirectTimer === null) {
+                    UI._idleTimeoutRedirectTimer = setTimeout(function() {
+                        UI._idleTimeoutRedirectTimer = null;
+                        window.location.replace('disconnected.html');
+                    }, 10000);
+                }
+                break;
+            default:
+                break;
+        }
+    },
+
+    _notifyIdleTimeoutWorkerActivity(timestamp) {
+        if (!UI._idleTimeoutWorker) {
+            return;
+        }
+
+        const activityTimestamp = Number.isFinite(timestamp) ? timestamp : Date.now();
+
+        UI._idleTimeoutWorker.postMessage({
+            type: 'activity',
+            timestamp: activityTimestamp
+        });
+
+        if (UI._idleTimeoutRedirectTimer !== null) {
+            clearTimeout(UI._idleTimeoutRedirectTimer);
+            UI._idleTimeoutRedirectTimer = null;
+        }
+    },
+
+    _stopIdleTimeoutMonitor({ preserveRedirectTimer = false } = {}) {
+        if (UI._idleTimeoutWorker) {
+            UI._idleTimeoutWorker.postMessage({ type: 'stop' });
+            UI._idleTimeoutWorker.terminate();
+            UI._idleTimeoutWorker = null;
+        }
+
+        if (!preserveRedirectTimer && UI._idleTimeoutRedirectTimer !== null) {
+            clearTimeout(UI._idleTimeoutRedirectTimer);
+            UI._idleTimeoutRedirectTimer = null;
+        }
+
+        if (UI.rfb && UI.rfb.onActivity === UI._notifyIdleTimeoutWorkerActivity) {
+            UI.rfb.onActivity = null;
+        }
     },
 
     initFullscreen() {
@@ -1552,7 +1654,7 @@ const UI = {
                 window.attachEvent('message', UI.receiveMessage);
             }
             if (UI.rfb.clipboardDown){
-                UI.rfb.addEventListener("clipboard", UI.clipboardRx);
+            UI.rfb.addEventListener("clipboard", UI.clipboardRx);
             }
             UI.rfb.addEventListener("disconnect", UI.disconnectedRx);
             if (! WebUtil.getConfigVar('show_control_bar')) {
@@ -1561,28 +1663,7 @@ const UI = {
 
             //keep alive for websocket connection to stay open, since we may not control reverse proxies
             //send a keep alive within a window that we control
-            UI._sessionTimeoutInterval = setInterval(function() {
-               if (UI.rfb) {
-                    const timeSinceLastActivityInS = (Date.now() - UI.rfb.lastActiveAt) / 1000;
-                    let idleDisconnectInS = 1200; //20 minute default
-                    if (Number.isFinite(parseFloat(UI.rfb.idleDisconnect))) {
-                        idleDisconnectInS = parseFloat(UI.rfb.idleDisconnect) * 60;
-                    }
-
-                    if (timeSinceLastActivityInS > idleDisconnectInS) {
-                        Log.Warn("Idle Disconnect reached, disconnecting rfb session...");
-                        parent.postMessage({ action: 'idle_session_timeout', value: 'Idle session timeout exceeded'}, '*' );
-
-                        // in some cases the intra-frame message could be blocked, fall back to navigating to a disconnect page.
-                        setTimeout(function() {
-                            window.location.replace('disconnected.html');
-                        }, 10000);
-                    } else {
-                        //send keep-alive
-                        UI.rfb.sendKey(1, null, false);
-                    }
-                }
-            }, 5000);
+            UI._startIdleTimeoutMonitor();
         } else {
             document.getElementById('noVNC_status').style.visibility = "visible";
         }
@@ -1616,7 +1697,7 @@ const UI = {
 
         UI.updateVisualState('disconnecting');
 
-        clearInterval(UI._sessionTimeoutInterval);
+        UI._stopIdleTimeoutMonitor();
         UI.hideControlInput('noVNC_displays_button');
     },
 

@@ -312,6 +312,7 @@ export default class RFB extends EventTargetMixin {
         this.dragViewport = false;
         this.focusOnClick = true;
         this.lastActiveAt = Date.now();
+        this._onActivityCallback = null;
 
         this._viewOnly = false;
         this._clipViewport = false;
@@ -337,6 +338,23 @@ export default class RFB extends EventTargetMixin {
     get translateShortcuts() { return this._keyboard.translateShortcuts; }
     set translateShortcuts(value) {
         this._keyboard.translateShortcuts = value;
+    }
+
+    get onActivity() { return this._onActivityCallback; }
+    set onActivity(callback) {
+        if (callback !== undefined && callback !== null && typeof callback !== "function") {
+            throw new Error("onActivity callback must be a function, null, or undefined");
+        }
+
+        this._onActivityCallback = callback || null;
+
+        if (this._onActivityCallback) {
+            try {
+                this._onActivityCallback(this.lastActiveAt);
+            } catch (err) {
+                Log.Warn("onActivity callback failed: " + err);
+            }
+        }
     }
 
     get pointerLock() { return this._pointerLock; }
@@ -1146,6 +1164,13 @@ export default class RFB extends EventTargetMixin {
 
     _setLastActive() {
         this.lastActiveAt = Date.now();
+        if (this._onActivityCallback) {
+            try {
+                this._onActivityCallback(this.lastActiveAt);
+            } catch (err) {
+                Log.Warn("onActivity callback failed: " + err);
+            }
+        }
     }
 
     _changeTransitConnectionState(value) {

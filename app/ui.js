@@ -1579,7 +1579,7 @@ const UI = {
                         }, 10000);
                     } else {
                         //send keep-alive
-                        UI.rfb.sendKey(1, null, false);
+                        UI.rfb.sendKeepAlive();
                     }
                 }
             }, 5000);

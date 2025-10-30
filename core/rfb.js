@@ -44,6 +44,7 @@ import { toSignedRelative16bit } from './util/int.js';
 const DISCONNECT_TIMEOUT = 3;
 const DEFAULT_BACKGROUND = 'rgb(40, 40, 40)';
 const CLIENT_MSG_TYPE_KEEPALIVE = 184;
+const SERVER_MSG_TYPE_DISCONNECT_NOTIFY = 185;
 
 // Minimum wait (ms) between two mouse moves
 const MOUSE_MOVE_DELAY = 17; 
@@ -106,6 +107,10 @@ export default class RFB extends EventTargetMixin {
         this._rfbInitState = '';
         this._rfbAuthScheme = -1;
         this._rfbCleanDisconnect = true;
+        this._disconnectReason = null;
+        this._disconnectCode = null;
+        this._serverDisconnectNotice = null;
+        this._lastServerDisconnectNotice = null;
 
         // Server capabilities
         this._rfbVersion = 0;
@@ -1189,7 +1194,26 @@ export default class RFB extends EventTargetMixin {
                 }
                 msg += ")";
             }
-            switch (this._rfbConnectionState) {
+            if (typeof e.code === 'number') {
+                this._disconnectCode = e.code;
+            }
+
+            if (e.reason) {
+                this._disconnectReason = e.reason;
+            }
+
+            if (this._serverDisconnectNotice) {
+                const notice = this._serverDisconnectNotice;
+                if (notice.reason && !this._disconnectReason) {
+                    this._disconnectReason = notice.reason;
+                }
+                this._rfbCleanDisconnect = !!notice.graceful;
+                this._lastServerDisconnectNotice = notice;
+                this._serverDisconnectNotice = null;
+            } else if (e.wasClean === false || e.code === 1006) {
+                this._rfbCleanDisconnect = false;
+            }
+        switch (this._rfbConnectionState) {
                 case 'connecting':
                     this._fail("Connection closed " + msg);
                     break;
@@ -1734,6 +1758,14 @@ export default class RFB extends EventTargetMixin {
 
         Log.Debug("New state '" + state + "', was '" + oldstate + "'.");
 
+        if (state === 'connecting') {
+            this._disconnectReason = null;
+            this._disconnectCode = null;
+            this._serverDisconnectNotice = null;
+            this._lastServerDisconnectNotice = null;
+            this._rfbCleanDisconnect = true;
+        }
+
         if (this._disconnTimer && state !== 'disconnecting') {
             Log.Debug("Clearing disconnect timer");
             clearTimeout(this._disconnTimer);
@@ -1767,7 +1799,13 @@ export default class RFB extends EventTargetMixin {
             case 'disconnected':
                 this.dispatchEvent(new CustomEvent(
                     "disconnect", { detail:
-                                    { clean: this._rfbCleanDisconnect } }));
+                                    { clean: this._rfbCleanDisconnect,
+                                      reason: this._disconnectReason,
+                                      code: this._disconnectCode,
+                                      serverNotice: this._lastServerDisconnectNotice } }));
+                this._disconnectReason = null;
+                this._disconnectCode = null;
+                this._lastServerDisconnectNotice = null;
                 break;
         }
     }
@@ -1792,6 +1830,9 @@ export default class RFB extends EventTargetMixin {
                 Log.Error("RFB failure: " + details);
                 break;
         }
+        this._disconnectReason = details;
+        this._disconnectCode = null;
+        this._serverDisconnectNotice = null;
         this._rfbCleanDisconnect = false; //This is sent to the UI
 
         // Transition to disconnected without waiting for socket to close
@@ -3177,6 +3218,7 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingContinuousUpdates);
         encs.push(encodings.pseudoEncodingDesktopName);
         encs.push(encodings.pseudoEncodingExtendedClipboard);
+        encs.push(encodings.pseudoEncodingKasmDisconnectNotify);
         if (this._hasWebp())
             encs.push(encodings.pseudoEncodingWEBP);
         if (this._enableQOI)
@@ -3706,6 +3748,8 @@ export default class RFB extends EventTargetMixin {
 
             case 183: // KASM unix relay data
                 return this._handleUnixRelay();
+            case SERVER_MSG_TYPE_DISCONNECT_NOTIFY: // KASM disconnect notice
+                return this._handleDisconnectNotify();
 
             case 248: // ServerFence
                 return this._handleServerFenceMsg();
@@ -3869,6 +3913,32 @@ export default class RFB extends EventTargetMixin {
         const payload = this._sock.rQshiftBytes(len);
         const processRelay = this._unixRelays[name];
         processRelay && processRelay(payload);
+    }
+
+    _handleDisconnectNotify() {
+        if (this._sock.rQwait("DisconnectNotify header", 8, 1)) { return false; }
+        const flags = this._sock.rQshift8();
+        this._sock.rQskipBytes(3);
+        const reasonLength = this._sock.rQshift32();
+        if (reasonLength > 0 && this._sock.rQwait("DisconnectNotify reason", reasonLength, 8)) { return false; }
+
+        let reason = null;
+        if (reasonLength > 0) {
+            reason = this._sock.rQshiftStr(reasonLength);
+        }
+
+        const graceful = (flags & 0x1) !== 0;
+        this._serverDisconnectNotice = { flags, reason, graceful };
+
+        if (reason !== null) {
+            this._disconnectReason = reason;
+        }
+
+        if (graceful) {
+            this._rfbCleanDisconnect = true;
+        }
+
+        return true;
     }
 
     _framebufferUpdate() {

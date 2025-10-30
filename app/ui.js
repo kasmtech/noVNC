@@ -1856,7 +1856,11 @@ const UI = {
     },
 
     disconnectedRx(event) {
-        parent.postMessage({ action: 'disconnectrx', value: event.detail.reason}, '*' );
+        const detail = event.detail || {};
+        if (detail.serverNotice && detail.serverNotice.graceful) {
+            return;
+        }
+        parent.postMessage({ action: 'disconnectrx', value: detail.reason}, '*' );
     },
 
     toggleNav(){

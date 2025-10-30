@@ -41,7 +41,7 @@ import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
 import UDPDecoder from './decoders/udp.js';
 import { toSignedRelative16bit } from './util/int.js';
-import { UI_SETTING_STREAM_MODES, UI_SETTING_PROFILE_OPTIONS } from '../app/constants.js';
+import { UI_SETTING_PROFILE_OPTIONS } from '../app/constants.js';
 
 // How many seconds to wait for a disconnect to finish
 const DISCONNECT_TIMEOUT = 3;

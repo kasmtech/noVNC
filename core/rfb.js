@@ -43,6 +43,7 @@ import { toSignedRelative16bit } from './util/int.js';
 // How many seconds to wait for a disconnect to finish
 const DISCONNECT_TIMEOUT = 3;
 const DEFAULT_BACKGROUND = 'rgb(40, 40, 40)';
+const CLIENT_MSG_TYPE_KEEPALIVE = 184;
 
 // Minimum wait (ms) between two mouse moves
 const MOUSE_MOVE_DELAY = 17; 
@@ -996,6 +997,16 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
+    sendKeepAlive() {
+        if (this._rfbConnectionState !== 'connected') { return; }
+
+        if (this._isPrimaryDisplay) {
+            RFB.messages.keepAlive(this._sock);
+        } else {
+            this._proxyRFBMessage('keepAlive', []);
+        }
+    }
+
     focus() {
         this._keyboard.focus();
     }
@@ -1889,6 +1900,9 @@ export default class RFB extends EventTargetMixin {
                     this._mousePos = { 'x': coords[0], 'y': coords[1] };
                     RFB.messages.pointerEvent(this._sock, this._mousePos.x, this._mousePos.y, 0, event.data.args[2], event.data.args[3]);
                     this._setLastActive();
+                    break;
+                case 'keepAlive':
+                    RFB.messages.keepAlive(this._sock);
                     break;
                 case 'keyEvent':
                     RFB.messages.keyEvent(this._sock, ...event.data.args);
@@ -4422,6 +4436,16 @@ RFB.messages = {
         buff[offset + 10] = dY;
 
         sock._sQlen += 11;
+        sock.flush();
+    },
+
+    keepAlive(sock) {
+        const buff = sock._sQ;
+        const offset = sock._sQlen;
+
+        buff[offset] = CLIENT_MSG_TYPE_KEEPALIVE;
+
+        sock._sQlen += 1;
         sock.flush();
     },
 

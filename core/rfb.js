@@ -3297,8 +3297,8 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingFrameRateLevel10 + this.frameRate - 10);
         encs.push(encodings.pseudoEncodingMaxVideoResolution);
 
-        encs.push(encodings.pseudoEncodingStreamingMode + this.streamMode);
-        encs.push(encodings.pseudoEncodingHardwareProfile0 + this.hwEncoderProfile);
+        encs.push(this.streamMode);
+        // encs.push(encodings.pseudoEncodingHardwareProfile0 + this.hwEncoderProfile);
         encs.push(encodings.pseudoEncodingGOP1 + this.gop);
         encs.push(encodings.pseudoEncodingStreamingVideoQualityLevel0 + this.videoStreamQuality);
 

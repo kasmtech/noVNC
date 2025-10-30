@@ -842,6 +842,7 @@ const UI = {
         UI.toggleStreamModeGroupVisibility(value);
         UI.updatePropertyName(UI_SETTINGS.STREAM_MODE);
         UI.saveSetting(UI_SETTINGS.STREAM_MODE);
+        UI.updateQuality();
     },
 
     initStreamModeSetting(codecs) {
@@ -869,6 +870,7 @@ const UI = {
             return o.value === prev
         });
         streamModeElem.value = hasPrev ? prev : encodings.pseudoEncodingStreamingModeJpegWebp;
+        UI.toggleStreamModeGroupVisibility(streamModeElem.value);
     },
 
     showStatus(text, statusType, time, kasm = false) {

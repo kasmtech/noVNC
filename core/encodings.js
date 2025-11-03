@@ -12,6 +12,7 @@ export const encodings = {
     encodingRRE: 2,
     encodingHextile: 5,
     encodingTight: 7,
+    encodingKasmVideo: 17,
     encodingTightPNG: -260,
     encodingUDP: -261,
 
@@ -28,6 +29,44 @@ export const encodings = {
     pseudoEncodingContinuousUpdates: -313,
     pseudoEncodingCompressLevel9: -247,
     pseudoEncodingCompressLevel0: -256,
+
+    pseudoEncodingFrameRateLevel10: -2048,
+    pseudoEncodingFrameRateLevel60: -1998,
+    pseudoEncodingMaxVideoResolution: -1997,
+    pseudoEncodingVideoScalingLevel0: -1996,
+    pseudoEncodingVideoScalingLevel9: -1987,
+    pseudoEncodingVideoOutTimeLevel1: -1986,
+    pseudoEncodingVideoOutTimeLevel100: -1887,
+    pseudoEncodingQOI: -1886,
+
+    pseudoEncodingHardwareProfile0: -1170,
+    pseudoEncodingHardwareProfile4: -1166,
+
+    pseudoEncodingGOP1: -1165,
+    pseudoEncodingGOP60: -1105,
+    pseudoEncodingStreamingVideoQualityLevel0: -1104,
+    pseudoEncodingStreamingVideoQualityLevel63: -1041,
+
+    // AV1
+    pseudoEncodingStreamingModeAV1QSV: -1040,
+    pseudoEncodingStreamingModeAV1NVENC: -1039,
+    pseudoEncodingStreamingModeAV1VAAPI: -1038,
+    pseudoEncodingStreamingModeAV1SW: -1037,
+    pseudoEncodingStreamingModeAV1: -1036,
+    // h.265
+    pseudoEncodingStreamingModeHEVCQSV: -1035,
+    pseudoEncodingStreamingModeHEVCNVENC: -1034,
+    pseudoEncodingStreamingModeHEVCVAAPI: -1033,
+    pseudoEncodingStreamingModeHEVCSW: -1032,
+    pseudoEncodingStreamingModeHEVC: -1031,
+    // h.264
+    pseudoEncodingStreamingModeAVCQSV: -1030,
+    pseudoEncodingStreamingModeAVCNVENC: -1029,
+    pseudoEncodingStreamingModeAVCVAAPI: -1028,
+    pseudoEncodingStreamingModeAVCSW: -1027,
+    pseudoEncodingStreamingModeAVC: -1026,
+
+    pseudoEncodingStreamingModeJpegWebp: -1025,
 
     pseudoEncodingWEBP: -1024,
     pseudoEncodingJpegVideoQualityLevel0: -1023,
@@ -46,15 +85,6 @@ export const encodings = {
     pseudoEncodingVideoTimeLevel0: -870,
     pseudoEncodingVideoTimeLevel100: -770,
 
-    pseudoEncodingFrameRateLevel10: -2048,
-    pseudoEncodingFrameRateLevel60: -1998,
-    pseudoEncodingMaxVideoResolution: -1997,
-    pseudoEncodingVideoScalingLevel0: -1996,
-    pseudoEncodingVideoScalingLevel9: -1987,
-    pseudoEncodingVideoOutTimeLevel1: -1986,
-    pseudoEncodingVideoOutTimeLevel100: -1887,
-    pseudoEncodingQOI: -1886,
-
     pseudoEncodingVMwareCursor: 0x574d5664,
     pseudoEncodingVMwareCursorPosition: 0x574d5666,
     pseudoEncodingExtendedClipboard: 0xc0a1e5ce
@@ -62,12 +92,15 @@ export const encodings = {
 
 export function encodingName(num) {
     switch (num) {
-        case encodings.encodingRaw:      return "Raw";
-        case encodings.encodingCopyRect: return "CopyRect";
-        case encodings.encodingRRE:      return "RRE";
-        case encodings.encodingHextile:  return "Hextile";
-        case encodings.encodingTight:    return "Tight";
-        case encodings.encodingTightPNG: return "TightPNG";
-        default:                         return "[unknown encoding " + num + "]";
+        case encodings.encodingRaw:             return "Raw";
+        case encodings.encodingCopyRect:        return "CopyRect";
+        case encodings.encodingRRE:             return "RRE";
+        case encodings.encodingHextile:         return "Hextile";
+        case encodings.encodingTight:           return "Tight";
+        case encodings.encodingTightPNG:        return "TightPNG";
+        case encodings.encodingKasmVideoAVC:    return "KasmVideo AVC";
+        case encodings.encodingKasmVideoHEVC:   return "KasmVideo HEVC";
+        case encodings.encodingKasmVideoAV1:    return "KasmVideo AV1";
+        default:                                return "[unknown encoding " + num + "]";
     }
 }

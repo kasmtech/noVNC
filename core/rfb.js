@@ -4991,6 +4991,9 @@ RFB.messages = {
     },
 
     videoEncodersRequest(sock, codecs) {
+        if (codecs == null)
+            codecs = [];
+
         const buff = sock._sQ;
         const offset = sock._sQlen;
 

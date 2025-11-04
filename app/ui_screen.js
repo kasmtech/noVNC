@@ -132,7 +132,6 @@ const UI = {
     },
 
     connect() {
-
         let details = null
         const initialAutoPlacementValue = window.localStorage.getItem('autoPlacement')
         if (initialAutoPlacementValue === null) {
@@ -146,16 +145,16 @@ const UI = {
             UI.rfb = new RFB(document.getElementById('noVNC_container'),
                         document.getElementById('noVNC_keyboardinput'),
                         "", //URL
-                        { 
+                        {
                             shared: UI.getSetting('shared', true),
                             repeaterID: UI.getSetting('repeaterID', false),
                             credentials: { password: null },
                             hiDpi: UI.getSetting('enable_hidpi', true, false)
                         },
+                        null,
                         false // Not a primary display
                     );
         }
-        
 
         UI.rfb.addEventListener("connect", UI.connectFinished);
         //UI.rfb.addEventListener("disconnect", UI.disconnectFinished);

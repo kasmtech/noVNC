@@ -799,13 +799,14 @@ export default class Display {
         }
     }
 
-    videoFrameRect(frame, frame_id, x, y, width, height) {
+    videoFrameRect(screenId, frame, frame_id, x, y, width, height) {
         if (frame.displayWidth === 0 || frame.displayHeight === 0 || frame.codedWidth === 0 || frame.codedHeight === 0) {
             return false;
         }
 
         const rect = {
             type: 'video_frame',
+            screenId,
             frame,
             x,
             y,
@@ -937,7 +938,7 @@ export default class Display {
     drawImage(img, x, y, w, h, overlay=false) {
         try {
             let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
-            if (img.width != w || img.height != h) {
+            if (img.width !== w || img.height !== h) {
                 targetCtx.drawImage(img, x, y, w, h);
             } else {
                 targetCtx.drawImage(img, x, y);
@@ -1382,21 +1383,6 @@ export default class Display {
                                     }, [a.img]);
                                 }
                                 break;
-                            case 'vid':
-                                secondaryScreenRects++;
-                                if (this._screens[screenLocation.screenIndex].channel) {
-                                    this._screens[screenLocation.screenIndex].channel.postMessage({
-                                        eventType: 'rect',
-                                        rect: {
-                                            'type': 'video_frame',
-                                            'img': a.frame,
-                                            'frame_id': a.frame_id,
-                                            'screenLocations': a.screenLocations
-                                        },
-                                        screenLocationIndex: sI
-                                    }, [a.frame]);
-                                }
-                                break;
                             case 'blit':
                                 secondaryScreenRects++;
                                 let buf = a.data.buffer;
@@ -1417,6 +1403,24 @@ export default class Display {
                                         screenLocationIndex: sI
                                     }, [buf]);
                                 }
+                                break;
+                            case 'video_frame':
+                                secondaryScreenRects++;
+                                if (a.frame.format !== null)
+                                this._screens[screenLocation.screenIndex]?.channel.postMessage({
+                                        eventType: 'rect',
+                                        rect: {
+                                            type: 'video_frame',
+                                            frame: a.frame,
+                                            x: a.x,
+                                            y: a.y,
+                                            width: a.width,
+                                            height: a.height,
+                                            frame_id: a.frame_id,
+                                            screenLocations: a.screenLocations
+                                        },
+                                        screenLocationIndex: sI
+                                    }, [a.frame]);
                                 break;
                             case 'img':
                             case '_img':
@@ -1442,7 +1446,7 @@ export default class Display {
                             default:
                                 secondaryScreenRects++;
                                 if (a instanceof HTMLImageElement) {
-                                    Log.Warn("Wrong rect type: " + rect.type);
+                                    Log.Warn("Wrong rect type: " + a.type);
                                 } else {
                                     if (this._screens[screenLocation.screenIndex].channel) {
                                         this._screens[screenLocation.screenIndex].channel.postMessage({
@@ -1497,7 +1501,7 @@ export default class Display {
             if (this._asyncFrameQueue[0][2].length > 0) {
                 window.requestAnimationFrame( () => { this._pushAsyncFrame(); });
             }
-        } else if (this._asyncFrameQueue[0][1] > 0 && this._asyncFrameQueue[0][1] == this._asyncFrameQueue[0][2].length) {
+        } else if (this._asyncFrameQueue[0][1] > 0 && this._asyncFrameQueue[0][1] === this._asyncFrameQueue[0][2].length) {
             //how many times has _pushAsyncFrame been called when the frame had all rects but has not been drawn
             this._asyncFrameQueue[0][5] += 1;
             //force the frame to be drawn if it has been here too long
@@ -1510,28 +1514,39 @@ export default class Display {
     _processRectScreens(rect) {
         //find which screen this rect belongs to and adjust its x and y to be relative to the destination
         let indexes = [];
-        rect.inPrimary = false;
-        rect.inSecondary = false;
-        for (let i=0; i < this._screens.length; i++) {
-            let screen = this._screens[i];
+        if (rect.type === 'video_frame') {
+            const screen = this._screens[rect.screenId];
+            let screenPosition = {
+                x: 0 - (screen.x - rect.x), //rect.x - screen.x,
+                y: 0 - (screen.y - rect.y), //rect.y - screen.y,
+                screenIndex: rect.screenId
+            }
 
-            if (
-                !((rect.x > screen.x2 || screen.x > (rect.x + rect.width)) && (rect.y > screen.y2 || screen.y > (rect.y + rect.height)))
-            ) {
-                let screenPosition = {
-                    x: 0 - (screen.x - rect.x), //rect.x - screen.x,
-                    y: 0 - (screen.y - rect.y), //rect.y - screen.y,
-                    screenIndex: i
-                }
-                if (rect.type === 'copy') {
-                    screenPosition.oldX = 0 - (screen.x - rect.oldX); //rect.oldX - screen.x;
-                    screenPosition.oldY = 0 - (screen.y - rect.oldY); //rect.oldY - screen.y;
-                }
-                indexes.push(screenPosition);
-                if (i == 0) {
-                    rect.inPrimary = true;
-                } else {
-                    rect.inSecondary = true;
+            indexes.push(screenPosition);
+        } else {
+            rect.inPrimary = false;
+            rect.inSecondary = false;
+            for (let i = 0; i < this._screens.length; i++) {
+                let screen = this._screens[i];
+
+                if (
+                    !((rect.x > screen.x2 || screen.x > (rect.x + rect.width)) && (rect.y > screen.y2 || screen.y > (rect.y + rect.height)))
+                ) {
+                    let screenPosition = {
+                        x: 0 - (screen.x - rect.x), //rect.x - screen.x,
+                        y: 0 - (screen.y - rect.y), //rect.y - screen.y,
+                        screenIndex: i
+                    }
+                    if (rect.type === 'copy') {
+                        screenPosition.oldX = 0 - (screen.x - rect.oldX); //rect.oldX - screen.x;
+                        screenPosition.oldY = 0 - (screen.y - rect.oldY); //rect.oldY - screen.y;
+                    }
+                    indexes.push(screenPosition);
+                    if (i === 0) {
+                        rect.inPrimary = true;
+                    } else {
+                        rect.inSecondary = true;
+                    }
                 }
             }
         }

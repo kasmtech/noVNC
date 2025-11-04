@@ -17,7 +17,7 @@ const VIDEO_CODEC_NAMES = {
     3: 'av01.0.04M.08'
 }
 
-const TARGET_FPS = 60;
+const TARGET_FPS = 120;
 const FRAME_DURATION_US = Math.round(1_000_000 / TARGET_FPS);
 //avc1.4d002a - main
 /// avc1.42001E - baseline
@@ -26,36 +26,29 @@ export default class KasmVideoDecoder {
     constructor(display) {
         this._len = 0;
         this._keyFrame = 0;
-        this._screenId = 0;
+        this._screenId = null;
         this._ctl = null;
-        this.codec = 0;
+        //this.codec = 0;
         this._display = display;
-        this._codedWidth = null;
-        this._codedHeight = null;
 
-        this._width = null;
-        this._height = null;
+        //this._width = null;
+        //this._height = null;
 
         this._timestamp = 0;
         this._timestampMap = new Map();
-        this._decoder = new VideoDecoder({
-            output: (frame) => {
-                this._handleProcessVideoChunk(frame);
-                // frame.close();
-            }, error: (e) => {
-                Log.Error(`There was an error inside KasmVideoDecoder`, e)
-            }
-        });
+        this._decoders = new Map();
     }
 
     // ===== Public Methods =====
 
+
     decodeRect(x, y, width, height, sock, display, depth, frame_id) {
         if (this._ctl === null) {
-            if (sock.rQwait("KasmVideo compression-control", 1)) {
+            if (sock.rQwait("KasmVideo screen and compression-control", 2)) {
                 return false;
             }
 
+            this._screenId = sock.rQshift8();
             this._ctl = sock.rQshift8();
 
             // Figure out filter
@@ -67,41 +60,43 @@ export default class KasmVideoDecoder {
         if (this._ctl === 0x00) {
             ret = this._skipRect(x, y, width, height, sock, display, depth, frame_id);
         } else if ((this._ctl === 0x01) || (this._ctl === 0x02) || (this._ctl === 0x03)) {
-            ret = this._processVideoFrameRect(x, y, this._ctl, width, height, sock, display, depth, frame_id);
+            ret = this._processVideoFrameRect(this._screenId, this._ctl, x, y, width, height, sock, display, depth, frame_id);
         } else {
             throw new Error("Illegal KasmVideo compression received (ctl: " + this._ctl + ")");
         }
 
         if (ret) {
             this._ctl = null;
+            this._screenId = null;
         }
 
         return ret;
     }
 
-    resize(codec, width, height) {
-        this._updateSize(codec, width, height);
+    resize(screen, codec, width, height) {
+        this._updateSize(screen, codec, width, height);
     }
 
     // ===== Private Methods =====
 
-    _configureDecoder(codec, width, height) {
-        this._decoder.configure({
-            codec: VIDEO_CODEC_NAMES[codec],
-            codedWidth: width,
-            codedHeight: height,
+    _configureDecoder(screen) {
+        Log.Debug('Configuring decoder for screen: ', screen.id, ' codec: ', VIDEO_CODEC_NAMES[screen.codec], ' width: ', screen.width, ' height: ', screen.height);
+        screen.decoder.configure({
+            codec: VIDEO_CODEC_NAMES[screen.codec],
+            codedWidth: screen.width,
+            codedHeight: screen.height,
             optimizeForLatency: true,
         })
     }
 
-    _updateSize(codec, width, height) {
+    _updateSize(screen, codec, width, height) {
         Log.Debug('Updated size: ', {width, height});
 
-        this._width = width;
-        this._height = height;
-        this.codec = codec;
+        screen.width = width;
+        screen.height = height;
+        screen.codec = codec;
 
-        this._configureDecoder(codec, width, height);
+        this._configureDecoder(screen);
     }
 
     _skipRect(x, y, width, height, _sock, display, _depth, frame_id) {
@@ -111,27 +106,53 @@ export default class KasmVideoDecoder {
 
     _handleProcessVideoChunk(frame) {
         Log.Debug('Frame ', frame);
-        const {frame_id, x, y, width, height} = this._timestampMap.get(frame.timestamp);
-        this._display.videoFrameRect(frame, frame_id, x, y, width, height);
+        const {screenId, frame_id, x, y, width, height} = this._timestampMap.get(frame.timestamp);
+        Log.Debug('frame_id: ', frame_id, 'x: ', x, 'y: ', y, 'coded width: ', frame.codedWidth, 'coded height: ', frame.codedHeight);
+        this._display.videoFrameRect(screenId, frame, frame_id, x, y, width, height);
         this._timestampMap.delete(frame.timestamp);
     }
 
-    _processVideoFrameRect(x, y, codec, width, height, sock, display, depth, frame_id) {
+    _processVideoFrameRect(screenId, codec, x, y, width, height, sock, display, depth, frame_id) {
         let [keyFrame, dataArr] = this._readData(sock);
-        Log.Debug('key_frame: ', keyFrame);
+        Log.Debug('Screen: ', screenId, ' key_frame: ', keyFrame);
         if (dataArr === null) {
             return false;
         }
 
-        if (width !== this._width && height !== this._height || codec !== this.codec)
-            this._updateSize(codec, width, height)
+        let screen;
+        if (this._decoders.has(screenId)) {
+            screen = this._decoders.get(screenId);
+        } else {
+            screen = {
+                id: screenId,
+                width: width,
+                height: height,
+                decoder: new VideoDecoder({
+                    output: (frame) => {
+                        this._handleProcessVideoChunk(frame);
+                        // frame.close();
+                    }, error: (e) => {
+                        Log.Error(`There was an error inside KasmVideoDecoder`, e)
+                    }
+                })
+            };
+            Log.Debug('Created new decoder for screen: ', screenId);
+            this._decoders.set(screenId, screen);
+        }
+
+        if (width !== screen.width && height !== screen.height || codec !== screen.codec)
+            this._updateSize(screen, codec, width, height)
 
         const vidChunk = new EncodedVideoChunk({
             type: keyFrame ? 'key' : 'delta',
             data: dataArr,
             timestamp: this._timestamp,
         });
+
+        Log.Debug('Type ', vidChunk.type, ' timestamp: ', vidChunk.timestamp, ' bytelength ', vidChunk.byteLength);
+
         this._timestampMap.set(this._timestamp, {
+            screenId,
             frame_id,
             x,
             y,
@@ -139,18 +160,24 @@ export default class KasmVideoDecoder {
             height
         });
         this._timestamp += FRAME_DURATION_US;
-        this._decoder.decode(vidChunk);
+
+        try {
+            screen.decoder.decode(vidChunk);
+        } catch (e) {
+            Log.Error('Screen: ', screenId,
+                'Key frame ', keyFrame, ' frame_id: ', frame_id, ' x: ', x, ' y: ', y, ' width: ', width, ' height: ', height, ' codec: ', codec, ' ctl ', this._ctl, ' dataArr: ', dataArr, ' error: ', e);
+            Log.Error('There was an error inside KasmVideoDecoder: ', e)
+        }
         return true;
     }
 
     _readData(sock) {
         if (this._len === 0) {
-            if (sock.rQwait("KasmVideo", 4)) {
+            if (sock.rQwait("KasmVideo", 5)) {
                 return [0, null];
             }
 
             this._keyFrame = sock.rQshift8();
-            // this._screenId = sock.rQshift8();
             let byte = sock.rQshift8();
             this._len = byte & 0x7f;
             if (byte & 0x80) {
@@ -167,8 +194,8 @@ export default class KasmVideoDecoder {
             return [0, null];
         }
 
-        let data = sock.rQshiftBytes(this._len);
-        let keyFrame = this._keyFrame;
+        const data = sock.rQshiftBytes(this._len);
+        const keyFrame = this._keyFrame;
         this._len = 0;
         this._keyFrame = 0;
 
@@ -176,6 +203,8 @@ export default class KasmVideoDecoder {
     }
 
     dispose() {
-        this._decoder.close();
+        for (let screen of this._decoders.values()) {
+            screen.decoder.close();
+        }
     }
 }

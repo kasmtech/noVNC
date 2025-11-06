@@ -817,8 +817,10 @@ export default class Display {
         // TODO: REMoVE
         // this.drawVideoFrame(frame, x, y, width, height);
 
-        this._processRectScreens(rect);
-        this._asyncRenderQPush(rect);
+        if (rect.screenId < this._screens.length) {
+            this._processRectScreens(rect);
+            this._asyncRenderQPush(rect);
+        }
     }
 
     transparentRect(x, y, width, height, img, frame_id, hashId) {

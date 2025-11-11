@@ -1358,7 +1358,7 @@ export default class Display {
                             default:
                                 secondaryScreenRects++;
                                 if (a instanceof HTMLImageElement) {
-                                    Log.Error("Wrong rect type: " + rect.type);
+                                    Log.Warn("Wrong rect type: " + rect.type);
                                 } else {
                                     if (this._screens[screenLocation.screenIndex].channel) {
                                         this._screens[screenLocation.screenIndex].channel.postMessage({

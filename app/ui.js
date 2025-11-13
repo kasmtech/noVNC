@@ -1858,6 +1858,7 @@ const UI = {
     disconnectedRx(event) {
         const detail = event.detail || {};
         if (detail.serverNotice && detail.serverNotice.graceful) {
+            window.location.replace('disconnected.html');
             return;
         }
         parent.postMessage({ action: 'disconnectrx', value: detail.reason}, '*' );

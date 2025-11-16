@@ -1104,6 +1104,7 @@ const UI = {
         if (val === null) {
             val = WebUtil.readSetting(name, defVal);
         }
+        val = UI.sanitizeSetting(name, val);
         WebUtil.setSetting(name, val);
         UI.updateSetting(name);
         return val;
@@ -1111,6 +1112,7 @@ const UI = {
 
     // Set the new value, update and disable form control setting
     forceSetting(name, val, disable=true) {
+        val = UI.sanitizeSetting(name, val);
         WebUtil.setSetting(name, val);
         UI.updateSetting(name);
         if (disable) {
@@ -1149,6 +1151,26 @@ const UI = {
         }
     },
 
+    // Ensure settings stay within supported bounds
+    sanitizeSetting(name, value) {
+        switch (name) {
+            case 'framerate': {
+                let numeric = parseInt(value, 10);
+                if (!Number.isFinite(numeric)) {
+                    numeric = 30;
+                }
+                if (numeric < 10) {
+                    numeric = 10;
+                } else if (numeric > 120) {
+                    numeric = 120;
+                }
+                return String(numeric);
+            }
+            default:
+                return value;
+        }
+    },
+
     // Save control setting to cookie
     saveSetting(name) {
         const ctrl = document.getElementById('noVNC_setting_' + name);
@@ -1159,6 +1181,13 @@ const UI = {
             val = ctrl.options[ctrl.selectedIndex].value;
         } else {
             val = ctrl.value;
+        }
+        const sanitized = UI.sanitizeSetting(name, val);
+        if (sanitized !== val) {
+            if (ctrl && typeof ctrl.value !== 'undefined') {
+                ctrl.value = sanitized;
+            }
+            val = sanitized;
         }
         WebUtil.writeSetting(name, val);
         //Log.Debug("Setting saved '" + name + "=" + val + "'");
@@ -1179,8 +1208,12 @@ const UI = {
                 val = true;
             }
         }
-
-        return val;
+        const sanitized = UI.sanitizeSetting(name, val);
+        const currentStr = (val === null || typeof val === 'undefined') ? null : String(val);
+        if (sanitized !== val && sanitized !== currentStr) {
+            WebUtil.writeSetting(name, sanitized);
+        }
+        return sanitized;
     },
 
     // These helpers compensate for the lack of parent-selectors and

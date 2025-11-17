@@ -39,6 +39,7 @@ import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
 import UDPDecoder from './decoders/udp.js';
 import { toSignedRelative16bit } from './util/int.js';
+import {messages} from "./messages";
 
 // How many seconds to wait for a disconnect to finish
 const DISCONNECT_TIMEOUT = 3;
@@ -3592,6 +3593,20 @@ export default class RFB extends EventTargetMixin {
         return true;
     }
 
+    _handle_server_network_stats_msg() {
+        this._sock.rQskipBytes(3); // Padding
+        const length = this._sock.rQshift32();
+        if (this._sock.rQwait("KASM bottleneck stats", length, 8))
+            return false;
+
+        const text = this._sock.rQshiftStr(length);
+        Log.Debug("Received KASM network stats:");
+        Log.Debug(text);
+
+        this.dispatchEvent(new CustomEvent("network_stats", {detail: {text: text}}));
+        return true;
+    }
+
     _handleServerFenceMsg() {
         if (this._sock.rQwait("ServerFence header", 8, 1)) { return false; }
         this._sock.rQskipBytes(3); // Padding
@@ -3730,13 +3745,14 @@ export default class RFB extends EventTargetMixin {
                 }
                 return true;
 
-            case 178: // KASM bottleneck stats
+            case messages.msgTypeRequestStats: // KASM bottleneck stats
                 return this._handle_server_stats_msg();
 
-            case 179: // KASM requesting frame stats
+            case messages.msgTypeFrameStats: // KASM requesting frame stats
                 this._trackFrameStats = true;
                 return true;
-
+            case messages.msgTypeNetworkStats:
+                return this._handle_server_network_stats_msg();
             case 180: // KASM binary clipboard
                 return this._handleBinaryClipboard();
 
@@ -4855,13 +4871,12 @@ RFB.messages = {
         sock.flush();
     },
 
-    requestStats(sock) {
+    requestStats(sock, msgType) {
         const buff = sock._sQ;
+        if (buff == null) return;
+
         const offset = sock._sQlen;
-
-        if (buff == null) { return; }
-
-        buff[offset] = 178; // msg-type
+        buff[offset] = msgType; // msg-type
 
         buff[offset + 1] = 0; // padding
         buff[offset + 2] = 0; // padding

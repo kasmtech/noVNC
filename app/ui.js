@@ -1371,7 +1371,7 @@ const UI = {
     clipboardReceive(e) {
         if (UI.rfb.clipboardDown) {
            var curvalue = document.getElementById('noVNC_clipboard_text').value;
-           if (curvalue != e.detail.text) {
+           if (curvalue !== e.detail.text) {
                Log.Debug(">> UI.clipboardReceive: " + e.detail.text.substr(0, 40) + "...");
                document.getElementById('noVNC_clipboard_text').value = e.detail.text;
                Log.Debug("<< UI.clipboardReceive");
@@ -1380,16 +1380,29 @@ const UI = {
     },
 
     //recieved bottleneck stats
-    bottleneckStatsRecieve(e) {
-        if (UI.rfb) {
-            try {
-                let obj = JSON.parse(e.detail.text);
-                let fps = UI.rfb.statsFps;
-                document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
-                console.log(e.detail.text);
-            } catch (err) {
-                console.log('Invalid bottleneck stats recieved from server.')
-            }
+    bottleneckStatsReceive(e) {
+        if (!UI.rfb)
+            return;
+
+        try {
+            let obj = JSON.parse(e.detail.text);
+            let fps = UI.rfb.statsFps;
+            document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
+            console.log(e.detail.text);
+        } catch (err) {
+            console.log('Invalid bottleneck stats received from server.')
+        }
+    },
+
+    networkStatsReceive(e) {
+        if (!UI.rfb)
+            return;
+
+        try {
+            let obj = JSON.parse(e.detail.text);
+            console.log(e.detail.text);
+        } catch (err) {
+            console.log('Invalid network stats received from server.')
         }
     },
 
@@ -1481,6 +1494,7 @@ const UI = {
         UI.rfb.addEventListener("capabilities", UI.updatePowerButton);
         UI.rfb.addEventListener("clipboard", UI.clipboardReceive);
         UI.rfb.addEventListener("bottleneck_stats", UI.bottleneckStatsRecieve);
+        UI.rfb.addEventListener("network_stats", UI.networkStatsReceive);
         UI.rfb.addEventListener("bell", UI.bell);
         UI.rfb.addEventListener("desktopname", UI.updateDesktopName);
         UI.rfb.addEventListener("inputlock", UI.inputLockChanged);

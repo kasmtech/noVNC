@@ -349,7 +349,6 @@ export default class RFB extends EventTargetMixin {
     }
 
     // ===== PROPERTIES =====
-
     get connectionID() { return this._connectionID; }
 
     get translateShortcuts() { return this._keyboard.translateShortcuts; }
@@ -3689,6 +3688,20 @@ export default class RFB extends EventTargetMixin {
             stats,
             {detail: {text: text}}));
 
+        return true;
+    }
+
+    _handle_server_network_stats_msg() {
+        this._sock.rQskipBytes(3); // Padding
+        const length = this._sock.rQshift32();
+        if (this._sock.rQwait("KASM bottleneck stats", length, 8))
+            return false;
+
+        const text = this._sock.rQshiftStr(length);
+        Log.Debug("Received KASM network stats:");
+        Log.Debug(text);
+
+        this.dispatchEvent(new CustomEvent("network_stats", {detail: {text: text}}));
         return true;
     }
 

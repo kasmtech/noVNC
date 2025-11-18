@@ -867,7 +867,7 @@ const UI = {
         });
 
         streamModeElem.value = hasPrev ? prev : Math.max(...codecs.map(Number)); // encodings.pseudoEncodingStreamingModeJpegWebp;
-        UI.toggleStreamModeGroupVisibility(streamModeElem.value);
+        UI.streamMode({ target: streamModeElem });
     },
 
     showStatus(text, statusType, time, kasm = false) {

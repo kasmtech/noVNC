@@ -47,7 +47,7 @@ import {
     UI_FPS_CHART
 } from './constants.js';
 import {encodings} from "../core/encodings.js";
-import CodecDetector, {CODEC_VARIANT_NAMES} from "../core/codecs";
+import CodecDetector, {CODEC_VARIANT_NAMES, preferredCodecs} from "../core/codecs";
 
 const PAGE_TITLE = "KasmVNC";
 
@@ -875,7 +875,18 @@ const UI = {
             return o.value === prev
         });
 
-        streamModeElem.value = hasPrev ? prev : Math.max(...codecs.map(Number)); // encodings.pseudoEncodingStreamingModeJpegWebp;
+        const availableIds = codecs.map(Number);
+        const preferredMatch = preferredCodecs.filter(c => availableIds.includes(c));
+        let selectedValue = Number(hasPrev ? prev : encodings.pseudoEncodingStreamingModeJpegWebp);
+
+        if (preferredMatch.length > 0) {
+            if (selectedValue === encodings.pseudoEncodingStreamingModeJpegWebp) {
+                selectedValue = Math.max(...preferredMatch);
+            }
+        }
+
+        streamModeElem.value = selectedValue;
+
         UI.streamMode({target: streamModeElem});
         UI.sendMessage("update_codecs", {current: streamModeElem.value, codecs: availableOptions});
     },

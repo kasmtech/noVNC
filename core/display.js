@@ -801,6 +801,7 @@ export default class Display {
 
     videoFrameRect(screenId, frame, frame_id, x, y, width, height) {
         if (frame.displayWidth === 0 || frame.displayHeight === 0 || frame.codedWidth === 0 || frame.codedHeight === 0) {
+            frame.close();
             return false;
         }
 
@@ -820,6 +821,9 @@ export default class Display {
         if (rect.screenId < this._screens.length) {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
+        } else {
+            frame.close();
+            Log.Debug(`ScreenId ${screenId} not found in display list`);
         }
     }
 
@@ -1197,7 +1201,15 @@ export default class Display {
             if (rect.frame_id < oldestFrameID) {
                 //rect is older than any frame in the queue, drop it
                 this._droppedRects++;
-                if (rect.type == "flip") { this._lateFlipRect++; }
+                switch (rect.type) {
+                    case 'video_frame':
+                        rect.frame?.close();
+                        break;
+                    case 'flip':
+                        this._lateFlipRect++;
+                        break;
+                }
+
                 return;
             } else if (rect.frame_id > newestFrameID) {
                 //frame is newer than any frame in the queue, drop old frame
@@ -1208,6 +1220,15 @@ export default class Display {
                     this._forcedFrameCnt++;
                 } else {
                     Log.Warn("Old frame dropped");
+
+                    // Close VideoFrames in the frame being dropped
+                    const droppedFrame = this._asyncFrameQueue[0];
+                    for (const droppedRect of droppedFrame[2]) {
+                        if (droppedRect.type === 'video_frame') {
+                            droppedRect.frame?.close();
+                        }
+                    }
+
                     this._asyncFrameQueue.shift();
                     this._droppedFrames += (rect.frame_id - newestFrameID);
                 }
@@ -1223,6 +1244,13 @@ export default class Display {
     Clear the async frame buffer
     */
     _clearAsyncQueue() {
+        // Close all VideoFrames in the queue before dropping
+        for (const frame of this._asyncFrameQueue) {
+            for (const rect of frame[2])
+                if (rect.type === 'video_frame')
+                    rect.frame?.close();
+        }
+
         this._droppedFrames += this._asyncFrameQueue.length;
 
         this._asyncFrameQueue = [];
@@ -1409,20 +1437,23 @@ export default class Display {
                             case 'video_frame':
                                 secondaryScreenRects++;
                                 if (a.frame.format !== null)
-                                this._screens[screenLocation.screenIndex]?.channel.postMessage({
-                                        eventType: 'rect',
-                                        rect: {
-                                            type: 'video_frame',
-                                            frame: a.frame,
-                                            x: a.x,
-                                            y: a.y,
-                                            width: a.width,
-                                            height: a.height,
-                                            frame_id: a.frame_id,
-                                            screenLocations: a.screenLocations
-                                        },
-                                        screenLocationIndex: sI
-                                    }, [a.frame]);
+                                    if (this._screens[screenLocation.screenIndex]?.channel) {
+                                        this._screens[screenLocation.screenIndex].channel.postMessage({
+                                            eventType: 'rect',
+                                            rect: {
+                                                type: 'video_frame',
+                                                frame: a.frame,
+                                                x: a.x,
+                                                y: a.y,
+                                                width: a.width,
+                                                height: a.height,
+                                                frame_id: a.frame_id,
+                                                screenLocations: a.screenLocations
+                                            },
+                                            screenLocationIndex: sI
+                                        }, [a.frame]);
+                                    } else
+                                        a.frame.close();
                                 break;
                             case 'img':
                             case '_img':

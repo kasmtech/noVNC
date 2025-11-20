@@ -847,19 +847,28 @@ const UI = {
             return;
 
         const prev = UI.getSetting(UI_SETTINGS.STREAM_MODE);
-        while (streamModeElem.firstChild)
-            streamModeElem.removeChild(streamModeElem.firstChild);
+        streamModeElem.innerHTML = "";
 
         // Always include the JPEG/WEBP image mode (fallback)
-        UI.addOption(streamModeElem, "JPEG/WEBP (Images)", encodings.pseudoEncodingStreamingModeJpegWebp);
+        const fallbackOption = {
+            id: encodings.pseudoEncodingStreamingModeJpegWebp,
+            label: "JPEG/WEBP (Images)"
+        };
+        const availableOptions = [fallbackOption];
 
-        if (!Array.isArray(codecs) || codecs.length === 0)
-            return;
+        const codecsAvailable = Array.isArray(codecs) && codecs.length > 0;
+        if (codecsAvailable) {
+            const codecTuples = codecs.map((id) => {
+                const label = CODEC_VARIANT_NAMES[id] ? CODEC_VARIANT_NAMES[id] : `Codec ${id}`;
+                return {id, label};
+            });
 
-        codecs.forEach((id) => {
-            const label = CODEC_VARIANT_NAMES[id] ? CODEC_VARIANT_NAMES[id] : `Codec ${id}`;
-            UI.addOption(streamModeElem, label, id);
-        })
+            availableOptions.push(...codecTuples);
+        }
+
+        availableOptions.forEach(option => {
+            UI.addOption(streamModeElem, option.label, option.id);
+        });
 
         // Restore selection if possible; otherwise default to JPEG/WEBP
         const hasPrev = Array.from(streamModeElem.options).some(o => {
@@ -867,7 +876,8 @@ const UI = {
         });
 
         streamModeElem.value = hasPrev ? prev : Math.max(...codecs.map(Number)); // encodings.pseudoEncodingStreamingModeJpegWebp;
-        UI.streamMode({ target: streamModeElem });
+        UI.streamMode({target: streamModeElem});
+        UI.sendMessage("update_codecs", {current: streamModeElem.value, codecs: availableOptions});
     },
 
     showStatus(text, statusType, time, kasm = false) {

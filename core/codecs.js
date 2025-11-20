@@ -44,6 +44,11 @@ export const CODEC_VARIANT_NAMES = {
     [CODEC_IDS.AV1SW]: 'SW AV1 (experimental)'
 }
 
+export const preferredCodecs = [
+    encodings.pseudoEncodingStreamingModeHEVCVAAPI,
+    encodings.pseudoEncodingStreamingModeAVCVAAPI
+];
+
 export default class CodecDetector {
     constructor() {
         this._capabilities = null;

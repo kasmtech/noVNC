@@ -45,3 +45,5 @@ class BasicChart {
         }
     }
 }
+
+export default BasicChart;

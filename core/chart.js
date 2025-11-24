@@ -17,7 +17,8 @@ class BasicChart {
         if (this.data.length === 0) return '';
 
         const stepX = this.width / (this.maxPoints - 1);
-        const scaleY = this.height / this.maxValue;
+        const effectiveMaxValue = this.maxValue || Math.max(...this.data) || 1;
+        const scaleY = this.height / effectiveMaxValue;
 
         let d = `M 0 ${this.height}`;
 

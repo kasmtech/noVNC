@@ -73,6 +73,10 @@ const UI = {
     currentDisplay: null,
     displayWindows: new Map([['primary', 'primary']]),
     registeredWindows: new Map([['primary', 'primary']]),
+    fpsChart: null,
+    bandwidthChart: null,
+    jitterChart: null,
+    rttChart: null,
 
     monitorDragOk: false,
     monitorStartX: 0,
@@ -742,19 +746,25 @@ const UI = {
     showStats() {
         UI.saveSetting('enable_perf_stats');
 
-        let enable_stats = UI.getSetting('enable_perf_stats');
-        if (enable_stats === true && UI.statsInterval == undefined) {
-            document.getElementById("noVNC_connection_stats").style.visibility = "visible";
-            UI.statsInterval = setInterval(function() {
+        const enable_stats = UI.getSetting('enable_perf_stats') === true && UI.statsInterval === undefined;
+        const ids = ['noVNC_connection_stats', 'noVNC_charts_container'];
+        ids.forEach(id => {
+            const element = document.getElementById(id);
+            if (element) {
+                element.style.visibility = enable_stats ? 'visible' : 'hidden';
+            }
+        })
+
+        if (enable_stats) {
+            UI.statsInterval = setInterval(function () {
                 if (UI.rfb !== undefined) {
                     UI.rfb.requestBottleneckStats();
                 }
-            }  , 5000);
+            }, 5000);
         } else {
-            document.getElementById("noVNC_connection_stats").style.visibility = "hidden";
+            clearInterval(UI.statsInterval);
             UI.statsInterval = null;
         }
-
     },
 
     threading() {
@@ -1387,6 +1397,7 @@ const UI = {
         try {
             let obj = JSON.parse(e.detail.text);
             let fps = UI.rfb.statsFps;
+            UI.fpsChart.update(Number(fps));
             document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
             console.log(e.detail.text);
         } catch (err) {
@@ -1399,7 +1410,18 @@ const UI = {
             return;
 
         try {
-            let obj = JSON.parse(e.detail.text);
+            const [jitter, rtt, bandwidth] = JSON.parse(e.detail.text);
+
+            const updateChart = (chart, value) => {
+                if (chart && value !== undefined) {
+                    chart.update(Number(value));
+                }
+            };
+
+            updateChart(UI.jitterChart, jitter);
+            updateChart(UI.rttChart, rtt);
+            updateChart(UI.bandwidthChart, bandwidth);
+
             console.log(e.detail.text);
         } catch (err) {
             console.log('Invalid network stats received from server.')
@@ -1601,6 +1623,11 @@ const UI = {
             document.getElementById('noVNC_status').style.visibility = "visible";
         }
 
+        UI.fpsChart = new BasicChart('noVNC_fps_path', 60, 120);
+        UI.bandwidthChart = new BasicChart('noVNC_bandwidth_path', 60);
+        UI.rttChart = new BasicChart('noVNC_rtt_path', 60);
+        UI.jitterChart = new BasicChart('noVNC_jitter_path', 60);
+
         //key events for KasmVNC control
         document.addEventListener('keyup', function (event) {
             if (event.ctrlKey && event.shiftKey) {
@@ -1622,6 +1649,11 @@ const UI = {
 
     disconnect() {
         UI.rfb.disconnect();
+
+        UI.fpsChart = null;
+        UI.bandwidthChart = null;
+        UI.rttChart = null;
+        UI.jitterChart = null;
 
         UI.connected = false;
 

@@ -4,7 +4,7 @@ class BasicChart {
     static CHART_MAX_POINTS = 60;
     static FPS_CHART_MAX_FPS_VALUE = 120;
 
-    constructor(chartId, maxPoints = CHART_MAX_POINTS, maxValue = FPS_CHART_MAX_FPS_VALUE) {
+    constructor(chartId, maxPoints = BasicChart.CHART_MAX_POINTS, maxValue = BasicChart.FPS_CHART_MAX_FPS_VALUE) {
         this.id = chartId;
         this.data = [];
         this.maxPoints = maxPoints;

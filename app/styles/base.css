@@ -354,6 +354,30 @@ select:active {
   visibility: hidden;
 }
 
+/* Create a container for all charts */
+#noVNC_charts_container {
+    position: fixed;
+    top: 40px;
+    right: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px; /* spacing between charts */
+    visibility: hidden;
+}
+
+#noVNC_charts_container.visible {
+    visibility: visible;
+}
+
+/* Simplified chart styles */
+#noVNC_fps_chart,
+#noVNC_rtt_chart,
+#noVNC_jitter_chart,
+#noVNC_bandwidth_chart {
+    background: #9fa5a2d4;
+    display: flex;
+}
+
 /* ----------------------------------------
  * Control Bar
  * ----------------------------------------

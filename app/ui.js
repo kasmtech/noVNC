@@ -1396,13 +1396,13 @@ const UI = {
             return;
 
         try {
+            console.log(e.detail.text);
             let obj = JSON.parse(e.detail.text);
             let fps = UI.rfb.statsFps;
             UI.fpsChart.update(Number(fps));
             document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
-            console.log(e.detail.text);
         } catch (err) {
-            console.log('Invalid bottleneck stats received from server.')
+            console.log('Invalid bottleneck stats received from server. ', {err})
         }
     },
 
@@ -1516,7 +1516,7 @@ const UI = {
         UI.rfb.addEventListener("securityfailure", UI.securityFailed);
         UI.rfb.addEventListener("capabilities", UI.updatePowerButton);
         UI.rfb.addEventListener("clipboard", UI.clipboardReceive);
-        UI.rfb.addEventListener("bottleneck_stats", UI.bottleneckStatsRecieve);
+        UI.rfb.addEventListener("bottleneck_stats", UI.bottleneckStatsReceive);
         UI.rfb.addEventListener("network_stats", UI.networkStatsReceive);
         UI.rfb.addEventListener("bell", UI.bell);
         UI.rfb.addEventListener("desktopname", UI.updateDesktopName);

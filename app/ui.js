@@ -746,15 +746,17 @@ const UI = {
 
     showStats() {
         UI.saveSetting('enable_perf_stats');
-
         const enable_stats = UI.getSetting('enable_perf_stats') === true && UI.statsInterval === undefined;
-        const ids = ['noVNC_connection_stats', 'noVNC_charts_container'];
-        ids.forEach(id => {
-            const element = document.getElementById(id);
-            if (element) {
-                element.style.visibility = enable_stats ? 'visible' : 'hidden';
-            }
-        })
+
+        if (!WebUtil.isInsideKasmVDI()) {
+            const ids = ['noVNC_connection_stats', 'noVNC_charts_container'];
+            ids.forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.style.visibility = enable_stats ? 'visible' : 'hidden';
+                }
+            })
+        }
 
         if (enable_stats) {
             UI.statsInterval = setInterval(function () {
@@ -1390,7 +1392,7 @@ const UI = {
        }
     },
 
-    //recieved bottleneck stats
+    //received bottleneck stats
     bottleneckStatsReceive(e) {
         if (!UI.rfb)
             return;
@@ -1399,8 +1401,12 @@ const UI = {
             console.log(e.detail.text);
             let obj = JSON.parse(e.detail.text);
             let fps = UI.rfb.statsFps;
-            UI.fpsChart.update(Number(fps));
-            document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
+            if (!WebUtil.isInsideKasmVDI()) {
+                UI.fpsChart.update(Number(fps));
+                document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
+            } else {
+                UI.sendMessage("bottleneck_stats", {stats: obj, fps: fps, droppedFpd: UI.rfb.statsDroppedFps});
+            }
         } catch (err) {
             console.log('Invalid bottleneck stats received from server. ', {err})
         }
@@ -1413,28 +1419,47 @@ const UI = {
         try {
             const [jitter, rtt, bandwidth] = JSON.parse(e.detail.text);
 
-            const updateChart = (chart, value) => {
-                if (chart && value !== undefined) {
-                    chart.update(Number(value));
-                }
-            };
+            if (!WebUtil.isInsideKasmVDI()) {
 
-            updateChart(UI.jitterChart, jitter);
-            updateChart(UI.rttChart, rtt);
-            updateChart(UI.bandwidthChart, bandwidth);
+                const updateChart = (chart, value) => {
+                    if (chart && value !== undefined) {
+                        chart.update(Number(value));
+                    }
+                };
 
+                updateChart(UI.jitterChart, jitter);
+                updateChart(UI.rttChart, rtt);
+                updateChart(UI.bandwidthChart, bandwidth);
+            } else {
+                UI.sendMessage('network_stats', {jitter, rtt, bandwidth});
+            }
             console.log(e.detail.text);
         } catch (err) {
             console.log('Invalid network stats received from server.')
         }
     },
 
-    popupMessage: function(msg, secs) {
-        if (!secs){
+    systemStatsReceive(e) {
+        if (!UI.rfb)
+            return;
+
+        try {
+            if (WebUtil.isInsideKasmVDI()) {
+                const systemStats = JSON.parse(e.detail.text);
+                UI.sendMessage('system_stats', systemStats);
+            }
+            console.log(e.detail.text);
+        } catch (err) {
+            console.log('Invalid system stats received from server.')
+        }
+    },
+
+    popupMessage: function (msg, secs) {
+        if (!secs) {
             secs = 500;
         }
-    // Quick popup to give feedback that selection was copied
-    setTimeout(UI.showOverlay.bind(this, msg, secs), 200);
+        // Quick popup to give feedback that selection was copied
+        setTimeout(UI.showOverlay.bind(this, msg, secs), 200);
     },
 
     clipboardClear() {
@@ -1518,6 +1543,7 @@ const UI = {
         UI.rfb.addEventListener("clipboard", UI.clipboardReceive);
         UI.rfb.addEventListener("bottleneck_stats", UI.bottleneckStatsReceive);
         UI.rfb.addEventListener("network_stats", UI.networkStatsReceive);
+        UI.rfb.addEventListener("system_stats", UI.systemStatsReceive);
         UI.rfb.addEventListener("bell", UI.bell);
         UI.rfb.addEventListener("desktopname", UI.updateDesktopName);
         UI.rfb.addEventListener("inputlock", UI.inputLockChanged);

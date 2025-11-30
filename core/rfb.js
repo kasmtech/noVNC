@@ -3578,33 +3578,21 @@ export default class RFB extends EventTargetMixin {
         );
     }
 
-    _handle_server_stats_msg() {
+    _handleServerStatsMsg(stats) {
         this._sock.rQskipBytes(3);  // Padding
         const length = this._sock.rQshift32();
-        if (this._sock.rQwait("KASM bottleneck stats", length, 8)) { return false; }
+        if (this._sock.rQwait("KASM " + stats, length, 8)) {
+            return false;
+        }
 
         const text = this._sock.rQshiftStr(length);
 
-        Log.Debug("Received KASM bottleneck stats:");
+        Log.Debug("Received KASM '" + stats + "':");
         Log.Debug(text);
         this.dispatchEvent(new CustomEvent(
-            "bottleneck_stats",
-            { detail: { text: text } }));
+            stats,
+            {detail: {text: text}}));
 
-        return true;
-    }
-
-    _handle_server_network_stats_msg() {
-        this._sock.rQskipBytes(3); // Padding
-        const length = this._sock.rQshift32();
-        if (this._sock.rQwait("KASM bottleneck stats", length, 8))
-            return false;
-
-        const text = this._sock.rQshiftStr(length);
-        Log.Debug("Received KASM network stats:");
-        Log.Debug(text);
-
-        this.dispatchEvent(new CustomEvent("network_stats", {detail: {text: text}}));
         return true;
     }
 
@@ -3747,13 +3735,15 @@ export default class RFB extends EventTargetMixin {
                 return true;
 
             case messages.msgTypeRequestStats: // KASM bottleneck stats
-                return this._handle_server_stats_msg();
+                return this._handleServerStatsMsg("bottleneck_stats");
 
             case messages.msgTypeFrameStats: // KASM requesting frame stats
                 this._trackFrameStats = true;
                 return true;
             case messages.msgTypeNetworkStats:
-                return this._handle_server_network_stats_msg();
+                return this._handleServerStatsMsg("network_stats");
+            case messages.msgTypeSystemStats:
+                return this._handleServerStatsMsg("system_stats");
             case 180: // KASM binary clipboard
                 return this._handleBinaryClipboard();
 

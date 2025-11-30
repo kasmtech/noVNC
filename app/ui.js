@@ -1770,7 +1770,7 @@ const UI = {
                 document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
                 UI.updateFpsChart(Number(fps));
                 // UI.fpsChart.update(Number(fps));
-            } else {
+ } else {
                 UI.sendMessage("bottleneck_stats", {stats: obj, fps: fps, droppedFpd: UI.rfb.statsDroppedFps});
             }
         } catch (err) {

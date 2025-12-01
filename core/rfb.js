@@ -1143,6 +1143,7 @@ export default class RFB extends EventTargetMixin {
         if (this._isPrimaryDisplay) {
             RFB.messages.requestStats(this._sock, messages.msgTypeRequestStats);
             RFB.messages.requestStats(this._sock, messages.msgTypeNetworkStats);
+            RFB.messages.requestStats(this._sock, messages.msgTypeSystemStats);
         }
     }
 

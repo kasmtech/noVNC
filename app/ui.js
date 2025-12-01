@@ -1405,7 +1405,7 @@ const UI = {
                 UI.fpsChart.update(Number(fps));
                 document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
             } else {
-                UI.sendMessage("bottleneck_stats", {stats: obj, fps: fps, droppedFpd: UI.rfb.statsDroppedFps});
+                UI.sendMessage("bottleneck_stats", {stats: obj, fps: fps, droppedFps: UI.rfb.statsDroppedFps});
             }
         } catch (err) {
             console.log('Invalid bottleneck stats received from server. ', {err})
@@ -1650,10 +1650,10 @@ const UI = {
             document.getElementById('noVNC_status').style.visibility = "visible";
         }
 
-        UI.fpsChart = new BasicChart('noVNC_fps_path', 60, 120);
-        UI.bandwidthChart = new BasicChart('noVNC_bandwidth_path', 60);
-        UI.rttChart = new BasicChart('noVNC_rtt_path', 60);
-        UI.jitterChart = new BasicChart('noVNC_jitter_path', 60);
+        UI.fpsChart = new BasicChart('noVNC_fps_path', 'FPS', 60, 120);
+        UI.bandwidthChart = new BasicChart('noVNC_bandwidth_path', 'Bandwidth', 60);
+        UI.rttChart = new BasicChart('noVNC_rtt_path', 'RTT', 60);
+        UI.jitterChart = new BasicChart('noVNC_jitter_path',  'Jitter', 60);
 
         //key events for KasmVNC control
         document.addEventListener('keyup', function (event) {

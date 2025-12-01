@@ -2,15 +2,56 @@ class BasicChart {
     static CHART_WIDTH = 200;
     static CHART_HEIGHT = 50;
     static CHART_MAX_POINTS = 60;
-    static FPS_CHART_MAX_FPS_VALUE = 120;
 
-    constructor(chartId, maxPoints = BasicChart.CHART_MAX_POINTS, maxValue = BasicChart.FPS_CHART_MAX_FPS_VALUE) {
+    constructor(chartId, name = '', maxPoints = BasicChart.CHART_MAX_POINTS, maxValue = undefined) {
         this.id = chartId;
+        this.name = name;
         this.data = [];
         this.maxPoints = maxPoints;
         this.maxValue = maxValue;
-        this.width = this.CHART_WIDTH;
-        this.height = this.CHART_HEIGHT;
+        this.width = BasicChart.CHART_WIDTH;
+        this.height = BasicChart.CHART_HEIGHT;
+        this.minValue = null;
+        this.maxRecorded = null;
+
+        if (name) {
+            this.createLabel();
+        }
+    }
+
+    createLabel() {
+        const pathElement = document.getElementById(this.id);
+        if (!pathElement) return;
+
+        const svgElement = pathElement.closest('svg');
+        if (!svgElement) return;
+
+        const chartContainer = svgElement.parentElement;
+        if (!chartContainer) return;
+
+        // Create or update label element
+        let labelId = `${this.id}_label`;
+        let labelElement = document.getElementById(labelId);
+
+        if (!labelElement) {
+            labelElement = document.createElement('div');
+            labelElement.id = labelId;
+            labelElement.style.cssText = 'font-size: 12px; color: #fff; margin-bottom: 5px;';
+            chartContainer.insertBefore(labelElement, svgElement);
+        }
+
+        this.updateLabel();
+    }
+
+    updateLabel() {
+        const labelId = `${this.id}_label`;
+        const labelElement = document.getElementById(labelId);
+
+        if (labelElement) {
+            const min = this.minValue !== null ? this.minValue.toFixed(2) : 'N/A';
+            const max = this.maxRecorded !== null ? this.maxRecorded.toFixed(2) : 'N/A';
+            labelElement.textContent = `${this.name} - Min: ${min}, Max: ${max}`;
+        }
     }
 
     generateChartPoints() {
@@ -39,9 +80,22 @@ class BasicChart {
             this.data.shift();
         }
 
+        // Update min/max values
+        if (this.minValue === null || value < this.minValue) {
+            this.minValue = value;
+        }
+        if (this.maxRecorded === null || value > this.maxRecorded) {
+            this.maxRecorded = value;
+        }
+
         const path = document.getElementById(this.id);
         if (path) {
             path.setAttribute('d', this.generateChartPoints());
+        }
+
+        // Update label if it exists
+        if (this.name) {
+            this.updateLabel();
         }
     }
 }

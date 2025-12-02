@@ -2042,7 +2042,12 @@ const UI = {
                     }
                     break;
                 case 'set_streaming_mode':
-                    UI.forceSetting(UI_SETTINGS.STREAM_MODE, parseInt(event.data.value), false);
+                    let mode = encodings.pseudoEncodingStreamingModeJpegWebp;
+                    if (event.data.value !== 'image') {
+                        mode = parseInt(event.data.value);
+                    }
+
+                    UI.forceSetting(UI_SETTINGS.STREAM_MODE, mode, false);
                     UI.updateQuality();
                     break;
                 case 'set_video_stream_quality':

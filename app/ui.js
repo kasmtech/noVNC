@@ -1926,13 +1926,21 @@ const UI = {
                     }
                     break;
                 case 'setvideoquality':
-                    if (event.data.qualityLevel !== undefined) {
-                        //apply preset mode values, but don't apply to connection
-                        UI.forceSetting('video_quality', parseInt(event.data.qualityLevel), false);
-                        // apply quality preset quality level and override some settings (fps)
-                        UI.updateQuality(event.data.frameRate);
+                    const streamMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE));
+                    if (streamMode === encodings.pseudoEncodingStreamingModeJpegWebp) {
+                        if (event.data.qualityLevel !== undefined) {
+                            //apply preset mode values, but don't apply to connection
+                            UI.forceSetting('video_quality', parseInt(event.data.qualityLevel), false);
+                            // apply quality preset quality level and override some settings (fps)
+                            UI.updateQuality(event.data.frameRate);
+                        } else {
+                            UI.forceSetting('video_quality', parseInt(event.data.value), false);
+                            UI.updateQuality();
+                        }
                     } else {
-                        UI.forceSetting('video_quality', parseInt(event.data.value), false);
+                        const inputValue = parseInt(event.data.value);
+                        const mappedValue = 60 - (inputValue * 15);
+                        UI.forceSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY, mappedValue, false);
                         UI.updateQuality();
                     }
                     break;

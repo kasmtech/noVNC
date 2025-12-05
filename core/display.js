@@ -1436,24 +1436,35 @@ export default class Display {
                                 break;
                             case 'video_frame':
                                 secondaryScreenRects++;
-                                if (a.frame.format !== null)
+                                if (a.frame.format !== null) {
                                     if (this._screens[screenLocation.screenIndex]?.channel) {
-                                        this._screens[screenLocation.screenIndex].channel.postMessage({
-                                            eventType: 'rect',
-                                            rect: {
-                                                type: 'video_frame',
-                                                frame: a.frame,
-                                                x: a.x,
-                                                y: a.y,
-                                                width: a.width,
-                                                height: a.height,
-                                                frame_id: a.frame_id,
-                                                screenLocations: a.screenLocations
-                                            },
-                                            screenLocationIndex: sI
-                                        }, [a.frame]);
-                                    } else
+                                        Log.Debug(`[PRIMARY] Converting VideoFrame to ImageBitmap`);
+                                        createImageBitmap(a.frame).then((bitmap) => {
+                                            this._screens[screenLocation.screenIndex].channel.postMessage({
+                                                eventType: 'rect',
+                                                rect: {
+                                                    type: 'bitmap',
+                                                    img: bitmap,
+                                                    x: a.x,
+                                                    y: a.y,
+                                                    width: a.width,
+                                                    height: a.height,
+                                                    frame_id: a.frame_id,
+                                                    screenLocations: a.screenLocations
+                                                },
+                                                screenLocationIndex: sI
+                                            }, [bitmap]); // Transfer ImageBitmap
+
+                                            Log.Debug(`[PRIMARY] ImageBitmap posted to secondary screen ${screenLocation.screenIndex}`);
+                                        }).catch((error) => {
+                                            Log.Error(`[PRIMARY] Failed to create ImageBitmap from VideoFrame: ${error.message}`);
+                                        });
+                                    } else {
                                         a.frame.close();
+                                    }
+                                } else {
+                                    Log.Warn(`[PRIMARY] VideoFrame has null format, skipping`);
+                                }
                                 break;
                             case 'img':
                             case '_img':

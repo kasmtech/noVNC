@@ -308,7 +308,7 @@ const UI = {
         UI.initSetting(UI_SETTINGS.STREAM_MODE, encodings.pseudoEncodingStreamingModeJpegWebp);
         // UI.initSetting(UI_SETTINGS.HW_PROFILE, UI_SETTING_PROFILE_OPTIONS.BASELINE);
         UI.initSetting(UI_SETTINGS.GOP, this.getSetting('framerate'));
-        UI.initSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY, 33);
+        UI.initSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY, 43);
         // UI.initSetting(UI_SETTINGS.PRESET, 3);
 
         UI.toggleKeyboardControls();

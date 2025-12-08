@@ -2062,10 +2062,6 @@ const UI = {
                     UI.forceSetting(UI_SETTINGS.STREAM_MODE, mode, false);
                     UI.updateQuality();
                     break;
-                case 'set_video_stream_quality':
-                    UI.forceSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY, parseInt(event.data.value), false);
-                    UI.updateQuality();
-                    break;
                 case 'set_gop':
                     UI.forceSetting(UI_SETTINGS.GOP, parseInt(event.data.value), false);
                     UI.updateQuality();

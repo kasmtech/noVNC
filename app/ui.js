@@ -2829,19 +2829,21 @@ const UI = {
             case 2: // medium
             case 0: // static resolution, but same settings as medium
             default:
-                fps = (fps && Number.isFinite(fps)) ? fps : 24;
-                UI.forceSetting('jpeg_video_quality', 7);
-                UI.forceSetting('webp_video_quality', 7);
-                UI.forceSetting('dynamic_quality_min', 4);
-                UI.forceSetting('dynamic_quality_max', 9);
-                UI.forceSetting('max_video_resolution_x', 960);
-                UI.forceSetting('max_video_resolution_y', 540);
-                UI.forceSetting('framerate', (fps) ? fps : 24);
-                UI.forceSetting('treat_lossless', 7);
-                UI.forceSetting('video_time', 5);
-                UI.forceSetting('video_area', 65);
-                UI.forceSetting('video_scaling', 0);
-                UI.forceSetting('video_out_time', 3);
+                if (parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE)) === encodings.pseudoEncodingStreamingModeJpegWebp) {
+                    fps = (fps && Number.isFinite(fps)) ? fps : 24;
+                    UI.forceSetting('jpeg_video_quality', 7);
+                    UI.forceSetting('webp_video_quality', 7);
+                    UI.forceSetting('dynamic_quality_min', 4);
+                    UI.forceSetting('dynamic_quality_max', 9);
+                    UI.forceSetting('max_video_resolution_x', 960);
+                    UI.forceSetting('max_video_resolution_y', 540);
+                    UI.forceSetting('framerate', (fps) ? fps : 24);
+                    UI.forceSetting('treat_lossless', 7);
+                    UI.forceSetting('video_time', 5);
+                    UI.forceSetting('video_area', 65);
+                    UI.forceSetting('video_scaling', 0);
+                    UI.forceSetting('video_out_time', 3);
+                }
                 break;
         }
 

@@ -1,6 +1,6 @@
 
 msgid "Connecting..."
-msgstr "De liaison..."
+msgstr "Connexion..."
 
 msgid "Disconnecting..."
 msgstr "Déconnexion..."
@@ -27,16 +27,16 @@ msgid "Failed to connect to server"
 msgstr "Échec de connexion au serveur"
 
 msgid "Disconnected"
-msgstr "Débranché"
+msgstr "Déconnecté"
 
 msgid "New connection has been rejected with reason: "
-msgstr "La nouvelle connexion a été rejetée avec raison : "
+msgstr "La nouvelle connexion a été refusée pour le motif suivant: "
 
 msgid "New connection has been rejected"
-msgstr "La nouvelle connexion a été rejetée"
+msgstr "La nouvelle connexion a été refusée"
 
 msgid "Credentials are required"
-msgstr "Les justificatifs sont obligatoires"
+msgstr "Les informations d'identification sont requises"
 
 msgid "Hide/Show the control bar"
 msgstr "Masquer/Afficher la barre de contrôle"
@@ -54,10 +54,10 @@ msgid "Show Keyboard"
 msgstr "Afficher le clavier"
 
 msgid "Extra keys"
-msgstr "Clés supplémentaires"
+msgstr "Touches supplémentaires"
 
 msgid "Show Extra Keys"
-msgstr "Afficher les clés supplémentaires"
+msgstr "Afficher les touches supplémentaires"
 
 msgid "Ctrl"
 msgstr "Ctrl"
@@ -78,16 +78,16 @@ msgid "Windows"
 msgstr "Les fenêtres"
 
 msgid "Send Tab"
-msgstr "Onglet Envoyer"
+msgstr "Envoyer la touche Tabulation"
 
 msgid "Tab"
-msgstr "Languette"
+msgstr "Onglet"
 
 msgid "Esc"
 msgstr "Esc"
 
 msgid "Send Escape"
-msgstr "Envoyer l'évasion"
+msgstr "Envoyer la touche Échap"
 
 msgid "Ctrl+Alt+Del"
 msgstr "Ctrl+Alt+Suppr"
@@ -102,10 +102,10 @@ msgid "Shutdown/Reboot..."
 msgstr "Arrêt/Redémarrage..."
 
 msgid "Power"
-msgstr "Pouvoir"
+msgstr "Démarrer"
 
 msgid "Shutdown"
-msgstr "Fermer"
+msgstr "Eteindre"
 
 msgid "Reboot"
 msgstr "Redémarrer"
@@ -117,7 +117,7 @@ msgid "Clipboard"
 msgstr "Presse-papiers"
 
 msgid "Clear"
-msgstr "Clair"
+msgstr "Vider"
 
 msgid "Fullscreen"
 msgstr "Plein écran"
@@ -162,10 +162,10 @@ msgid "WebSocket"
 msgstr "WebSocket"
 
 msgid "Encrypt"
-msgstr "Crypter"
+msgstr "Chiffrer"
 
 msgid "Host:"
-msgstr "Héberger:"
+msgstr "Hôte:"
 
 msgid "Port:"
 msgstr "Port:"
@@ -183,7 +183,7 @@ msgid "Show Dot when No Cursor"
 msgstr "Afficher le point lorsqu'il n'y a pas de curseur"
 
 msgid "Logging:"
-msgstr "Enregistrement:"
+msgstr "Journal:"
 
 msgid "Version:"
 msgstr "Version:"
@@ -207,7 +207,7 @@ msgid "Cancel"
 msgstr "Annuler"
 
 msgid "Keys"
-msgstr "Clés"
+msgstr "Touches"
 
 msgid "Game Cursor Mode"
 msgstr "Mode curseur de jeu"
@@ -252,7 +252,7 @@ msgid "Show Virtual Keyboard Control"
 msgstr "Afficher le contrôle du clavier virtuel"
 
 msgid "Toggle Control Panel via Keystrokes"
-msgstr "Basculer le panneau de configuration via les frappes"
+msgstr "Basculer le panneau de configuration via les frappes clavier"
 
 msgid "Render Native Resolution"
 msgstr "Rendre la résolution native"
@@ -375,7 +375,7 @@ msgid "Identify"
 msgstr "Identifier"
 
 msgid "Done"
-msgstr "Fait"
+msgstr "Quitter"
 
 msgid "Control Panel"
 msgstr "Panneau de contrôle"

@@ -195,7 +195,11 @@ const UI = {
         });
 
         window.addEventListener("unload", (e) => {
-            if (UI.rfb) {
+            // Only disconnect if this is NOT a secondary monitor window
+            const urlParams = new URLSearchParams(window.location.search);
+            const windowId = urlParams.get('windowId');
+
+            if (UI.rfb && !windowId) {
                 UI.disconnect();
             }
         });

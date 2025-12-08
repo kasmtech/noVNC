@@ -20,9 +20,13 @@ const UI = {
 
     //Render default UI
     start() {
-        window.addEventListener("unload", (e) => { 
-            if (UI.rfb) { 
-                UI.disconnect(); 
+        window.addEventListener("unload", (e) => {
+            // Only disconnect if this is NOT a secondary monitor window
+            const urlParams = new URLSearchParams(window.location.search);
+            const windowId = urlParams.get('windowId');
+
+            if (UI.rfb && !windowId) {
+                UI.disconnect();
             }
         });
 

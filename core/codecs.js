@@ -48,7 +48,7 @@ export const preferredCodecs = [
     encodings.pseudoEncodingStreamingModeHEVCVAAPI,
     encodings.pseudoEncodingStreamingModeAVCVAAPI,
     encodings.pseudoEncodingStreamingModeHEVCSW,
-    encodings.pseudoEncodingStreamingModeAVCNVENC
+    encodings.pseudoEncodingStreamingModeAVCSW
 ];
 
 export default class CodecDetector {

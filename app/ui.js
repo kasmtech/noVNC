@@ -1953,7 +1953,7 @@ const UI = {
                             UI.updateQuality();
                         }
                     } else {
-                        const mappedValue = 60 - (value * 15);
+                        const mappedValue = value * 15;
                         UI.forceSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY, mappedValue, false);
                         UI.updateQuality();
                     }

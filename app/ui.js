@@ -857,6 +857,10 @@ const UI = {
         UI.updatePropertyName(UI_SETTINGS.STREAM_MODE);
         UI.saveSetting(UI_SETTINGS.STREAM_MODE);
         UI.updateQuality();
+
+        if (value === encodings.pseudoEncodingStreamingModeJpegWebp) {
+            UI.rfb._requestFullRefresh();
+        }
     },
 
     initStreamModeSetting(codecs) {

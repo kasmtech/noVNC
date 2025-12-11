@@ -1698,6 +1698,10 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
+    _requestFullRefresh() {
+        RFB.messages.fbUpdateRequest(this._sock, false, 0, 0, this._fbWidth, this._fbHeight);
+    }
+
     // Gets the the size of the available screen
     _screenSize (limited) {
         return this._display.getScreenSize(this.videoQuality, this.forcedResolutionX, this.forcedResolutionY, this._hiDpi, limited, !this._resizeSession);

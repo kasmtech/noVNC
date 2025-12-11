@@ -341,7 +341,7 @@ const UI = {
         UI.updateQuality();
 
         // VDI setting
-        let val = WebUtil.getConfigVar('video_mode');
+        let val = WebUtil.getConfigVar('kasmvnc_mode_preference');
         if (val === 'image') {
             UI.forcedCodecs = [encodings.pseudoEncodingStreamingModeJpegWebp];
             Log.Debug('VDI setting: image');

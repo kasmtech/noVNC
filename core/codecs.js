@@ -57,9 +57,11 @@ export default class CodecDetector {
     }
 
     async detect() {
+        this._capabilities = {};
+
+
         if (!('VideoDecoder' in window)) {
             Log.Warn('WebCodecs API not available');
-            this._capabilities = {};
             return;
         }
 
@@ -69,7 +71,6 @@ export default class CodecDetector {
             [CODEC_NAMES.AV1]: 'av01.0.04M.08'
         };
 
-        this._capabilities = {};
 
         for (const [name, codec] of Object.entries(codecs)) {
             try {

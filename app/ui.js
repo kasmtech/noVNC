@@ -83,6 +83,7 @@ const UI = {
 
     supportsBroadcastChannel: (typeof BroadcastChannel !== "undefined"),
     codecDetector: null,
+    forcedCodecs: [],
 
     prime: async () => {
         await WebUtil.initSettings();
@@ -338,6 +339,17 @@ const UI = {
 
         UI.setupSettingLabels();
         UI.updateQuality();
+
+        // VDI setting
+        let val = WebUtil.getConfigVar('video_mode');
+        if (val === 'image') {
+            Log.Warn('VDI setting: image');
+            return;
+        }
+
+        if (val != null) {
+            UI.forcedCodecs = val.split('|').map(Number);
+        }
     },
     initMouseButtonMapper() {
         const mouseButtonMapper = new MouseButtonMapper();
@@ -862,6 +874,10 @@ const UI = {
 
         const codecsAvailable = Array.isArray(codecs) && codecs.length > 0;
         if (codecsAvailable) {
+            codecs = UI.forcedCodecs.length > 0
+                ? codecs.filter(id => UI.forcedCodecs.includes(id))
+                : codecs;
+
             const codecTuples = codecs.map((id) => {
                 const label = CODEC_VARIANT_NAMES[id] ? CODEC_VARIANT_NAMES[id] : `Codec ${id}`;
                 return {id, label};

@@ -242,7 +242,7 @@ const UI = {
         document.documentElement.classList.remove("noVNC_disconnected");
 
         const transitionElem = document.getElementById("noVNC_transition_text");
-        if (WebUtil.isInsideKasmVDI())         
+        if (WebUtil.isInsideKasmVDI())
         {
             parent.postMessage({ action: 'connection_state', value: state}, '*' );
         }
@@ -370,7 +370,7 @@ const UI = {
             if (UI.supportsBroadcastChannel) {
                 UI.controlChannel.removeEventListener('message', UI.handleControlMessage);
                 UI.rfb.removeEventListener("connect", UI.connectFinished);
-            }    
+            }
         }
     },
 

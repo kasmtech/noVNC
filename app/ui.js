@@ -343,12 +343,14 @@ const UI = {
         // VDI setting
         let val = WebUtil.getConfigVar('video_mode');
         if (val === 'image') {
-            Log.Warn('VDI setting: image');
+            UI.forcedCodecs = [encodings.pseudoEncodingStreamingModeJpegWebp];
+            Log.Debug('VDI setting: image');
             return;
         }
 
         if (val != null) {
             UI.forcedCodecs = val.split('|').map(Number);
+            Log.Debug('VDI setting: ' + UI.forcedCodecs);
         }
     },
     initMouseButtonMapper() {

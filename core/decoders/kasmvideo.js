@@ -28,11 +28,7 @@ export default class KasmVideoDecoder {
         this._keyFrame = 0;
         this._screenId = null;
         this._ctl = null;
-        //this.codec = 0;
         this._display = display;
-
-        //this._width = null;
-        //this._height = null;
 
         this._timestamp = 0;
         this._timestampMap = new Map();
@@ -40,8 +36,6 @@ export default class KasmVideoDecoder {
     }
 
     // ===== Public Methods =====
-
-
     decodeRect(x, y, width, height, sock, display, depth, frame_id) {
         if (this._ctl === null) {
             if (sock.rQwait("KasmVideo screen and compression-control", 2)) {
@@ -51,7 +45,7 @@ export default class KasmVideoDecoder {
             this._screenId = sock.rQshift8();
             this._ctl = sock.rQshift8();
 
-            // Figure out filter
+            // Figure out the filter
             this._ctl = this._ctl >> 4;
         }
 
@@ -78,7 +72,6 @@ export default class KasmVideoDecoder {
     }
 
     // ===== Private Methods =====
-
     _configureDecoder(screen) {
         Log.Debug('Configuring decoder for screen: ', screen.id, ' codec: ', VIDEO_CODEC_NAMES[screen.codec], ' width: ', screen.width, ' height: ', screen.height);
         screen.decoder.configure({

@@ -99,9 +99,24 @@ export function encodingName(num) {
         case encodings.encodingHextile:         return "Hextile";
         case encodings.encodingTight:           return "Tight";
         case encodings.encodingTightPNG:        return "TightPNG";
-        case encodings.encodingKasmVideoAVC:    return "KasmVideo AVC";
-        case encodings.encodingKasmVideoHEVC:   return "KasmVideo HEVC";
-        case encodings.encodingKasmVideoAV1:    return "KasmVideo AV1";
+        case encodings.pseudoEncodingStreamingModeAVCQSV:
+        case encodings.pseudoEncodingStreamingModeAVCNVENC:
+        case encodings.pseudoEncodingStreamingModeAVCVAAPI:
+        case encodings.pseudoEncodingStreamingModeAVCSW:
+        case encodings.pseudoEncodingStreamingModeAVC:
+            return "KasmVideo AVC";
+        case encodings.pseudoEncodingStreamingModeHEVCQSV:
+        case encodings.pseudoEncodingStreamingModeHEVCNVENC:
+        case encodings.pseudoEncodingStreamingModeHEVCVAAPI:
+        case encodings.pseudoEncodingStreamingModeHEVCSW:
+        case encodings.pseudoEncodingStreamingModeHEVC:
+            return "KasmVideo HEVC";
+        case encodings.pseudoEncodingStreamingModeAV1QSV:
+        case encodings.pseudoEncodingStreamingModeAV1NVENC:
+        case encodings.pseudoEncodingStreamingModeAV1VAAPI:
+        case encodings.pseudoEncodingStreamingModeAV1SW:
+        case encodings.pseudoEncodingStreamingModeAV1:
+            return "KasmVideo AV1";
         default:                                return "[unknown encoding " + num + "]";
     }
 }

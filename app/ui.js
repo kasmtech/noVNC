@@ -44,7 +44,7 @@ import { uuidv4 } from '../core/util/strings.js';
 import {
     UI_SETTINGS_STREAM_MODE_QUALITY_SETTINGS_GROUPS,
     UI_SETTINGS_CONTROL_ID as UI_SETTINGS,
-    UI_FPS_CHART
+    UI_FPS_CHART, FPS
 } from './constants.js';
 import {encodings} from "../core/encodings.js";
 import CodecDetector, {CODEC_VARIANT_NAMES, preferredCodecs} from "../core/codecs";
@@ -287,7 +287,9 @@ const UI = {
         UI.initSetting('video_scaling', 2);
         UI.initSetting('max_video_resolution_x', 960);
         UI.initSetting('max_video_resolution_y', 540);
-        UI.initSetting('framerate', 30);
+        UI.initSetting('framerate', FPS.MIN);
+        UI.initSetting('framerate_image_mode', FPS.MIN);
+        UI.initSetting('framerate_video_mode', FPS.MIN);
         UI.initSetting('compression', 2);
         UI.initSetting('shared', true);
         UI.initSetting('view_only', false);
@@ -626,8 +628,18 @@ const UI = {
         UI.addSettingChangeHandler('max_video_resolution_x', UI.updateQuality);
         UI.addSettingChangeHandler('max_video_resolution_y');
         UI.addSettingChangeHandler('max_video_resolution_y', UI.updateQuality);
-        UI.addSettingChangeHandler('framerate');
-        UI.addSettingChangeHandler('framerate', UI.updateQuality);
+        UI.addSettingChangeHandler('framerate_image_mode', () => {
+            const settingElem = UI.getSettingElement('framerate_image_mode');
+            UI.getSettingElement('framerate_streaming_mode').value = settingElem.value;
+            WebUtil.writeSetting('framerate', settingElem.value);
+            UI.updateQuality();
+        });
+        UI.addSettingChangeHandler('framerate_streaming_mode', () => {
+            const settingElem = UI.getSettingElement('framerate_streaming_mode');
+            UI.getSettingElement('framerate_image_mode').value = settingElem.value;
+            WebUtil.writeSetting('framerate', settingElem.value);
+            UI.updateQuality();
+        });
         UI.addSettingChangeHandler('compression');
         UI.addSettingChangeHandler('compression', UI.updateCompression);
         UI.addSettingChangeHandler('view_clip');
@@ -1289,11 +1301,12 @@ const UI = {
     // Update cookie and form control setting. If value is not set, then
     // updates from control to current cookie setting.
     updateSetting(name) {
-
         // Update the settings control
         let value = UI.getSetting(name);
 
         const ctrl = document.getElementById('noVNC_setting_' + name);
+        if (!ctrl) return;
+
         if (ctrl.type === 'checkbox') {
             ctrl.checked = value;
 
@@ -1317,6 +1330,7 @@ const UI = {
     // Save control setting to cookie
     saveSetting(name) {
         const ctrl = document.getElementById('noVNC_setting_' + name);
+        if (!ctrl) return;
         let val;
         if (ctrl.type === 'checkbox') {
             val = ctrl.checked;
@@ -1335,7 +1349,7 @@ const UI = {
         const ctrl = document.getElementById('noVNC_setting_' + name);
         let val = WebUtil.readSetting(name);
 
-        if (val != null && ctrl.type === 'checkbox') {
+        if (val != null && ctrl?.type === 'checkbox') {
             const str = String(val).toLowerCase();
             const falseStrings = [ '0', 'no', 'false'];
             if (falseStrings.includes(str)) {
@@ -1416,7 +1430,7 @@ const UI = {
         UI.updateSetting('video_scaling', 2);
         UI.updateSetting('max_video_resolution_x', 960);
         UI.updateSetting('max_video_resolution_y', 540);
-        UI.updateSetting('framerate', 30);
+        UI.updateSetting('framerate', FPS.MIN);
         UI.updateSetting('compression');
         UI.updateSetting('shared');
         UI.updateSetting('view_only');
@@ -2776,6 +2790,15 @@ const UI = {
     updateQuality(fps) {
         let present_mode = parseInt(UI.getSetting('video_quality'));
         let enable_qoi = false;
+        const imageMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE)) === encodings.pseudoEncodingStreamingModeJpegWebp;
+
+        const forceFramerate = (fps) => {
+            if (imageMode) {
+                UI.forceSetting('framerate_image_mode', fps);
+                UI.forceSetting('framerate_streaming_mode', fps, false);
+                WebUtil.writeSetting('framerate', fps);
+            }
+        };
 
         // video_quality preset values
         switch (present_mode) {
@@ -2789,16 +2812,16 @@ const UI = {
                 UI.enableSetting('max_video_resolution_y');
                 UI.enableSetting('jpeg_video_quality');
                 UI.enableSetting('webp_video_quality');
-                UI.enableSetting('framerate');
+                UI.enableSetting('framerate_image_mode');
                 UI.enableSetting('video_scaling');
                 UI.enableSetting('video_out_time');
                 break;
             case 5: //lossless
                 enable_qoi = true;
-                fps = (fps && Number.isFinite(fps)) ? fps : 60;
+                fps = (fps && Number.isFinite(fps)) ? fps : FPS.MAX;
                 UI.forceSetting('dynamic_quality_min', 9);
                 UI.forceSetting('dynamic_quality_max', 9);
-                UI.forceSetting('framerate', fps);
+                forceFramerate(fps);
                 UI.forceSetting('treat_lossless', 9);
                 UI.forceSetting('video_time', 100);
                 UI.forceSetting('video_area', 100);
@@ -2810,10 +2833,10 @@ const UI = {
                 UI.forceSetting('video_out_time', 3);
                 break;
             case 4: //extreme
-                fps = (fps && Number.isFinite(fps)) ? fps : 60;
+                fps = (fps && Number.isFinite(fps)) ? fps : FPS.MAX;
                 UI.forceSetting('dynamic_quality_min', 8);
                 UI.forceSetting('dynamic_quality_max', 9);
-                UI.forceSetting('framerate', fps);
+                forceFramerate(fps);
                 UI.forceSetting('treat_lossless', 9);
                 UI.forceSetting('video_time', 100);
                 UI.forceSetting('video_area', 100);
@@ -2825,14 +2848,14 @@ const UI = {
                 UI.forceSetting('video_out_time', 3);
                 break;
             case 3: // high
-                fps = (fps && Number.isFinite(fps)) ? fps : 60;
+                fps = (fps && Number.isFinite(fps)) ? fps : FPS.MAX;
                 UI.forceSetting('jpeg_video_quality', 8);
                 UI.forceSetting('webp_video_quality', 8);
                 UI.forceSetting('dynamic_quality_min', 7);
                 UI.forceSetting('dynamic_quality_max', 9);
                 UI.forceSetting('max_video_resolution_x', 1920);
                 UI.forceSetting('max_video_resolution_y', 1080);
-                UI.forceSetting('framerate', fps);
+                forceFramerate(fps);
                 UI.forceSetting('treat_lossless', 8);
                 UI.forceSetting('video_time', 5);
                 UI.forceSetting('video_area', 65);
@@ -2840,14 +2863,14 @@ const UI = {
                 UI.forceSetting('video_out_time', 3);
                 break;
             case 1: // low, resolution capped at 720p keeping aspect ratio
-                fps = (fps && Number.isFinite(fps)) ? fps : 24;
+                fps = (fps && Number.isFinite(fps)) ? fps : FPS.MIN;
                 UI.forceSetting('jpeg_video_quality', 5);
                 UI.forceSetting('webp_video_quality', 4);
                 UI.forceSetting('dynamic_quality_min', 3);
                 UI.forceSetting('dynamic_quality_max', 7);
                 UI.forceSetting('max_video_resolution_x', 960);
                 UI.forceSetting('max_video_resolution_y', 540);
-                UI.forceSetting('framerate', fps);
+                forceFramerate(fps);
                 UI.forceSetting('treat_lossless', 7);
                 UI.forceSetting('video_time', 5);
                 UI.forceSetting('video_area', 65);
@@ -2857,15 +2880,15 @@ const UI = {
             case 2: // medium
             case 0: // static resolution, but same settings as medium
             default:
-                if (parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE)) === encodings.pseudoEncodingStreamingModeJpegWebp) {
-                    fps = (fps && Number.isFinite(fps)) ? fps : 24;
+                if (imageMode) {
+                    fps = (fps && Number.isFinite(fps)) ? fps : FPS.MIN;
                     UI.forceSetting('jpeg_video_quality', 7);
                     UI.forceSetting('webp_video_quality', 7);
                     UI.forceSetting('dynamic_quality_min', 4);
                     UI.forceSetting('dynamic_quality_max', 9);
                     UI.forceSetting('max_video_resolution_x', 960);
                     UI.forceSetting('max_video_resolution_y', 540);
-                    UI.forceSetting('framerate', (fps) ? fps : 24);
+                    forceFramerate((fps) ? fps : FPS.MIN);
                     UI.forceSetting('treat_lossless', 7);
                     UI.forceSetting('video_time', 5);
                     UI.forceSetting('video_area', 65);

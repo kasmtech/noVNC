@@ -23,3 +23,8 @@ export const UI_FPS_CHART = {
     MAX_POINTS: 60,
     MAX_FPS_VALUE: 120
 };
+
+export const FPS = {
+    MIN: 24,
+    MAX: 60
+};

@@ -1699,7 +1699,7 @@ const UI = {
                             repeaterID: UI.getSetting('repeaterID'),
                             credentials: { password: password }
                         },
-                        UI.codecDetector.getSupportedCodecIds(),
+                        UI.codecDetector?.getSupportedCodecIds(),
                         true );
         UI.rfb.addEventListener("connect", UI.connectFinished);
         UI.rfb.addEventListener("disconnect", UI.disconnectFinished);

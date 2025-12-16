@@ -1704,7 +1704,7 @@ export default class RFB extends EventTargetMixin {
 
     // Gets the the size of the available screen
     _screenSize (limited) {
-        return this._display.getScreenSize(this.videoQuality, this.forcedResolutionX, this.forcedResolutionY, this._hiDpi, limited, !this._resizeSession);
+        return this._display.getScreenSize(this.videoQuality, this.forcedResolutionX, this.forcedResolutionY, this._hiDpi, limited, !this._resizeSession, this._streamMode);
     }
 
     _fixScrollbars() {

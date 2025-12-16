@@ -67,10 +67,6 @@ export default class KasmVideoDecoder {
         return ret;
     }
 
-    resize(screen, codec, width, height) {
-        this._updateSize(screen, codec, width, height);
-    }
-
     // ===== Private Methods =====
     _configureDecoder(screen) {
         Log.Debug('Configuring decoder for screen: ', screen.id, ' codec: ', VIDEO_CODEC_NAMES[screen.codec], ' width: ', screen.width, ' height: ', screen.height);

@@ -13,6 +13,7 @@ import { toSigned32bit } from './util/int.js';
 import { isWindows } from './util/browser.js';
 import { uuidv4 } from './util/strings.js';
 import UI from '../app/ui.js';
+import { encodings } from "./encodings.js";
 
 export default class Display {
     constructor(target, isPrimaryDisplay) {
@@ -255,7 +256,7 @@ export default class Display {
         return [x, y];
     }
 
-    getScreenSize(resolutionQuality, max_width, max_height, hiDpi, disableLimit, disableScaling) {
+    getScreenSize(resolutionQuality, max_width, max_height, hiDpi, disableLimit, disableScaling, streamMode) {
         let data = {
             screens: null,
             serverWidth: 0,
@@ -291,12 +292,12 @@ export default class Display {
             height = this._screens[i].serverReportedHeight;
             width = this._screens[i].serverReportedWidth;
         }
-        else if (width > 1280 && !disableLimit && resolutionQuality == 1) {
+        else if (width > 1280 && !disableLimit && resolutionQuality == 1 && streamMode == encodings.pseudoEncodingStreamingModeJpegWebp) {
             height = Math.floor(1280 * (height/width)); //keeping the aspect ratio of original resolution, shrink y to match x
             width = 1280;
         }
         //hard coded 720p
-        else if (resolutionQuality == 0 && !disableLimit) {
+        else if (resolutionQuality == 0 && !disableLimit && streamMode == encodings.pseudoEncodingStreamingModeJpegWebp) {
             width = 1280;
             height = 720;
         }

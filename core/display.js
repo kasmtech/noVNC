@@ -959,6 +959,7 @@ export default class Display {
         try {
             let targetCtx = ((this._enableCanvasBuffer) ? this._drawCtx : this._targetCtx);
             targetCtx.drawImage(videoFrame, x, y, w, h);
+            videoFrame.close();
         } catch (error) {
             Log.Error('Invalid video frame received.', error);
         }
@@ -1116,7 +1117,6 @@ export default class Display {
                     break;
                 case 'video_frame':
                     this.drawVideoFrame(a.frame, pos.x, pos.y, a.frame.codedWidth, a.frame.codedHeight);
-                    a.frame.close();
                     break;
                 default:
                     this._syncFrameQueue.shift();
@@ -1360,7 +1360,6 @@ export default class Display {
                                 break;
                             case 'video_frame':
                                 this.drawVideoFrame(a.frame, screenLocation.x, screenLocation.y, a.frame.codedWidth, a.frame.codedHeight);
-                                a.frame.close();
                                 break;
                             default:
                                 continue;

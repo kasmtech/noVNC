@@ -151,7 +151,7 @@ export default class Display {
         if (value === this._enableCanvasBuffer) { return; }
 
         this._enableCanvasBuffer = value;
-
+        this._targetCtx = value ? this._drawCtx : this._targetCtx;
 
         if (value && this._target)
         {
@@ -693,11 +693,7 @@ export default class Display {
             this._asyncRenderQPush(rect);
         } else {
             this._setFillColor(color);
-            if (this._enableCanvasBuffer) {
-                this._drawCtx.fillRect(x, y, width, height);
-            } else {
-                this._targetCtx.fillRect(x, y, width, height);
-            }
+            this._targetCtx.fillRect(x, y, width, height);
         }
     }
 
@@ -716,7 +712,7 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            let targetCtx = ((this._enableCanvasBuffer) ? this._drawCtx : this._targetCtx);
+            const targetCtx = this._targetCtx;
             let sourceCvs = ((this._enableCanvasBuffer) ? this._backbuffer : this._target);
 
             // Due to this bug among others [1] we need to disable the image-smoothing to
@@ -875,7 +871,7 @@ export default class Display {
 
     blitImage(x, y, width, height, arr, offset, frame_id, fromQueue) {
         if (!fromQueue) {
-            var buf;
+            let buf;
             if (!ArrayBuffer.isView(arr)) {
                 buf = arr;
             } else {
@@ -898,7 +894,7 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            var data;
+            let data;
             if (!ArrayBuffer.isView(arr)) {
                 data = new Uint8ClampedArray(arr,
                                              arr.length + offset,
@@ -910,13 +906,7 @@ export default class Display {
             }
             // NB(directxman12): arr must be an Type Array view
             let img = new ImageData(data, width, height);
-            if (this._enableCanvasBuffer) {
-                this._drawCtx.putImageData(img, x, y);
-            } else {
-                this._targetCtx.putImageData(img, x, y);
-
-            }
-
+            this._targetCtx.putImageData(img, x, y);
         }
     }
 
@@ -934,21 +924,16 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            if (this._enableCanvasBuffer) {
-                this._drawCtx.putImageData(arr, x, y);
-            } else {
-                this._targetCtx.putImageData(arr, x, y);
-            }
+            this._targetCtx.putImageData(arr, x, y);
         }
     }
 
     drawImage(img, x, y, w, h, overlay=false) {
         try {
-            let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
             if (img.width !== w || img.height !== h) {
-                targetCtx.drawImage(img, x, y, w, h);
+                this._targetCtx.drawImage(img, x, y, w, h);
             } else {
-                targetCtx.drawImage(img, x, y);
+                this._targetCtx.drawImage(img, x, y);
             }
         } catch (error) {
             Log.Error('Invalid image received.'); //KASM-2090
@@ -967,8 +952,7 @@ export default class Display {
 
     putImage(img, x, y) {
         try {
-            let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
-            targetCtx.putImageData(img, x, y);
+            this._targetCtx.putImageData(img, x, y);
             img = null;
         } catch (error) {
             Log.Error('Invalid image recieved.');
@@ -977,7 +961,6 @@ export default class Display {
     }
 
     clearRect(x, y, width, height, offset, frame_id, fromQueue) {
-        let targetCtx = ((this._enableCanvasBuffer && !overlay) ? this._drawCtx : this._targetCtx);
         if (!fromQueue) {
             let rect = {
                 'type': 'clear',
@@ -1506,7 +1489,6 @@ export default class Display {
             }
 
             if (this._enableCanvasBuffer) {
-
                 if (primaryScreenRects > 0) {
                     this._writeCtxBuffer();
                 }
@@ -1633,9 +1615,8 @@ export default class Display {
 
     _setFillColor(color) {
         const newStyle = 'rgb(' + color[0] + ',' + color[1] + ',' + color[2] + ')';
-        let targetCtx = ((this._enableCanvasBuffer) ? this._drawCtx : this._targetCtx);
         if (newStyle !== this._prevDrawStyle) {
-            targetCtx.fillStyle = newStyle;
+            this._targetCtx.fillStyle = newStyle;
             this._prevDrawStyle = newStyle;
         }
     }

@@ -884,7 +884,6 @@ const UI = {
         if (!streamModeElem)
             return;
 
-        const prev = UI.getSetting(UI_SETTINGS.STREAM_MODE);
         streamModeElem.innerHTML = "";
 
         // Always include the JPEG/WEBP image mode (fallback)
@@ -892,45 +891,65 @@ const UI = {
             id: encodings.pseudoEncodingStreamingModeJpegWebp,
             label: "JPEG/WEBP (Images)"
         };
-        const availableOptions = [fallbackOption];
+        const availableModes = [fallbackOption];
 
-        const codecsAvailable = Array.isArray(codecs) && codecs.length > 0;
-        if (codecsAvailable) {
-            codecs = UI.forcedCodecs.length > 0
-                ? codecs.filter(id => UI.forcedCodecs.includes(id))
-                : codecs;
+        const codecsAvailable = this.getAvailableStreamingModes(codecs);
+        availableModes.push(...codecsAvailable);
 
-            const codecTuples = codecs.map((id) => {
-                const label = CODEC_VARIANT_NAMES[id] ? CODEC_VARIANT_NAMES[id] : `Codec ${id}`;
-                return {id, label};
-            });
+        const previousValue = Number(UI.getSetting(UI_SETTINGS.STREAM_MODE));
+        const selectedValue = this.getBestStreamingMode(availableModes, fallbackOption, previousValue);
 
-            availableOptions.push(...codecTuples);
-        }
-
-        availableOptions.forEach(option => {
+        availableModes.sort((a, b) => b.id - a.id).forEach(option => {
             UI.addOption(streamModeElem, option.label, option.id);
         });
-
-        // Restore selection if possible; otherwise default to JPEG/WEBP
-        const hasPrev = Array.from(streamModeElem.options).some(o => {
-            return o.value === prev
-        });
-
-        const availableIds = codecs.map(Number);
-        const preferredMatch = preferredCodecs.filter(c => availableIds.includes(c));
-        let selectedValue = Number(hasPrev ? prev : encodings.pseudoEncodingStreamingModeJpegWebp);
-
-        if (preferredMatch.length > 0) {
-            if (selectedValue === encodings.pseudoEncodingStreamingModeJpegWebp) {
-                selectedValue = Math.max(...preferredMatch);
-            }
-        }
 
         streamModeElem.value = selectedValue;
 
         UI.streamMode({target: streamModeElem});
-        UI.sendMessage("update_codecs", {current: streamModeElem.value, codecs: availableOptions});
+        UI.sendMessage("update_codecs", {current: streamModeElem.value, codecs: availableModes});
+    },
+
+    getAvailableStreamingModes(codecs) {
+        let result = [];
+        if (!Array.isArray(codecs) || codecs.length === 0)
+            return result;
+
+        const forcedCodecs = UI.forcedCodecs;
+        codecs = forcedCodecs.length > 0
+            ? forcedCodecs.filter(id => codecs.includes(id))
+            : codecs;
+
+        const codecTuples = codecs.map((id) => {
+            const label = CODEC_VARIANT_NAMES[id] ? CODEC_VARIANT_NAMES[id] : `Codec ${id}`;
+            return {id, label};
+        });
+
+        result.push(...codecTuples);
+
+        return result;
+    },
+
+    getBestStreamingMode(availableModes, fallbackOption, previousValue) {
+        let result = fallbackOption.id;
+        if (UI.forcedCodecs.length > 0) {
+            const forcedMode = UI.forcedCodecs.find(id => availableModes.some(option => option.id === id));
+            return forcedMode !== undefined ? forcedMode : fallbackOption.id;
+        }
+
+        // Restore selection if possible; otherwise default to JPEG/WEBP
+        const hasPrevious = availableModes.some(option => option.id === previousValue);
+
+        const availableIds = availableModes.map(option => option.id);
+        const preferredMatch = preferredCodecs.filter(c => availableIds.includes(c));
+        result = hasPrevious ? previousValue : encodings.pseudoEncodingStreamingModeJpegWebp;
+
+        if (preferredMatch.length > 0) {
+            if (result === encodings.pseudoEncodingStreamingModeJpegWebp) {
+                result = Math.min(...preferredMatch);
+            }
+        }
+
+        return result;
     },
 
     showStatus(text, statusType, time, kasm = false) {

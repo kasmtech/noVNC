@@ -801,10 +801,19 @@ const UI = {
     },
 
     showStats() {
+        // Clear any existing interval first
+        if (UI.statsInterval) {
+            clearInterval(UI.statsInterval);
+            UI.statsInterval = null;
+        }
+
+        // Read checkbox state directly and save it
+        const perfStatsToggle = document.getElementById('noVNC_setting_enable_perf_stats');
+        const enable_stats = perfStatsToggle ? perfStatsToggle.checked : false;
+        // WebUtil.writeSetting('enable_perf_stats', enable_stats);
         UI.saveSetting('enable_perf_stats');
 
-        let enable_stats = UI.getSetting('enable_perf_stats');
-        if (enable_stats === true && UI.statsInterval == undefined) {
+        if (enable_stats) {
             document.getElementById("noVNC_connection_stats").style.visibility = "visible";
             document.getElementById("noVNC_fps_chart").style.visibility = 'visible';
             UI.statsInterval = setInterval(function() {
@@ -815,9 +824,7 @@ const UI = {
         } else {
             document.getElementById("noVNC_connection_stats").style.visibility = "hidden";
             document.getElementById("noVNC_fps_chart").style.visibility = 'hidden';
-            UI.statsInterval = null;
         }
-
     },
 
     threading() {

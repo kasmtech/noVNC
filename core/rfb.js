@@ -3301,10 +3301,11 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingFrameRateLevel10 + this.frameRate - 10);
         encs.push(encodings.pseudoEncodingMaxVideoResolution);
 
-        encs.push(this.streamMode);
+        // Order is important: first options, then streaming mode
         // encs.push(encodings.pseudoEncodingHardwareProfile0 + this.hwEncoderProfile);
         encs.push(encodings.pseudoEncodingGOP1 + this.gop);
         encs.push(encodings.pseudoEncodingStreamingVideoQualityLevel0 + this.videoStreamQuality);
+        encs.push(this.streamMode);
 
 	// preferBandwidth choses preset settings. Since we expose all the settings, let's not pass this
         if (this.preferBandwidth) // must be last - server processes in reverse order
@@ -3992,25 +3993,50 @@ export default class RFB extends EventTargetMixin {
 
         let num = this._sock.rQshift8();
 
-        if (this._sock.rQwait("VideoEncoders header", num * 4, 1))
+        // Each encoder has variable length data:
+        // codec(4) + minQuality(4) + maxQuality(4) + numPresets(1) + presets(4*n)
+        // Minimum is 13 bytes per encoder
+        if (this._sock.rQwait("VideoEncoders data", num * 13, 1))
             return false;
 
-        const bytes = this._sock.rQshiftBytes(num * 4);
         let serverSupportedEncoders = [];
+        let codecConfigurations = {};
 
         for (let i = 0; i < num; i++) {
-            const base = i * 4;
-            const codec = (bytes[base] << 24 >>> 0) |
-                (bytes[base + 1] << 16) |
-                bytes[base + 2] << 8 |
-                bytes[base + 3];
+            const codec = this._sock.rQshift32();
+
+            const minQuality = this._sock.rQshift32();
+            const maxQuality = this._sock.rQshift32();
+
+            const numPresets = this._sock.rQshift8();
+            if (numPresets > 0) {
+                if (this._sock.rQwait("VideoEncoders presets", numPresets * 4)) {
+                    return false;
+                }
+            }
+
+            const presets = [];
+            for (let j = 0; j < numPresets; j++) {
+                presets.push(this._sock.rQshift32());
+            }
 
             serverSupportedEncoders.push(codec);
+            codecConfigurations[codec] = {
+                minQuality,
+                maxQuality,
+                presets
+            };
         }
 
-        this.dispatchEvent(new CustomEvent("videocodecschange", {detail: {codecs: serverSupportedEncoders}}));
-
         this.videoCodecs = serverSupportedEncoders;
+        this.videoCodecConfigurations = codecConfigurations;
+
+        this.dispatchEvent(new CustomEvent("videocodecschange", {
+            detail: {
+                codecs: serverSupportedEncoders,
+                configurations: codecConfigurations
+            }
+        }));
     }
 
     _handleDisconnectNotify() {

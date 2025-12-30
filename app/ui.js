@@ -877,6 +877,8 @@ const UI = {
     streamMode(event) {
         const value = Number(event.target.value);
         UI.toggleStreamModeGroupVisibility(value);
+        const config = event.configuration ? event.configuration : UI.rfb.videoCodecConfigurations[value];
+        UI.updateQualitySliderRange(value, config);
         UI.updatePropertyName(UI_SETTINGS.STREAM_MODE);
         UI.saveSetting(UI_SETTINGS.STREAM_MODE);
         UI.updateQuality();
@@ -886,7 +888,7 @@ const UI = {
         }
     },
 
-    initStreamModeSetting(codecs) {
+    initStreamModeSetting(codecs, configurations) {
         const streamModeElem = UI.getSettingElement(UI_SETTINGS.STREAM_MODE);
         if (!streamModeElem)
             return;
@@ -912,8 +914,39 @@ const UI = {
 
         streamModeElem.value = selectedValue;
 
-        UI.streamMode({target: streamModeElem});
+        const config = configurations?.[selectedValue];
+        UI.streamMode({target: streamModeElem, configuration: config});
         UI.sendMessage("update_codecs", {current: streamModeElem.value, codecs: availableModes});
+    },
+
+    updateQualitySliderRange(codecId, config) {
+        const qualitySlider = UI.getSettingElement(UI_SETTINGS.VIDEO_STREAM_QUALITY);
+        if (!qualitySlider) return;
+
+        if (!config) {
+            qualitySlider.min = 1;
+            qualitySlider.max = 63;
+        }
+
+        qualitySlider.min = config.minQuality;
+        qualitySlider.max = config.maxQuality;
+
+        const currentValue = parseInt(qualitySlider.value);
+        if (currentValue < config.minQuality) {
+            qualitySlider.value = config.minQuality;
+        } else if (currentValue > config.maxQuality) {
+            qualitySlider.value = config.maxQuality;
+        }
+
+        const output = document.getElementById('noVNC_setting_video_stream_quality_output');
+        if (output) {
+            output.value = qualitySlider.value;
+        }
+
+        // Save updated value if it changed
+        if (currentValue !== parseInt(qualitySlider.value)) {
+            UI.saveSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY);
+        }
     },
 
     getAvailableStreamingModes(codecs) {
@@ -1760,7 +1793,7 @@ const UI = {
         UI.rfb.addEventListener("sharedSessionUserJoin", UI.sharedSessionUserJoin);
         UI.rfb.addEventListener("sharedSessionUserLeft", UI.sharedSessionUserLeft);
         UI.rfb.addEventListener("videocodecschange", (e) => {
-            UI.initStreamModeSetting(e.detail?.codecs);
+            UI.initStreamModeSetting(e.detail?.codecs, e.detail?.configurations);
         });
 
         UI.rfb.translateShortcuts = UI.getSetting('translate_shortcuts');
@@ -2019,7 +2052,7 @@ const UI = {
                             UI.updateQuality();
                         }
                     } else {
-                        const mappedValue = value * 15;
+                        const mappedValue = UI.rfb.videoCodecConfigurations[streamMode].presets[value]
                         UI.forceSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY, mappedValue, false);
                         UI.updateQuality();
                     }

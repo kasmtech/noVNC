@@ -877,8 +877,12 @@ const UI = {
     streamMode(event) {
         const value = Number(event.target.value);
         UI.toggleStreamModeGroupVisibility(value);
-        const config = event.configuration ? event.configuration : UI.rfb.videoCodecConfigurations[value];
-        UI.updateQualitySliderRange(value, config);
+
+        if (value !== encodings.pseudoEncodingStreamingModeJpegWebp) {
+            const config = event.configuration ? event.configuration : UI.rfb.videoCodecConfigurations[value];
+            UI.updateQualitySliderRange(value, config);
+        }
+
         UI.updatePropertyName(UI_SETTINGS.STREAM_MODE);
         UI.saveSetting(UI_SETTINGS.STREAM_MODE);
         UI.updateQuality();
@@ -926,6 +930,8 @@ const UI = {
         if (!config) {
             qualitySlider.min = 1;
             qualitySlider.max = 63;
+
+            return;
         }
 
         qualitySlider.min = config.minQuality;

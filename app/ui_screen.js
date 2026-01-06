@@ -20,13 +20,14 @@ const UI = {
 
     //Render default UI
     start() {
-        window.addEventListener("unload", (e) => {
-            // Only disconnect if this is NOT a secondary monitor window
+        window.addEventListener("beforeunload", (e) => {
+            // Clean up secondary display connection before window closes
             const urlParams = new URLSearchParams(window.location.search);
             const windowId = urlParams.get('windowId');
 
-            if (UI.rfb && !windowId) {
-                UI.disconnect();
+            if (UI.rfb && windowId) {
+                // This is a secondary display - unregister it without disconnecting main session
+                UI.rfb._unregisterSecondaryDisplay();
             }
         });
 

@@ -46,8 +46,6 @@ import {FPS, UI_SETTING_PROFILE_OPTIONS} from '../app/constants.js';
 // How many seconds to wait for a disconnect to finish
 const DISCONNECT_TIMEOUT = 3;
 const DEFAULT_BACKGROUND = 'rgb(40, 40, 40)';
-const CLIENT_MSG_TYPE_KEEPALIVE = 184;
-const SERVER_MSG_TYPE_DISCONNECT_NOTIFY = 185;
 
 // Minimum wait (ms) between two mouse moves
 const MOUSE_MOVE_DELAY = 17;
@@ -3817,7 +3815,7 @@ export default class RFB extends EventTargetMixin {
 
             case 183: // KASM unix relay data
                 return this._handleUnixRelay();
-            case SERVER_MSG_TYPE_DISCONNECT_NOTIFY: // KASM disconnect notice
+            case messages.msgTypeServerDisconnect: // KASM disconnect notice
                 return this._handleDisconnectNotify();
 
             case messages.msgTypeVideoEncoders:
@@ -3829,10 +3827,10 @@ export default class RFB extends EventTargetMixin {
             case 250:  // XVP
                 return this._handleXvpMsg();
 
-            case 253: // KASM user joined a shared sessionAdd commentMore actions
+            case messages.msgTypeUserAddedToSession: // KASM user joined a shared sessionAdd commentMore actions
                 return this._handleUserJoin();
 
-            case 254: // KASM user left a shared session
+            case messages.msgTypeUserRemovedFromSession: // KASM user left a shared session
                 return this._handleUserLeft();
 
             default:
@@ -4636,7 +4634,7 @@ RFB.messages = {
         const buff = sock._sQ;
         const offset = sock._sQlen;
 
-        buff[offset] = CLIENT_MSG_TYPE_KEEPALIVE;
+        buff[offset] = messages.msgTypeKeepAlive;
 
         sock._sQlen += 1;
         sock.flush();

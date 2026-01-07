@@ -48,8 +48,17 @@ export default class Display {
         this._backbuffer = document.createElement('canvas');
         this._target = target;
 
+        const webglCanvas = document.createElement('canvas');
+        const gl = webglCanvas.getContext('webgl2', {alpha: false, antialias: false}) ||
+            webglCanvas.getContext('webgl', {alpha: false, antialias: false});
+
         const canvas2DRenderer = new Canvas2DRenderer(target, this._backbuffer);
-        this._renderer = canvas2DRenderer;
+        if (gl) {
+            this._renderer = new WebGLRenderer(canvas2DRenderer, gl);
+        } else {
+            this._renderer = canvas2DRenderer;
+            Log.Info("WebGL unavailable, falling back to Canvas2DRenderer.");
+        }
 
         Log.Debug("User Agent: " + navigator.userAgent);
 

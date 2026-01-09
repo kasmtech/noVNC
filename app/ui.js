@@ -2058,19 +2058,17 @@ const UI = {
                     }
 
                     const streamMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE));
-                    if (streamMode === encodings.pseudoEncodingStreamingModeJpegWebp) {
-                        UI.forceSetting('video_quality', value, false);
+                    const isJpegWebp = streamMode === encodings.pseudoEncodingStreamingModeJpegWebp;
+                    const settingKey = isJpegWebp ? 'video_quality' : UI_SETTINGS.VIDEO_STREAM_QUALITY;
+                    const settingValue = isJpegWebp ? value : UI.rfb.videoCodecConfigurations[streamMode].presets[value];
 
-                        if (event.data.qualityLevel !== undefined) {
-                            //apply preset mode values, but don't apply to connection
-                            // apply quality preset quality level and override some settings (fps)
-                            UI.updateQuality(event.data.frameRate);
-                        } else {
-                            UI.updateQuality();
-                        }
+                    UI.forceSetting(settingKey, settingValue, false);
+
+                    if (event.data.qualityLevel !== undefined) {
+                        //apply preset mode values, but don't apply to connection
+                        // apply quality preset quality level and override some settings (fps)
+                        UI.updateQuality(event.data.frameRate);
                     } else {
-                        const mappedValue = UI.rfb.videoCodecConfigurations[streamMode].presets[value]
-                        UI.forceSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY, mappedValue, false);
                         UI.updateQuality();
                     }
                     break;

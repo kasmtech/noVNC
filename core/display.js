@@ -942,10 +942,11 @@ export default class Display {
 
     drawVideoFrame(videoFrame, x, y, w, h) {
         try {
-            this._targetCtx.drawImage(videoFrame, x, y, w, h);
+            let targetCtx = ((this._enableCanvasBuffer) ? this._drawCtx : this._targetCtx);
+            targetCtx.drawImage(videoFrame, x, y, w, h);
             videoFrame.close();
         } catch (error) {
-            Log.Error('Invalid video frame received. ', error);
+            Log.Error('Invalid video frame received.', error);
         }
     }
 

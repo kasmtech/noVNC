@@ -118,8 +118,12 @@ export default class KasmVideoDecoder {
                 height: height,
                 decoder: new VideoDecoder({
                     output: (frame) => {
-                        this._handleProcessVideoChunk(frame);
-                        // frame.close();
+                        try {
+                            this._handleProcessVideoChunk(frame);
+                        } catch (e) {
+                            Log.Error(`Error in _handleProcessVideoChunk: `, e);
+                            frame.close();
+                        }
                     }, error: (e) => {
                         Log.Error(`There was an error inside KasmVideoDecoder`, e)
                     }

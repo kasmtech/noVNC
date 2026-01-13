@@ -140,6 +140,7 @@ export default class RFB extends EventTargetMixin {
         this._dynamicQualityMin = 3;
         this._dynamicQualityMax = 9;
         this._videoArea = 65;
+        this._pendingVideoQualityRefresh = false;
         this._videoTime = 5;
         this._videoOutTime = 3;
         this._videoScaling = 2;
@@ -799,6 +800,7 @@ export default class RFB extends EventTargetMixin {
         if (value !== this._videoStreamQuality) {
             this._videoStreamQuality = value;
             this._pendingApplyEncodingChanges = true;
+            this._pendingVideoQualityRefresh = true;
         }
     }
 
@@ -949,6 +951,11 @@ export default class RFB extends EventTargetMixin {
 
             if (this._pendingApplyEncodingChanges) {
                 this._sendEncodings();
+
+                if (this._pendingVideoQualityRefresh && this._fbWidth && this._fbHeight) {
+                    RFB.messages.fbUpdateRequest(this._sock, false, 0, 0, this._fbWidth, this._fbHeight);
+                    this._pendingVideoQualityRefresh = false;
+                }
             }
 
             this._pendingApplyVideoRes = false;

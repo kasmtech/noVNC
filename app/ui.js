@@ -887,18 +887,21 @@ const UI = {
 
     streamMode(event) {
         const value = Number(event.target.value);
-        UI.toggleStreamModeGroupVisibility(value);
+        UI.saveSetting(UI_SETTINGS.STREAM_MODE);
+        UI.applyStreamMode(value, event.configuration);
+    },
 
-        if (value !== encodings.pseudoEncodingStreamingModeJpegWebp) {
-            const config = event.configuration ? event.configuration : UI.rfb.videoCodecConfigurations[value];
-            UI.updateQualitySliderRange(value, config);
+    applyStreamMode(mode, configuration) {
+        UI.toggleStreamModeGroupVisibility(mode);
+
+        if (mode !== encodings.pseudoEncodingStreamingModeJpegWebp) {
+            const config = configuration || UI.rfb.videoCodecConfigurations[mode];
+            UI.updateQualitySliderRange(mode, config);
         }
 
-        UI.updatePropertyName(UI_SETTINGS.STREAM_MODE);
-        UI.saveSetting(UI_SETTINGS.STREAM_MODE);
         UI.updateQuality();
 
-        if (value === encodings.pseudoEncodingStreamingModeJpegWebp) {
+        if (mode === encodings.pseudoEncodingStreamingModeJpegWebp) {
             UI.rfb._requestFullRefresh();
         }
     },
@@ -2184,7 +2187,7 @@ const UI = {
                     }
 
                     UI.forceSetting(UI_SETTINGS.STREAM_MODE, mode, false);
-                    UI.updateQuality();
+                    UI.applyStreamMode(mode);
                     break;
                 case 'set_gop':
                     UI.forceSetting(UI_SETTINGS.GOP, parseInt(event.data.value), false);

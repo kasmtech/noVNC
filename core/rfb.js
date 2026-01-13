@@ -3260,7 +3260,6 @@ export default class RFB extends EventTargetMixin {
         }
         // Only supported with full depth support
         if (this._fbDepth === 24) {
-            encs.push(encodings.encodingKasmVideoAVC);
             encs.push(encodings.encodingTight);
             encs.push(encodings.encodingTightPNG);
             encs.push(encodings.encodingHextile);

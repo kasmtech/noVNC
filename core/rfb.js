@@ -952,8 +952,8 @@ export default class RFB extends EventTargetMixin {
             if (this._pendingApplyEncodingChanges) {
                 this._sendEncodings();
 
-                if (this._pendingVideoQualityRefresh && this._fbWidth && this._fbHeight) {
-                    RFB.messages.fbUpdateRequest(this._sock, false, 0, 0, this._fbWidth, this._fbHeight);
+                if (this._pendingVideoQualityRefresh) {
+                    this._requestFullRefresh();
                     this._pendingVideoQualityRefresh = false;
                 }
             }

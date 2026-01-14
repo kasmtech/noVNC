@@ -2067,7 +2067,7 @@ const UI = {
 
                     UI.forceSetting(settingKey, settingValue, false);
 
-                    if (event.data.qualityLevel !== undefined) {
+                    if (event.data.frameRate !== undefined) {
                         //apply preset mode values, but don't apply to connection
                         // apply quality preset quality level and override some settings (fps)
                         UI.updateQuality(event.data.frameRate);

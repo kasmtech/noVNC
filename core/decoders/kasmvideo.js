@@ -15,7 +15,7 @@ const VIDEO_CODEC_NAMES = {
     1: 'avc1.42E01E',
     2: 'hev1.1.6.L93.B0',
     3: 'av01.0.04M.08'
-}
+};
 
 const TARGET_FPS = 120;
 const FRAME_DURATION_US = Math.round(1_000_000 / TARGET_FPS);
@@ -75,7 +75,9 @@ export default class KasmVideoDecoder {
             codedWidth: screen.width,
             codedHeight: screen.height,
             optimizeForLatency: true,
-        })
+        });
+
+        screen.pendingFrames = [];
     }
 
     _updateSize(screen, codec, width, height) {
@@ -95,7 +97,13 @@ export default class KasmVideoDecoder {
 
     _handleProcessVideoChunk(frame) {
         Log.Debug('Frame ', frame);
-        const {screenId, frame_id, x, y, width, height} = this._timestampMap.get(frame.timestamp);
+        const metadata = this._timestampMap.get(frame.timestamp);
+        if (!metadata) {
+            Log.Warn('No metadata found for timestamp: ', frame.timestamp);
+            frame.close();
+            return;
+        }
+        const {screenId, frame_id, x, y, width, height} = metadata;
         Log.Debug('frame_id: ', frame_id, 'x: ', x, 'y: ', y, 'coded width: ', frame.codedWidth, 'coded height: ', frame.codedHeight);
         this._display.videoFrameRect(screenId, frame, frame_id, x, y, width, height);
         this._timestampMap.delete(frame.timestamp);
@@ -116,8 +124,10 @@ export default class KasmVideoDecoder {
                 id: screenId,
                 width: width,
                 height: height,
+                pendingFrames: [],
                 decoder: new VideoDecoder({
                     output: (frame) => {
+                        Log.Debug('Video frame processing time: ', performance.now() - this._decodingStartedTime);
                         try {
                             this._handleProcessVideoChunk(frame);
                         } catch (e) {
@@ -125,7 +135,11 @@ export default class KasmVideoDecoder {
                             frame.close();
                         }
                     }, error: (e) => {
-                        Log.Error(`There was an error inside KasmVideoDecoder`, e)
+                        Log.Error('FATAL VideoDecoder error:', {
+                            message: e.message,
+                            name: e.name,
+                            decoderState: screen.decoder.state
+                        });
                     }
                 })
             };
@@ -133,8 +147,9 @@ export default class KasmVideoDecoder {
             this._decoders.set(screenId, screen);
         }
 
-        if (width !== screen.width && height !== screen.height || codec !== screen.codec)
-            this._updateSize(screen, codec, width, height)
+        if (width !== screen.width || height !== screen.height || codec !== screen.codec) {
+            this._updateSize(screen, codec, width, height);
+        }
 
         const vidChunk = new EncodedVideoChunk({
             type: keyFrame ? 'key' : 'delta',
@@ -154,7 +169,20 @@ export default class KasmVideoDecoder {
         });
         this._timestamp += FRAME_DURATION_US;
 
+        if (screen.decoder.state !== 'configured') {
+            screen.pendingFrames.push(vidChunk);
+
+            return true;
+        }
+
         try {
+            this._decodingStartedTime = performance.now();
+
+            if (screen.pendingFrames?.length > 0) {
+                for (const frame of screen.pendingFrames)
+                    screen.decoder.decode(frame);
+            }
+
             screen.decoder.decode(vidChunk);
         } catch (e) {
             Log.Error('Screen: ', screenId,
@@ -198,6 +226,11 @@ export default class KasmVideoDecoder {
     dispose() {
         for (let screen of this._decoders.values()) {
             screen.decoder.close();
+        }
+        this._decoders.clear();
+
+        for (let timestamp of this._timestampMap.keys()) {
+            this._timestampMap.delete(timestamp);
         }
     }
 }

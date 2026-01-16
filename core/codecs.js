@@ -92,7 +92,7 @@ export default class CodecDetector {
     }
 
     isSupported(codec) {
-        return this._capabilities[codec] || false;
+        return this._capabilities[codec];
     }
 
     getSupportedCodecIds() {

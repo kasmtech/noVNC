@@ -4,6 +4,7 @@ import { isTouchDevice, isSafari, hasScrollbarGutter, dragThreshold, supportsBin
     from '../core/util/browser.js';
 import { MouseButtonMapper, XVNC_BUTTONS } from "../core/mousebuttonmapper.js";
 import * as Log from '../core/util/logging.js';
+import {showNotification} from "../core/util/notifications";
 
 const UI = {
     connected: false,
@@ -289,12 +290,8 @@ const UI = {
         UI.screens = data.screens
         const screen = data.screens.find(el => el.id === UI.screenID)
         if (screen) {
-            document.getElementById('noVNC_identify_monitor').innerHTML = screen.num
-            document.getElementById('noVNC_identify_monitor').classList.add("show")
-            document.querySelector('title').textContent = 'Display ' + screen.num + ' - ' + UI.screenID
-            setTimeout(() => {
-                document.getElementById('noVNC_identify_monitor').classList.remove("show")
-            }, 3500)
+            showNotification(screen.num);
+            document.querySelector('title').textContent = 'Display ' + screen.num + ' - ' + UI.screenID;
         }
     },
 

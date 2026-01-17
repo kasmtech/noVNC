@@ -23,11 +23,12 @@ const FRAME_DURATION_US = Math.round(1_000_000 / TARGET_FPS);
 /// avc1.42001E - baseline
 
 export default class KasmVideoDecoder {
-    constructor(display) {
+    constructor(rfb, display) {
         this._len = 0;
         this._keyFrame = 0;
         this._screenId = null;
         this._ctl = null;
+        this._rfb = rfb;
         this._display = display;
 
         this._timestamp = 0;
@@ -140,6 +141,8 @@ export default class KasmVideoDecoder {
                             name: e.name,
                             decoderState: screen.decoder.state
                         });
+
+                        this._rfb.dispatchEvent(new CustomEvent('imagemode'));
                     }
                 })
             };

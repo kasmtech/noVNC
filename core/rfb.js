@@ -303,7 +303,7 @@ export default class RFB extends EventTargetMixin {
         this._decoders[encodings.encodingCopyRect] = new CopyRectDecoder();
         this._decoders[encodings.encodingRRE] = new RREDecoder();
         this._decoders[encodings.encodingHextile] = new HextileDecoder();
-        this._decoders[encodings.encodingKasmVideo] = new KasmVideoDecoder(this._display);
+        this._decoders[encodings.encodingKasmVideo] = new KasmVideoDecoder(this, this._display);
         this._decoders[encodings.encodingTight] = new TightDecoder(this._display);
         this._decoders[encodings.encodingTightPNG] = new TightPNGDecoder();
         this._decoders[encodings.encodingUDP] = new UDPDecoder();

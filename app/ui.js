@@ -7,6 +7,8 @@
  * See README.md for usage and integration instructions.
  */
 
+import {showNotification} from "../core/util/notifications";
+
 window._noVNC_has_module_support = true;
 window.addEventListener("load", function() {
     if (window._noVNC_has_module_support) return;
@@ -904,6 +906,14 @@ const UI = {
         if (mode === encodings.pseudoEncodingStreamingModeJpegWebp) {
             UI.rfb._requestFullRefresh();
         }
+
+        const streamModeElem = UI.getSettingElement(UI_SETTINGS.STREAM_MODE);
+        const modeName = [...streamModeElem.options]
+            .find(option => Number(option.value) === mode)?.text;
+
+        Log.Info('Switching to mode: ', modeName ? modeName : 'Unknown Mode ', 'value:', mode);
+
+        showNotification(modeName || 'Mode Changed');
     },
 
     initStreamModeSetting(codecs, configurations) {
@@ -1812,6 +1822,7 @@ const UI = {
         UI.rfb.addEventListener("screenregistered", UI.screenRegistered);
         UI.rfb.addEventListener("sharedSessionUserJoin", UI.sharedSessionUserJoin);
         UI.rfb.addEventListener("sharedSessionUserLeft", UI.sharedSessionUserLeft);
+        UI.rfb.addEventListener("imagemode", UI.switchToImageMode);
         UI.rfb.addEventListener("videocodecschange", (e) => {
             UI.initStreamModeSetting(e.detail?.codecs, e.detail?.configurations);
         });
@@ -2029,6 +2040,14 @@ const UI = {
             msg = _("New connection has been rejected");
         }
         UI.showStatus(msg, 'error');
+    },
+
+    switchToImageMode(e) {
+        const streamModeElem = UI.getSettingElement(UI_SETTINGS.STREAM_MODE);
+        const mode = encodings.pseudoEncodingStreamingModeJpegWebp;
+        streamModeElem.value = mode;
+        UI.forceSetting(UI_SETTINGS.STREAM_MODE, mode, false);
+        UI.applyStreamMode(mode);
     },
 
     //send message to parent window
@@ -2325,11 +2344,7 @@ const UI = {
     },
 
     identify(data) {
-        document.getElementById('noVNC_identify_monitor').innerHTML = '1'
-        document.getElementById('noVNC_identify_monitor').classList.add("show")
-        setTimeout(() => {
-            document.getElementById('noVNC_identify_monitor').classList.remove("show")
-        }, 3500)
+        showNotification('1');
     },
 
     openDisplays() {

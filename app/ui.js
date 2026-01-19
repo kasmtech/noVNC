@@ -897,7 +897,7 @@ const UI = {
         UI.toggleStreamModeGroupVisibility(mode);
 
         if (mode !== encodings.pseudoEncodingStreamingModeJpegWebp) {
-            const config = configuration || UI.rfb.videoCodecConfigurations[mode];
+            const config = configuration || UI.rfb?.videoCodecConfigurations[mode];
             UI.updateQualitySliderRange(mode, config);
         }
 

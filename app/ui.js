@@ -2048,6 +2048,13 @@ const UI = {
         streamModeElem.value = mode;
         UI.forceSetting(UI_SETTINGS.STREAM_MODE, mode, false);
         UI.applyStreamMode(mode);
+
+        const availableModes = [...streamModeElem.options].map(option => ({
+            id: Number(option.value),
+            label: option.text
+        }));
+
+        UI.sendMessage("update_codecs", {current: mode, codecs: availableModes});
     },
 
     //send message to parent window

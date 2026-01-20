@@ -1657,6 +1657,10 @@ const UI = {
         UI.showStats();
         UI.updateVisualState('connected');
 
+        if (UI.getSetting('enable_ime')) {
+            UI.rfb.keyboard.enableIME = true;
+        }
+
         // Do this last because it can only be used on rendered elements
         UI.rfb.focus();
     },

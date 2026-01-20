@@ -110,6 +110,13 @@ export default class KasmVideoDecoder {
         this._timestampMap.delete(frame.timestamp);
     }
 
+    _handleDecoderError(decoder) {
+        // We need to reset the decoders
+        this._decoders.clear();
+        this._rfb.dispatchEvent(new CustomEvent('imagemode'));
+    }
+
+
     _processVideoFrameRect(screenId, codec, x, y, width, height, sock, display, depth, frame_id) {
         let [keyFrame, dataArr] = this._readData(sock);
         Log.Debug('Screen: ', screenId, ' key_frame: ', keyFrame);
@@ -141,8 +148,7 @@ export default class KasmVideoDecoder {
                             name: e.name,
                             decoderState: screen.decoder.state
                         });
-
-                        this._rfb.dispatchEvent(new CustomEvent('imagemode'));
+                        this._handleDecoderError();
                     }
                 })
             };
@@ -191,6 +197,7 @@ export default class KasmVideoDecoder {
             Log.Error('Screen: ', screenId,
                 'Key frame ', keyFrame, ' frame_id: ', frame_id, ' x: ', x, ' y: ', y, ' width: ', width, ' height: ', height, ' codec: ', codec, ' ctl ', this._ctl, ' dataArr: ', dataArr, ' error: ', e);
             Log.Error('There was an error inside KasmVideoDecoder: ', e)
+            this._handleDecoderError();
         }
         return true;
     }

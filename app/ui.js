@@ -877,6 +877,8 @@ const UI = {
         if (UI.rfb) {
             UI.rfb.videoStreamQuality = Number(event.target.value);
         }
+        Log.Info('Saving quality:', event.target.value, 'Stream mode:', UI.getSetting(UI_SETTINGS.STREAM_MODE));
+        Log.Info('Codec configs:', UI.rfb?.videoCodecConfigurations);
         UI.saveSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY);
     },
 
@@ -1746,6 +1748,7 @@ const UI = {
         // UI.rfb.hwEncoderProfile = parseInt(UI.getSetting(UI_SETTINGS.HW_PROFILE));
         UI.rfb.gop = parseInt(UI.getSetting(UI_SETTINGS.GOP));
         UI.rfb.videoStreamQuality = parseInt(UI.getSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY));
+        Log.Info('Loaded from localStorage - Quality:', UI.rfb.videoStreamQuality, 'Stream mode:', UI.rfb.streamMode);
     },
 
 /* ------^-------

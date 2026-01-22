@@ -37,6 +37,17 @@ export default class KasmVideoDecoder {
     }
 
     // ===== Public Methods =====
+    reset() {
+        Log.Debug('Resetting all video decoders due to streaming mode/quality change');
+        for (let screen of this._decoders.values()) {
+            if (screen.decoder?.state !== 'closed') {
+                screen.decoder.reset();
+            }
+        }
+        this._decoders.clear();
+        this._timestampMap.clear();
+    }
+
     decodeRect(x, y, width, height, sock, display, depth, frame_id) {
         if (this._ctl === null) {
             if (sock.rQwait("KasmVideo screen and compression-control", 2)) {
@@ -71,12 +82,22 @@ export default class KasmVideoDecoder {
     // ===== Private Methods =====
     _configureDecoder(screen) {
         Log.Debug('Configuring decoder for screen: ', screen.id, ' codec: ', VIDEO_CODEC_NAMES[screen.codec], ' width: ', screen.width, ' height: ', screen.height);
-        screen.decoder.configure({
+
+        const config = {
             codec: VIDEO_CODEC_NAMES[screen.codec],
             codedWidth: screen.width,
             codedHeight: screen.height,
             optimizeForLatency: true,
-        });
+        };
+
+        Log.Debug('Applying decoder config: ', config);
+
+        try {
+            screen.decoder.configure(config);
+        } catch (e) {
+            Log.Error('Failed to configure decoder: ', e, 'config:', config);
+            throw e;
+        }
 
         screen.pendingFrames = [];
     }
@@ -111,6 +132,7 @@ export default class KasmVideoDecoder {
     }
 
     _handleDecoderError(decoder) {
+        Log.Error('Decoder error triggered - clearing all decoders and switching to image mode');
         // We need to reset the decoders
         this._decoders.clear();
         this._rfb.dispatchEvent(new CustomEvent('imagemode'));
@@ -194,9 +216,13 @@ export default class KasmVideoDecoder {
 
             screen.decoder.decode(vidChunk);
         } catch (e) {
-            Log.Error('Screen: ', screenId,
-                'Key frame ', keyFrame, ' frame_id: ', frame_id, ' x: ', x, ' y: ', y, ' width: ', width, ' height: ', height, ' codec: ', codec, ' ctl ', this._ctl, ' dataArr: ', dataArr, ' error: ', e);
-            Log.Error('There was an error inside KasmVideoDecoder: ', e)
+            Log.Error('DECODE FAILURE - Screen: ', screenId,
+                'Key frame ', keyFrame, ' frame_id: ', frame_id,
+                ' x: ', x, ' y: ', y, ' width: ', width, ' height: ', height,
+                ' codec: ', codec, ' codec_string: ', VIDEO_CODEC_NAMES[codec],
+                ' decoder_state: ', screen.decoder.state,
+                ' error: ', e);
+
             this._handleDecoderError();
         }
         return true;

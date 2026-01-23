@@ -2222,6 +2222,19 @@ const UI = {
                     }
 
                     UI.forceSetting(UI_SETTINGS.STREAM_MODE, mode, false);
+                    if (mode !== encodings.pseudoEncodingStreamingModeJpegWebp) {
+                        const imageQuality = parseInt(UI.getSetting('video_quality'));
+                        const presets = UI.rfb?.videoCodecConfigurations?.[mode]?.presets;
+                        if (Array.isArray(presets) && presets.length > 0) {
+                            const index = Number.isFinite(imageQuality)
+                                ? Math.max(0, Math.min(presets.length - 1, imageQuality))
+                                : 0;
+                            const streamQuality = presets[index];
+                            if (streamQuality !== undefined) {
+                                UI.forceSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY, streamQuality, false);
+                            }
+                        }
+                    }
                     UI.applyStreamMode(mode);
                     break;
                 case 'set_gop':

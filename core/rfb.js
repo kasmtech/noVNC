@@ -808,7 +808,7 @@ export default class RFB extends EventTargetMixin {
     set qualityPreset(value) {
         if (value !== this._qualityPreset) {
             this._qualityPreset = value;
-            this._pendingApplyEncodingChanges = true
+            this._pendingApplyEncodingChanges = true;
         }
     }
 
@@ -816,7 +816,7 @@ export default class RFB extends EventTargetMixin {
     set streamMode(value) {
         if (value !== this._streamMode) {
             this._streamMode = value;
-            this._pendingApplyEncodingChanges = true
+            this._pendingApplyEncodingChanges = true;
         }
     }
 

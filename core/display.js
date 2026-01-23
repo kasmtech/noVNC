@@ -14,6 +14,8 @@ import { isWindows } from './util/browser.js';
 import { uuidv4 } from './util/strings.js';
 import UI from '../app/ui.js';
 import { encodings } from "./encodings.js";
+import {Canvas2DRenderer} from "./renderers/Canvas2DRenderer";
+import {WebGLRenderer} from "./renderers/WebGLRenderer";
 
 export default class Display {
     constructor(target, isPrimaryDisplay) {
@@ -34,8 +36,6 @@ export default class Display {
         this._maxAsyncFrameQueue = 3;
         this._clearAsyncQueue();
         this._syncFrameQueue = [];
-        this._transparentOverlayImg = null;
-        this._transparentOverlayRect = null;
         this._lastTransparentRectId = "";
 
         this._flushing = false;
@@ -45,22 +45,11 @@ export default class Display {
         this._fbHeight = 0;
 
         this._renderMs = 0;
-        this._prevDrawStyle = "";
+        this._backbuffer = document.createElement('canvas');
         this._target = target;
 
-        if (!this._target) {
-            throw new Error("Target must be set");
-        }
-
-        if (typeof this._target === 'string') {
-            throw new Error('target must be a DOM element');
-        }
-
-        if (!this._target.getContext) {
-            throw new Error("no getContext method");
-        }
-
-        this._targetCtx = this._target.getContext('2d');
+        const canvas2DRenderer = new Canvas2DRenderer(target, this._backbuffer);
+        this._renderer = canvas2DRenderer;
 
         Log.Debug("User Agent: " + navigator.userAgent);
 
@@ -97,7 +86,6 @@ export default class Display {
         this._maxScreens = 4;
         this._scale = 1.0;
         this._clipViewport = false;
-        this._antiAliasing = 0;
         this._fps = 0;
         this._isPrimaryDisplay = isPrimaryDisplay;
         this._screenID = uuidv4();
@@ -126,10 +114,6 @@ export default class Display {
         this._threading = true;
         this._primaryChannel = null;
 
-        //optional offscreen canvas
-        this._enableCanvasBuffer = false;
-        this._backbuffer = document.createElement('canvas');
-        this._drawCtx = this._backbuffer.getContext('2d');
         this._damageBounds = { left: 0, top: 0, right: this._backbuffer.width, bottom: this._backbuffer.height };
 
         // ===== EVENT HANDLERS =====
@@ -146,27 +130,9 @@ export default class Display {
 
     // ===== PROPERTIES =====
 
-    get enableCanvasBuffer() { return this._enableCanvasBuffer; }
+    get enableCanvasBuffer() { return this._renderer.enableCanvasBuffer; }
     set enableCanvasBuffer(value) {
-        if (value === this._enableCanvasBuffer) { return; }
-
-        this._enableCanvasBuffer = value;
-        this._targetCtx = value ? this._drawCtx : this._targetCtx;
-
-        if (value && this._target)
-        {
-            //copy current visible canvas to backbuffer
-            let saveImg = this._targetCtx.getImageData(0, 0, this._target.width, this._target.height);
-            this._drawCtx.putImageData(saveImg, 0, 0);
-
-            if (this._transparentOverlayImg) {
-                this.drawImage(this._transparentOverlayImg, this._transparentOverlayRect.x, this._transparentOverlayRect.y, this._transparentOverlayRect.width, this._transparentOverlayRect.height, true);
-            }
-        } else if (!value && this._target) {
-            //copy backbuffer to canvas to clear any overlays
-            let saveImg = this._targetCtx.getImageData(0, 0, this._target.width, this._target.height);
-            this._drawCtx.putImageData(saveImg, 0, 0);
-        }
+        this._renderer.enableCanvasBuffer = value;
     }
 
     get screens() { return this._screens; }
@@ -180,9 +146,9 @@ export default class Display {
         return this._screens[0].screenIndex;
     }
 
-    get antiAliasing() { return this._antiAliasing; }
+    get antiAliasing() { return this._renderer.antiAliasing; }
     set antiAliasing(value) {
-        this._antiAliasing = value;
+        this._renderer.antiAliasing = value;
         this._rescale(this._scale);
     }
 
@@ -308,7 +274,7 @@ export default class Display {
             scale = 1 / this._screens[i].pixelRatio;
         }
         //physically small device with high DPI
-        else if (this._antiAliasing === 0 && this._screens[i].pixelRatio > 1 && width < 1000 & width > 0) {
+        else if (this._renderer.antiAliasing === 0 && this._screens[i].pixelRatio > 1 && width < 1000 & width > 0) {
             Log.Info('Device Pixel ratio: ' + this._screens[i].pixelRatio + ' Reported Resolution: ' + width + 'x' + height);
             let targetDevicePixelRatio = 1.5;
             if (this._screens[i].pixelRatio > 2) { targetDevicePixelRatio = 2; }
@@ -420,7 +386,7 @@ export default class Display {
                 x = Math.max(x, this._screens[i].x + this._screens[i].serverWidth);
             }
 
-            var new_screen = {
+            const new_screen = {
                 screenID: screenID,
                 screenIndex: this.screens.length,
                 width: width, //client
@@ -438,7 +404,7 @@ export default class Display {
                 scale: scale,
                 x2: x + serverWidth,
                 y2: serverHeight
-            }
+            };
 
             this._screens.push(new_screen);
             if (new_screen.channel) {
@@ -539,23 +505,10 @@ export default class Display {
             height = this._fbHeight;
         }
 
-        const vp = this._screens[0];
-        const canvas = this._target;
-        if (canvas.width !== width || canvas.height !== height) {
-            let saveImg = null;
-            if (canvas.width > 0 && canvas.height > 0) {
-                saveImg = this._targetCtx.getImageData(0, 0, canvas.width, canvas.height);
-            }
-
+        if (this._renderer.viewportChangeSize(width, height)) {
+            const vp = this._screens[0];
             vp.serverWidth = width;
             vp.serverHeight = height;
-
-            canvas.width = width;
-            canvas.height = height;
-
-            if (saveImg) {
-                this._targetCtx.putImageData(saveImg, 0, 0);
-            }
 
             // The position might need to be updated if we've grown
             this.viewportChangePos(0, 0);
@@ -580,40 +533,10 @@ export default class Display {
     }
 
     resize(width, height) {
-        this._prevDrawStyle = "";
-
         this._fbWidth = width;
         this._fbHeight = height;
 
-        let canvas = this._backbuffer;
-        if (canvas == undefined) { return; }
-
-        if (this._screens.length > 0) {
-            width = this._screens[0].serverWidth;
-            height = this._screens[0].serverHeight;
-        }
-
-        if (canvas.width !== width || canvas.height !== height) {
-            // We have to save the canvas data since changing the size will clear it
-            let saveImg = null;
-            if (canvas.width > 0 && canvas.height > 0) {
-                saveImg = this._drawCtx.getImageData(0, 0, canvas.width, canvas.height);
-            }
-
-            if (canvas.width !== width) {
-                canvas.width = width;
-
-            }
-            if (canvas.height !== height) {
-                canvas.height = height;
-            }
-
-            if (saveImg) {
-                this._drawCtx.putImageData(saveImg, 0, 0);
-            }
-        }
-
-
+        this._renderer.resize(width, height, this._screens);
 
         // Readjust the viewport as it may be incorrectly sized
         // and positioned
@@ -671,10 +594,15 @@ export default class Display {
     * Cleans up resources, should be called on a disconnect
     */
     dispose() {
-        clearInterval(this._frameStatsInterval);
+        if (this._frameStatsInterval) {
+            clearInterval(this._frameStatsInterval);
+            this._frameStatsInterval = null;
+        }
         this.clear();
-        if (this._targetCtx && this._target) {
-            this._targetCtx.clearRect(0,0, this._target.width, this._target.height);
+
+        if (this._renderer) {
+            this._renderer.dispose();
+            this._renderer = null;
         }
     }
 
@@ -692,8 +620,7 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            this._setFillColor(color);
-            this._targetCtx.fillRect(x, y, width, height);
+            this._renderer.fillRect(x, y, width, height, color);
         }
     }
 
@@ -712,24 +639,7 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            const targetCtx = this._targetCtx;
-            let sourceCvs = ((this._enableCanvasBuffer) ? this._backbuffer : this._target);
-
-            // Due to this bug among others [1] we need to disable the image-smoothing to
-            // avoid getting a blur effect when copying data.
-            //
-            // 1. https://bugzilla.mozilla.org/show_bug.cgi?id=1194719
-            //
-            // We need to set these every time since all properties are reset
-            // when the the size is changed
-            targetCtx.mozImageSmoothingEnabled = false;
-            targetCtx.webkitImageSmoothingEnabled = false;
-            targetCtx.msImageSmoothingEnabled = false;
-            targetCtx.imageSmoothingEnabled = false;
-
-            targetCtx.drawImage(sourceCvs,
-                                    oldX, oldY, w, h,
-                                    newX, newY, w, h);
+            this._renderer.copyImage(oldX, oldY, newX, newY, w, h);
         }
     }
 
@@ -830,7 +740,7 @@ export default class Display {
             return;
         }
 
-        var rect = {
+        const rect = {
             'type': 'transparent',
             'img': null,
             'x': x,
@@ -840,18 +750,17 @@ export default class Display {
             'frame_id': frame_id,
             'arr': img,
             'hash_id': hashId
-        }
+        };
         this._processRectScreens(rect);
 
         if (rect.inPrimary) {
             let imageBmpPromise = createImageBitmap(img);
             imageBmpPromise.then( function(bitmap) {
-                this._transparentOverlayImg = bitmap;
-                this.enableCanvasBuffer = true;
+                this._renderer.transparentOverlayImg = bitmap;
             }.bind(this) );
         }
 
-        this._transparentOverlayRect = rect;
+        this._renderer.transparentOverlayRect = rect;
         this._asyncRenderQPush(rect);
     }
 
@@ -894,19 +803,7 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            let data;
-            if (!ArrayBuffer.isView(arr)) {
-                data = new Uint8ClampedArray(arr,
-                                             arr.length + offset,
-                                             width * height * 4);
-            } else {
-                data = new Uint8ClampedArray(arr.buffer,
-                                             arr.byteOffset + offset,
-                                             width * height * 4);
-            }
-            // NB(directxman12): arr must be an Type Array view
-            let img = new ImageData(data, width, height);
-            this._targetCtx.putImageData(img, x, y);
+            this._renderer.blitImage(x, y, width, height, arr, offset);
         }
     }
 
@@ -924,25 +821,21 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            this._targetCtx.putImageData(arr, x, y);
+            this._renderer.blitQoi(arr, x, y);
         }
     }
 
-    drawImage(img, x, y, w, h, overlay=false) {
+    drawImage(img, x, y, w, h, overlay = false) {
         try {
-            if (img.width !== w || img.height !== h) {
-                this._targetCtx.drawImage(img, x, y, w, h);
-            } else {
-                this._targetCtx.drawImage(img, x, y);
-            }
+            this._renderer.drawImage(img, x, y, w, h);
         } catch (error) {
             Log.Error('Invalid image received.'); //KASM-2090
         }
     }
 
-    drawVideoFrame(videoFrame, x, y, w, h) {
+    drawVideoFrame(videoFrame, x, y, width, height) {
         try {
-            this._targetCtx.drawImage(videoFrame, x, y, w, h);
+            this._renderer.drawImage(videoFrame, x, y, width, height);
             videoFrame.close();
         } catch (error) {
             Log.Error('Invalid video frame received. ', error);
@@ -951,10 +844,10 @@ export default class Display {
 
     putImage(img, x, y) {
         try {
-            this._targetCtx.putImageData(img, x, y);
+            this._renderer.putImage(img, x, y);
             img = null;
         } catch (error) {
-            Log.Error('Invalid image recieved.');
+            Log.Error('Invalid image received.');
             img = null;
         }
     }
@@ -972,7 +865,7 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            this._targetCtx.clearRect(x, y, width, height);
+            this._renderer.clearRect(x, y, width, height);
         }
     }
 
@@ -998,12 +891,6 @@ export default class Display {
 
     // ===== PRIVATE METHODS =====
 
-    _writeCtxBuffer() {
-    	//TODO: KASM-5450 Damage tracking with transparent rect overlay support
-        if (this._backbuffer.width > 0) {
-            this._targetCtx.drawImage(this._backbuffer, 0, 0);
-        }
-    }
 
     _handleSecondaryDisplayMessage(event) {
         if (!this._isPrimaryDisplay && event.data) {
@@ -1026,12 +913,9 @@ export default class Display {
                         case 'transparent':
                             let imageBmpPromise = createImageBitmap(rect.arr);
                             imageBmpPromise.then( function(img) {
-                                this._transparentOverlayImg = img;
-                                if (!this.enableCanvasBuffer) {
-                                    this._enableCanvasBuffer = true;
-                                }
+                                this._renderer.transparentOverlayImg = img;
                             }.bind(this) );
-                            this._transparentOverlayRect = rect;
+                            this._renderer.transparentOverlayRect = rect;
                             break;
                     }
                     this._syncFrameQueue.push(rect);
@@ -1108,11 +992,9 @@ export default class Display {
             this._syncFrameQueue.shift();
         }
 
-        if (this._enableCanvasBuffer && drawRectCnt > 0) {
-            this._writeCtxBuffer();
-            if (this._transparentOverlayImg) {
-                this.drawImage(this._transparentOverlayImg, this._transparentOverlayRect.x, this._transparentOverlayRect.y, this._transparentOverlayRect.width, this._transparentOverlayRect.height, true);
-            }
+        if (this._renderer.enableCanvasBuffer && drawRectCnt > 0) {
+            this._renderer._writeCtxBuffer();
+            this._renderer.drawTransparentOverlayImg()
         }
 
         if (this._syncFrameQueue.length > 0) {
@@ -1492,23 +1374,24 @@ export default class Display {
                 }
             }
 
-            if (this._enableCanvasBuffer) {
+            if (this._renderer.enableCanvasBuffer) {
                 if (primaryScreenRects > 0) {
-                    this._writeCtxBuffer();
+                    this._renderer._writeCtxBuffer();
                 }
 
-                if (this._transparentOverlayImg) {
+                if (this._renderer.transparentOverlayImg) {
                     if (primaryScreenRects > 0) {
-                        this.drawImage(this._transparentOverlayImg, this._transparentOverlayRect.x, this._transparentOverlayRect.y, this._transparentOverlayRect.width, this._transparentOverlayRect.height, true);
+                        this._renderer.drawTransparentOverlayImg();
                     }
-                    if (secondaryScreenRects > 0 && this._lastTransparentRectId !== this._transparentOverlayRect.hash_id) {
-                        for (let sI = 1; sI < this._transparentOverlayRect.screenLocations.length; sI++) {
-                            if (this._screens[this._transparentOverlayRect.screenLocations[sI].screenIndex].channel) {
-                                this._screens[this._transparentOverlayRect.screenLocations[sI].screenIndex].channel.postMessage({ eventType: 'rect', rect: this._transparentOverlayRect, screenLocationIndex: sI });
+                    const transparentOverlayRect = this._renderer.transparentOverlayRect;
+                    if (secondaryScreenRects > 0 && this._lastTransparentRectId !== transparentOverlayRect.hash_id) {
+                        for (let sI = 1; sI < transparentOverlayRect.screenLocations.length; sI++) {
+                            if (this._screens[transparentOverlayRect.screenLocations[sI].screenIndex].channel) {
+                                this._screens[transparentOverlayRect.screenLocations[sI].screenIndex].channel.postMessage({ eventType: 'rect', rect: transparentOverlayRect, screenLocationIndex: sI });
                             }
                         }
                     }
-                    this._lastTransparentRectId = this._transparentOverlayRect.hash_id;
+                    this._lastTransparentRectId = transparentOverlayRect.hash_id;
                 }
             }
 
@@ -1595,33 +1478,8 @@ export default class Display {
         const width = factor * vp.serverWidth + 'px';
         const height = factor * vp.serverHeight + 'px';
 
-        if ((this._target.style.width !== width) ||
-            (this._target.style.height !== height)) {
-            this._target.style.width = width;
-            this._target.style.height = height;
-        }
-
-        Log.Info('Pixel Ratio: ' + window.devicePixelRatio + ', VNC Scale: ' + factor + 'VNC Res: ' + vp.serverWidth + 'x' + vp.serverHeight);
-
-        var pixR = Math.abs(Math.ceil(window.devicePixelRatio));
-        var isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
-
-        if (this.antiAliasing === 2 || (this.antiAliasing === 0 && factor === 1 && this._target.style.imageRendering !== 'pixelated' && pixR === window.devicePixelRatio && vp.width > 0)) {
-            this._target.style.imageRendering = ((!isFirefox) ? 'pixelated' : 'crisp-edges' );
-            Log.Debug('Smoothing disabled');
-        } else if (this.antiAliasing === 1 || (this.antiAliasing === 0 && factor !== 1 && this._target.style.imageRendering !== 'auto')) {
-            this._target.style.imageRendering = 'auto'; //auto is really smooth (blurry) using trilinear of linear
-            Log.Debug('Smoothing enabled');
-        }
+        this._renderer.rescale(factor, width, height, vp.serverWidth, vp.serverHeight, vp.width);
 
         requestAnimationFrame( () => { this._pushAsyncFrame(); });
-    }
-
-    _setFillColor(color) {
-        const newStyle = 'rgb(' + color[0] + ',' + color[1] + ',' + color[2] + ')';
-        if (newStyle !== this._prevDrawStyle) {
-            this._targetCtx.fillStyle = newStyle;
-            this._prevDrawStyle = newStyle;
-        }
     }
 }

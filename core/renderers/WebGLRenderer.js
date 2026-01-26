@@ -3,17 +3,16 @@ import * as Log from "../util/logging";
 
 export class WebGLRenderer {
     static vertexShaderSource = `
-    attribute vec2 xy;
+        attribute vec2 xy;
+        uniform vec4 rect; // x, y, w, h in NDC
+        varying highp vec2 uv;
 
-    varying highp vec2 uv;
-
-    void main(void) {
-      gl_Position = vec4(xy, 0.0, 1.0);
-      // Map vertex coordinates (-1 to +1) to UV coordinates (0 to 1).
-      // UV coordinates are Y-flipped relative to vertex coordinates.
-      uv = vec2((1.0 + xy.x) / 2.0, (1.0 - xy.y) / 2.0);
-    }
-  `;
+        void main(void) {
+            vec2 pos = rect.xy + xy * rect.zw;
+            gl_Position = vec4(pos, 0.0, 1.0);
+            uv = vec2((xy.x + 1.0) * 0.5, (1.0 - xy.y) * 0.5);
+        }
+    `;
 
     static fragmentShaderSource = `
     varying highp vec2 uv;
@@ -25,13 +24,17 @@ export class WebGLRenderer {
     }
   `;
 
-    constructor(canvas2D, gl) {
+    constructor(canvas2D, gl, webglCanvas) {
         this._canvas2D = canvas2D;
         this.gl = gl;
         this._webglCanvas = webglCanvas;
+        this._lastWidth = 0;
+        this._lastHeight = 0;
+        this._isWebGL2 = gl.constructor.name === 'WebGL2RenderingContext';
 
         Log.Info("WebGL Renderer Initialized");
         Log.Info("WebGL Version: " + gl.getParameter(gl.VERSION));
+        Log.Info("WebGL2: " + this._isWebGL2);
         Log.Info("WebGL Color: " + gl.getParameter(gl.RED_BITS) + ", " + gl.getParameter(gl.GREEN_BITS) + ", " + gl.getParameter(gl.BLUE_BITS) + ", " + gl.getParameter(gl.ALPHA_BITS))
         Log.Info("WebGL Depth: " + gl.getParameter(gl.DEPTH_BITS) + ", Stencil: " + gl.getParameter(gl.STENCIL_BITS));
         Log.Info("WebGL GLSL Version: " + gl.getParameter(gl.SHADING_LANGUAGE_VERSION));
@@ -53,6 +56,10 @@ export class WebGLRenderer {
         }
         gl.useProgram(this.shaderProgram);
 
+        // Delete shaders after linking (they're no longer needed)
+        gl.deleteShader(vertexShader);
+        gl.deleteShader(fragmentShader);
+
         // Vertex coordinates, clockwise from bottom-left.
         const vertexBuffer = gl.createBuffer();
         gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
@@ -68,14 +75,21 @@ export class WebGLRenderer {
         gl.enableVertexAttribArray(xyLocation);
 
         // Create one texture to upload frames to.
-        const texture = gl.createTexture();
-        gl.bindTexture(gl.TEXTURE_2D, texture);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        this._texture = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, this._texture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
+        // Disable features we don't need
+        gl.disable(gl.DEPTH_TEST);
+        gl.disable(gl.STENCIL_TEST);
+        gl.disable(gl.DITHER);
+        gl.disable(gl.BLEND);
 
+        // Set viewport once here for full canvas rendering
+        gl.viewport(0, 0, webglCanvas.width, webglCanvas.height);
     }
 
     get width() {
@@ -175,19 +189,48 @@ export class WebGLRenderer {
     drawVideoFrame(frame, x, y, w, h) {
         const gl = this.gl;
 
+        // Get the full framebuffer dimensions from the target canvas
+        const fbWidth = this._canvas2D._target.width;
+        const fbHeight = this._canvas2D._target.height;
+
+        // Resize WebGL canvas to match full framebuffer only if needed
+        if (this._lastWidth !== fbWidth || this._lastHeight !== fbHeight) {
+            this._webglCanvas.width = fbWidth;
+            this._webglCanvas.height = fbHeight;
+
+            // Match style dimensions to target canvas
+            const targetStyle = this._canvas2D._target.style;
+            this._webglCanvas.style.width = targetStyle.width;
+            this._webglCanvas.style.height = targetStyle.height;
+
+            // Set viewport to full canvas
+            gl.viewport(0, 0, fbWidth, fbHeight);
+
+            this._lastWidth = fbWidth;
+            this._lastHeight = fbHeight;
+        }
+
         // Upload the frame to texture
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
-        frame.close();
 
-        // Set viewport to match the video region where we want to draw
-        gl.viewport(x, this._webglCanvas.height - y - h, w, h);
+        // Clear only the region we're about to draw to avoid artifacts
+     //   gl.enable(gl.SCISSOR_TEST);
+      //  gl.scissor(x, fbHeight - y - h, w, h);
+      //  gl.clearColor(0, 0, 0, 0);
+      //  gl.clear(gl.COLOR_BUFFER_BIT);
+      //  gl.disable(gl.SCISSOR_TEST);
 
-        // Clear with transparent background so Canvas2D shows through
-        gl.clearColor(0.0, 0.0, 0.0, 0.0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
+        // Set viewport to the video rect region (x, y, w, h)
+        // Note: WebGL uses bottom-left origin, so flip Y coordinate
+        gl.viewport(x, fbHeight - y - h, w, h);
 
-        // Draw the frame
+        // Draw the frame as full-screen quad within the viewport
         gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+
+        // Force flush to ensure rendering happens immediately
+       // gl.flush();
+
+        frame.close();
     }
 
     fillRect(x, y, width, height, color) {

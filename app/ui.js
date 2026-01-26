@@ -906,7 +906,7 @@ const UI = {
         UI.updateQuality();
 
         if (mode === encodings.pseudoEncodingStreamingModeJpegWebp) {
-            UI.rfb._requestFullRefresh();
+            UI.rfb?._requestFullRefresh();
         }
 
         const streamModeElem = UI.getSettingElement(UI_SETTINGS.STREAM_MODE);

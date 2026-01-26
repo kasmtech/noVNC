@@ -950,9 +950,6 @@ export default class RFB extends EventTargetMixin {
             }
 
             if (this._pendingApplyEncodingChanges) {
-                // Reset video decoders to ensure clean state on streaming mode/quality changes
-                // This prevents WebCodecs state violations when reconfiguring decoders
-                this._decoders[encodings.encodingKasmVideo]?.reset();
                 this._sendEncodings();
 
                 if (this._pendingVideoQualityRefresh) {

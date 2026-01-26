@@ -36,18 +36,6 @@ export default class KasmVideoDecoder {
         this._decoders = new Map();
     }
 
-    // ===== Public Methods =====
-    reset() {
-        Log.Debug('Resetting all video decoders due to streaming mode/quality change');
-        for (let screen of this._decoders.values()) {
-            if (screen.decoder?.state !== 'closed') {
-                screen.decoder.reset();
-            }
-        }
-        this._decoders.clear();
-        this._timestampMap.clear();
-    }
-
     decodeRect(x, y, width, height, sock, display, depth, frame_id) {
         if (this._ctl === null) {
             if (sock.rQwait("KasmVideo screen and compression-control", 2)) {

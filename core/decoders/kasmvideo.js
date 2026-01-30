@@ -1,0 +1,260 @@
+/*
+ * KasmVNC: HTML5 VNC client
+ * Copyright (C) 2020 Kasm Technologies
+ * Copyright (C) 2019 The noVNC Authors
+ * (c) 2012 Michael Tinglof, Joe Balaz, Les Piech (Mercuri.ca)
+ * Licensed under MPL 2.0 (see LICENSE.txt)
+ *
+ * See README.md for usage and integration instructions.
+ *
+ */
+
+import * as Log from '../util/logging.js';
+
+const VIDEO_CODEC_NAMES = {
+    1: 'avc1.42E01E',
+    2: 'hev1.1.6.L93.B0',
+    3: 'av01.0.04M.08'
+};
+
+const TARGET_FPS = 120;
+const FRAME_DURATION_US = Math.round(1_000_000 / TARGET_FPS);
+//avc1.4d002a - main
+/// avc1.42001E - baseline
+
+export default class KasmVideoDecoder {
+    constructor(rfb, display) {
+        this._len = 0;
+        this._keyFrame = 0;
+        this._screenId = null;
+        this._ctl = null;
+        this._rfb = rfb;
+        this._display = display;
+
+        this._timestamp = 0;
+        this._timestampMap = new Map();
+        this._decoders = new Map();
+    }
+
+    decodeRect(x, y, width, height, sock, display, depth, frame_id) {
+        if (this._ctl === null) {
+            if (sock.rQwait("KasmVideo screen and compression-control", 2)) {
+                return false;
+            }
+
+            this._screenId = sock.rQshift8();
+            this._ctl = sock.rQshift8();
+
+            // Figure out the filter
+            this._ctl = this._ctl >> 4;
+        }
+
+        let ret;
+
+        if (this._ctl === 0x00) {
+            ret = this._skipRect(x, y, width, height, sock, display, depth, frame_id);
+        } else if ((this._ctl === 0x01) || (this._ctl === 0x02) || (this._ctl === 0x03)) {
+            ret = this._processVideoFrameRect(this._screenId, this._ctl, x, y, width, height, sock, display, depth, frame_id);
+        } else {
+            throw new Error("Illegal KasmVideo compression received (ctl: " + this._ctl + ")");
+        }
+
+        if (ret) {
+            this._ctl = null;
+            this._screenId = null;
+        }
+
+        return ret;
+    }
+
+    // ===== Private Methods =====
+    _configureDecoder(screen) {
+        Log.Debug('Configuring decoder for screen: ', screen.id, ' codec: ', VIDEO_CODEC_NAMES[screen.codec], ' width: ', screen.width, ' height: ', screen.height);
+
+        const config = {
+            codec: VIDEO_CODEC_NAMES[screen.codec],
+            codedWidth: screen.width,
+            codedHeight: screen.height,
+            optimizeForLatency: true,
+        };
+
+        Log.Debug('Applying decoder config: ', config);
+
+        try {
+            screen.decoder.configure(config);
+        } catch (e) {
+            Log.Error('Failed to configure decoder: ', e, 'config:', config);
+            throw e;
+        }
+
+        screen.pendingFrames = [];
+    }
+
+    _updateSize(screen, codec, width, height) {
+        Log.Debug('Updated size: ', {width, height});
+
+        screen.width = width;
+        screen.height = height;
+        screen.codec = codec;
+
+        this._configureDecoder(screen);
+    }
+
+    _skipRect(x, y, width, height, _sock, display, _depth, frame_id) {
+        display.clearRect(x, y, width, height, 0, frame_id, false);
+        return true;
+    }
+
+    _handleProcessVideoChunk(frame) {
+        Log.Debug('Frame ', frame);
+        const metadata = this._timestampMap.get(frame.timestamp);
+        if (!metadata) {
+            Log.Warn('No metadata found for timestamp: ', frame.timestamp);
+            frame.close();
+            return;
+        }
+        const {screenId, frame_id, x, y, width, height} = metadata;
+        Log.Debug('frame_id: ', frame_id, 'x: ', x, 'y: ', y, 'coded width: ', frame.codedWidth, 'coded height: ', frame.codedHeight);
+        this._display.videoFrameRect(screenId, frame, frame_id, x, y, width, height);
+        this._timestampMap.delete(frame.timestamp);
+    }
+
+    _handleDecoderError(decoder) {
+        Log.Error('Decoder error triggered - clearing all decoders and switching to image mode');
+        // We need to reset the decoders
+        this._decoders.clear();
+        this._rfb.dispatchEvent(new CustomEvent('imagemode'));
+    }
+
+
+    _processVideoFrameRect(screenId, codec, x, y, width, height, sock, display, depth, frame_id) {
+        let [keyFrame, dataArr] = this._readData(sock);
+        Log.Debug('Screen: ', screenId, ' key_frame: ', keyFrame);
+        if (dataArr === null) {
+            return false;
+        }
+
+        let screen;
+        if (this._decoders.has(screenId)) {
+            screen = this._decoders.get(screenId);
+        } else {
+            screen = {
+                id: screenId,
+                width: width,
+                height: height,
+                pendingFrames: [],
+                decoder: new VideoDecoder({
+                    output: (frame) => {
+                        Log.Debug('Video frame processing time: ', performance.now() - this._decodingStartedTime);
+                        try {
+                            this._handleProcessVideoChunk(frame);
+                        } catch (e) {
+                            Log.Error(`Error in _handleProcessVideoChunk: `, e);
+                            frame.close();
+                        }
+                    }, error: (e) => {
+                        Log.Error('FATAL VideoDecoder error:', {
+                            message: e.message,
+                            name: e.name,
+                            decoderState: screen.decoder.state
+                        });
+                        this._handleDecoderError();
+                    }
+                })
+            };
+            Log.Debug('Created new decoder for screen: ', screenId);
+            this._decoders.set(screenId, screen);
+        }
+
+        if (width !== screen.width || height !== screen.height || codec !== screen.codec) {
+            this._updateSize(screen, codec, width, height);
+        }
+
+        const vidChunk = new EncodedVideoChunk({
+            type: keyFrame ? 'key' : 'delta',
+            data: dataArr,
+            timestamp: this._timestamp,
+        });
+
+        Log.Debug('Type ', vidChunk.type, ' timestamp: ', vidChunk.timestamp, ' bytelength ', vidChunk.byteLength);
+
+        this._timestampMap.set(this._timestamp, {
+            screenId,
+            frame_id,
+            x,
+            y,
+            width,
+            height
+        });
+        this._timestamp += FRAME_DURATION_US;
+
+        if (screen.decoder.state !== 'configured') {
+            screen.pendingFrames.push(vidChunk);
+
+            return true;
+        }
+
+        try {
+            this._decodingStartedTime = performance.now();
+
+            if (screen.pendingFrames?.length > 0) {
+                for (const frame of screen.pendingFrames)
+                    screen.decoder.decode(frame);
+            }
+
+            screen.decoder.decode(vidChunk);
+        } catch (e) {
+            Log.Error('DECODE FAILURE - Screen: ', screenId,
+                'Key frame ', keyFrame, ' frame_id: ', frame_id,
+                ' x: ', x, ' y: ', y, ' width: ', width, ' height: ', height,
+                ' codec: ', codec, ' codec_string: ', VIDEO_CODEC_NAMES[codec],
+                ' decoder_state: ', screen.decoder.state,
+                ' error: ', e);
+
+            this._handleDecoderError();
+        }
+        return true;
+    }
+
+    _readData(sock) {
+        if (this._len === 0) {
+            if (sock.rQwait("KasmVideo", 5)) {
+                return [0, null];
+            }
+
+            this._keyFrame = sock.rQshift8();
+            let byte = sock.rQshift8();
+            this._len = byte & 0x7f;
+            if (byte & 0x80) {
+                byte = sock.rQshift8();
+                this._len |= (byte & 0x7f) << 7;
+                if (byte & 0x80) {
+                    byte = sock.rQshift8();
+                    this._len |= byte << 14;
+                }
+            }
+        }
+
+        if (sock.rQwait("KasmVideo", this._len)) {
+            return [0, null];
+        }
+
+        const data = sock.rQshiftBytes(this._len);
+        const keyFrame = this._keyFrame;
+        this._len = 0;
+        this._keyFrame = 0;
+
+        return [keyFrame, data];
+    }
+
+    dispose() {
+        for (let screen of this._decoders.values()) {
+            screen.decoder.close();
+        }
+        this._decoders.clear();
+
+        for (let timestamp of this._timestampMap.keys()) {
+            this._timestampMap.delete(timestamp);
+        }
+    }
+}

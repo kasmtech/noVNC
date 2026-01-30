@@ -6,6 +6,9 @@
  *
  * See README.md for usage and integration instructions.
  */
+
+import {showNotification} from "../core/util/notifications";
+
 window._noVNC_has_module_support = true;
 window.addEventListener("load", function() {
     if (window._noVNC_has_module_support) return;
@@ -36,12 +39,17 @@ import { isTouchDevice, isSafari, hasScrollbarGutter, dragThreshold, supportsBin
     from '../core/util/browser.js';
 import { setCapture, getPointerEvent } from '../core/util/events.js';
 import KeyTable from "../core/input/keysym.js";
-import keysyms from "../core/input/keysymdef.js";
-import Keyboard from "../core/input/keyboard.js";
 import RFB from "../core/rfb.js";
 import { MouseButtonMapper, XVNC_BUTTONS } from "../core/mousebuttonmapper.js";
 import * as WebUtil from "./webutil.js";
 import { uuidv4 } from '../core/util/strings.js';
+import {
+    UI_SETTINGS_STREAM_MODE_QUALITY_SETTINGS_GROUPS,
+    UI_SETTINGS_CONTROL_ID as UI_SETTINGS,
+    UI_FPS_CHART, FPS
+} from './constants.js';
+import {encodings} from "../core/encodings.js";
+import CodecDetector, {CODEC_VARIANT_NAMES, preferredCodecs} from "../core/codecs";
 
 const PAGE_TITLE = "KasmVNC";
 
@@ -73,22 +81,33 @@ const UI = {
     currentDisplay: null,
     displayWindows: new Map([['primary', 'primary']]),
     registeredWindows: new Map([['primary', 'primary']]),
+    fpsChartTicks: [],
 
     monitorDragOk: false,
     monitorStartX: 0,
     monitorStartY: 0,
 
     supportsBroadcastChannel: (typeof BroadcastChannel !== "undefined"),
+    codecDetector: null,
+    forcedCodecs: [],
 
-    prime() {
-        return WebUtil.initSettings().then(() => {
-            if (document.readyState === "interactive" || document.readyState === "complete") {
-                return UI.start();
-            }
+    prime: async () => {
+        await WebUtil.initSettings();
+        try {
+            const detector = await (new CodecDetector()).detect();
+            UI.codecDetector = detector;
 
-            return new Promise((resolve, reject) => {
-                document.addEventListener('DOMContentLoaded', () => UI.start().then(resolve).catch(reject));
-            });
+            Log.Debug('Supported Codecs: ', detector.getSupportedCodecs());
+        } catch (e) {
+            Log.Warn('Failed to detect codecs: ', e);
+        }
+
+        if (document.readyState === "interactive" || document.readyState === "complete") {
+            return UI.start();
+        }
+
+        return new Promise((resolve, reject) => {
+            document.addEventListener('DOMContentLoaded', () => UI.start().then(resolve).catch(reject));
         });
     },
 
@@ -150,10 +169,8 @@ const UI = {
         UI.addSettingsHandlers();
         UI.addDisplaysHandler();
         // UI.addMultiMonitorAddHandler();
-        document.getElementById("noVNC_status")
-            .addEventListener('click', UI.hideStatus);
+        document.getElementById("noVNC_status").addEventListener('click', UI.hideStatus);
         UI.openControlbar();
-
 
         UI.updateVisualState('init');
 
@@ -184,8 +201,23 @@ const UI = {
             }
         });
 
+        window.addEventListener("beforeunload", (e) => {
+            // Clean up secondary display connection before window closes
+            const urlParams = new URLSearchParams(window.location.search);
+            const windowId = urlParams.get('windowId');
+
+            if (UI.rfb && windowId) {
+                // This is a secondary display - unregister it without disconnecting main session
+                UI.rfb._unregisterSecondaryDisplay();
+            }
+        });
+
         window.addEventListener("unload", (e) => {
-            if (UI.rfb) {
+            // Only disconnect main window (without windowId parameter)
+            const urlParams = new URLSearchParams(window.location.search);
+            const windowId = urlParams.get('windowId');
+
+            if (UI.rfb && !windowId) {
                 UI.disconnect();
             }
         });
@@ -268,7 +300,9 @@ const UI = {
         UI.initSetting('video_scaling', 2);
         UI.initSetting('max_video_resolution_x', 960);
         UI.initSetting('max_video_resolution_y', 540);
-        UI.initSetting('framerate', 30);
+        UI.initSetting('framerate', FPS.MIN);
+        UI.initSetting('framerate_image_mode', FPS.MIN);
+        UI.initSetting('framerate_video_mode', FPS.MIN);
         UI.initSetting('compression', 2);
         UI.initSetting('shared', true);
         UI.initSetting('view_only', false);
@@ -286,6 +320,13 @@ const UI = {
         UI.initSetting('enable_ime', false);
         UI.initSetting('enable_webrtc', false);
         UI.initSetting('enable_hidpi', false);
+
+        UI.initSetting(UI_SETTINGS.STREAM_MODE, encodings.pseudoEncodingStreamingModeJpegWebp);
+        // UI.initSetting(UI_SETTINGS.HW_PROFILE, UI_SETTING_PROFILE_OPTIONS.BASELINE);
+        UI.initSetting(UI_SETTINGS.GOP, this.getSetting('framerate'));
+        UI.initSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY, 43);
+        // UI.initSetting(UI_SETTINGS.PRESET, 3);
+
         UI.toggleKeyboardControls();
 
         if ((WebUtil.isInsideKasmVDI()) && (! WebUtil.getConfigVar('show_control_bar'))) {
@@ -317,6 +358,19 @@ const UI = {
 
         UI.setupSettingLabels();
         UI.updateQuality();
+
+        // VDI setting
+        let val = WebUtil.getConfigVar('kasmvnc_mode_preference');
+        if (val === 'image') {
+            UI.forcedCodecs = [encodings.pseudoEncodingStreamingModeJpegWebp];
+            Log.Debug('VDI setting: image');
+            return;
+        }
+
+        if (val != null) {
+            UI.forcedCodecs = val.split('|').map(Number);
+            Log.Debug('VDI setting: ' + UI.forcedCodecs);
+        }
     },
     initMouseButtonMapper() {
         const mouseButtonMapper = new MouseButtonMapper();
@@ -542,6 +596,10 @@ const UI = {
         settingElem.addEventListener('change', changeFunc);
     },
 
+    addSettingChangeHandlerByName(name) {
+        this.addSettingChangeHandler(name, UI.updatePropertyName(name));
+    },
+
     addSettingsHandlers() {
         UI.addClickHandle('noVNC_settings_button', UI.toggleSettingsPanel);
 
@@ -583,8 +641,18 @@ const UI = {
         UI.addSettingChangeHandler('max_video_resolution_x', UI.updateQuality);
         UI.addSettingChangeHandler('max_video_resolution_y');
         UI.addSettingChangeHandler('max_video_resolution_y', UI.updateQuality);
-        UI.addSettingChangeHandler('framerate');
-        UI.addSettingChangeHandler('framerate', UI.updateQuality);
+        UI.addSettingChangeHandler('framerate_image_mode', () => {
+            const settingElem = UI.getSettingElement('framerate_image_mode');
+            UI.getSettingElement('framerate_streaming_mode').value = settingElem.value;
+            WebUtil.writeSetting('framerate', settingElem.value);
+            UI.updateQuality();
+        });
+        UI.addSettingChangeHandler('framerate_streaming_mode', () => {
+            const settingElem = UI.getSettingElement('framerate_streaming_mode');
+            UI.getSettingElement('framerate_image_mode').value = settingElem.value;
+            WebUtil.writeSetting('framerate', settingElem.value);
+            UI.updateQuality();
+        });
         UI.addSettingChangeHandler('compression');
         UI.addSettingChangeHandler('compression', UI.updateCompression);
         UI.addSettingChangeHandler('view_clip');
@@ -617,6 +685,12 @@ const UI = {
         UI.addSettingChangeHandler('enable_hidpi', UI.enableHiDpi);
         UI.addSettingChangeHandler('enable_threading');
         UI.addSettingChangeHandler('enable_threading', UI.threading);
+
+        UI.addSettingChangeHandler(UI_SETTINGS.STREAM_MODE, UI.streamMode);
+        // UI.addSettingChangeHandlerByName(UI_SETTINGS.HW_PROFILE);
+        UI.addSettingChangeHandlerByName(UI_SETTINGS.GOP);
+        UI.addSettingChangeHandlerByName(UI_SETTINGS.VIDEO_STREAM_QUALITY);
+        // UI.addSettingChangeHandlerByName(UI_SETTINGS.PRESET);
     },
 
     addFullscreenHandlers() {
@@ -740,11 +814,21 @@ const UI = {
     },
 
     showStats() {
+        // Clear any existing interval first
+        if (UI.statsInterval) {
+            clearInterval(UI.statsInterval);
+            UI.statsInterval = null;
+        }
+
+        // Read checkbox state directly and save it
+        const perfStatsToggle = document.getElementById('noVNC_setting_enable_perf_stats');
+        const enable_stats = perfStatsToggle ? perfStatsToggle.checked : false;
+        // WebUtil.writeSetting('enable_perf_stats', enable_stats);
         UI.saveSetting('enable_perf_stats');
 
-        let enable_stats = UI.getSetting('enable_perf_stats');
-        if (enable_stats === true && UI.statsInterval == undefined) {
+        if (enable_stats) {
             document.getElementById("noVNC_connection_stats").style.visibility = "visible";
+            document.getElementById("noVNC_fps_chart").style.visibility = 'visible';
             UI.statsInterval = setInterval(function() {
                 if (UI.rfb !== undefined) {
                     UI.rfb.requestBottleneckStats();
@@ -752,9 +836,8 @@ const UI = {
             }  , 5000);
         } else {
             document.getElementById("noVNC_connection_stats").style.visibility = "hidden";
-            UI.statsInterval = null;
+            document.getElementById("noVNC_fps_chart").style.visibility = 'hidden';
         }
-
     },
 
     threading() {
@@ -766,6 +849,181 @@ const UI = {
             }
         }
         UI.saveSetting('enable_threading');
+    },
+
+    updatePropertyName(propertyName) {
+        return UI.updateRfbProperty(propertyName, propertyName);
+    },
+
+    updateRfbProperty(propertyName, settingId) {
+        return (event) => {
+            if (UI.rfb) {
+                UI.rfb  [propertyName] = Number(event.target.value);
+            }
+            UI.saveSetting(settingId);
+
+            UI.updateQuality();
+        }
+    },
+
+    gop(event) {
+        if (UI.rfb) {
+            UI.rfb.gop = Number(event.target.value);
+        }
+        UI.saveSetting(UI_SETTINGS.GOP);
+    },
+
+    videoStreamQuality(event) {
+        if (UI.rfb) {
+            UI.rfb.videoStreamQuality = Number(event.target.value);
+        }
+        Log.Debug('Saving quality:', event.target.value, 'Stream mode:', UI.getSetting(UI_SETTINGS.STREAM_MODE));
+        Log.Debug('Codec configs:', UI.rfb?.videoCodecConfigurations);
+        UI.saveSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY);
+    },
+
+    qualityPreset(event) {
+        if (UI.rfb) {
+            UI.rfb.qualityPreset = Number(event.target.value);
+        }
+        UI.saveSetting(UI_SETTINGS.PRESET);
+    },
+
+    streamMode(event) {
+        const value = Number(event.target.value);
+        UI.saveSetting(UI_SETTINGS.STREAM_MODE);
+        UI.applyStreamMode(value, event.configuration);
+    },
+
+    applyStreamMode(mode, configuration) {
+        UI.toggleStreamModeGroupVisibility(mode);
+
+        if (mode !== encodings.pseudoEncodingStreamingModeJpegWebp) {
+            const config = configuration || UI.rfb?.videoCodecConfigurations[mode];
+            UI.updateQualitySliderRange(mode, config);
+        }
+
+        UI.updateQuality();
+
+        if (mode === encodings.pseudoEncodingStreamingModeJpegWebp) {
+            UI.rfb._requestFullRefresh();
+        }
+
+        const streamModeElem = UI.getSettingElement(UI_SETTINGS.STREAM_MODE);
+        const modeName = [...streamModeElem.options]
+            .find(option => Number(option.value) === mode)?.text;
+
+        Log.Info('Switching to mode: ', modeName ? modeName : 'Unknown Mode ', 'value:', mode);
+
+        showNotification(modeName || 'Mode Changed');
+    },
+
+    initStreamModeSetting(codecs, configurations) {
+        const streamModeElem = UI.getSettingElement(UI_SETTINGS.STREAM_MODE);
+        if (!streamModeElem)
+            return;
+
+        streamModeElem.innerHTML = "";
+
+        // Always include the JPEG/WEBP image mode (fallback)
+        const fallbackOption = {
+            id: encodings.pseudoEncodingStreamingModeJpegWebp,
+            label: "JPEG/WEBP (Images)"
+        };
+        const availableModes = [fallbackOption];
+
+        const codecsAvailable = this.getAvailableStreamingModes(codecs);
+        availableModes.push(...codecsAvailable);
+
+        const previousValue = Number(UI.getSetting(UI_SETTINGS.STREAM_MODE));
+        const selectedValue = this.getBestStreamingMode(availableModes, fallbackOption, previousValue);
+
+        availableModes.sort((a, b) => b.id - a.id).forEach(option => {
+            UI.addOption(streamModeElem, option.label, option.id);
+        });
+
+        streamModeElem.value = selectedValue;
+
+        const config = configurations?.[selectedValue];
+        UI.streamMode({target: streamModeElem, configuration: config});
+        Log.Debug('Selected streaming mode: ', selectedValue);
+        Log.Debug('Codec configuration:',  config);
+        UI.sendMessage("update_codecs", {current: streamModeElem.value, codecs: availableModes});
+    },
+
+    updateQualitySliderRange(codecId, config) {
+        const qualitySlider = UI.getSettingElement(UI_SETTINGS.VIDEO_STREAM_QUALITY);
+        if (!qualitySlider) return;
+
+        if (!config) {
+            qualitySlider.min = 1;
+            qualitySlider.max = 63;
+
+            return;
+        }
+
+        qualitySlider.min = config.minQuality;
+        qualitySlider.max = config.maxQuality;
+
+        const currentValue = parseInt(qualitySlider.value);
+        if (currentValue < config.minQuality) {
+            qualitySlider.value = config.minQuality;
+        } else if (currentValue > config.maxQuality) {
+            qualitySlider.value = config.maxQuality;
+        }
+
+        const output = document.getElementById('noVNC_setting_video_stream_quality_output');
+        if (output) {
+            output.value = qualitySlider.value;
+        }
+
+        // Save updated value if it changed
+        if (currentValue !== parseInt(qualitySlider.value)) {
+            UI.saveSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY);
+        }
+    },
+
+    getAvailableStreamingModes(codecs) {
+        let result = [];
+        if (!Array.isArray(codecs) || codecs.length === 0)
+            return result;
+
+        const forcedCodecs = UI.forcedCodecs;
+        codecs = forcedCodecs.length > 0
+            ? forcedCodecs.filter(id => codecs.includes(id))
+            : codecs;
+
+        const codecTuples = codecs.map((id) => {
+            const label = CODEC_VARIANT_NAMES[id] ? CODEC_VARIANT_NAMES[id] : `Codec ${id}`;
+            return {id, label};
+        });
+
+        result.push(...codecTuples);
+
+        return result;
+    },
+
+    getBestStreamingMode(availableModes, fallbackOption, previousValue) {
+        let result = fallbackOption.id;
+        if (UI.forcedCodecs.length > 0) {
+            const forcedMode = UI.forcedCodecs.find(id => availableModes.some(option => option.id === id));
+            return forcedMode !== undefined ? forcedMode : fallbackOption.id;
+        }
+
+        // Restore selection if possible; otherwise default to JPEG/WEBP
+        const hasPrevious = availableModes.some(option => option.id === previousValue);
+
+        const availableIds = availableModes.map(option => option.id);
+        const preferredMatch = preferredCodecs.filter(c => availableIds.includes(c));
+        result = hasPrevious ? previousValue : encodings.pseudoEncodingStreamingModeJpegWebp;
+
+        if (preferredMatch.length > 0) {
+            if (result === encodings.pseudoEncodingStreamingModeJpegWebp) {
+                result = Math.min(...preferredMatch);
+            }
+        }
+
+        return result;
     },
 
     showStatus(text, statusType, time, kasm = false) {
@@ -909,6 +1167,18 @@ const UI = {
 
         // Consider this a movement of the handle
         UI.controlbarDrag = true;
+    },
+
+    toggleStreamModeGroupVisibility(streamModeValue) {
+        const isImageGroupVisible = streamModeValue === encodings.pseudoEncodingStreamingModeJpegWebp;
+        const imageGroup = document.getElementById(UI_SETTINGS_STREAM_MODE_QUALITY_SETTINGS_GROUPS.IMAGE_GROUP);
+        const videoGroup = document.getElementById(UI_SETTINGS_STREAM_MODE_QUALITY_SETTINGS_GROUPS.VIDEO_GROUP);
+        if (imageGroup) {
+            imageGroup.style.display = isImageGroupVisible ? 'block' : 'none';
+        }
+        if (videoGroup) {
+            videoGroup.style.display = !isImageGroupVisible ? 'block' : 'none';
+        }
     },
 
     showControlbarHint(show) {
@@ -1124,11 +1394,12 @@ const UI = {
     // Update cookie and form control setting. If value is not set, then
     // updates from control to current cookie setting.
     updateSetting(name) {
-
         // Update the settings control
         let value = UI.getSetting(name);
 
         const ctrl = document.getElementById('noVNC_setting_' + name);
+        if (!ctrl) return;
+
         if (ctrl.type === 'checkbox') {
             ctrl.checked = value;
 
@@ -1152,6 +1423,7 @@ const UI = {
     // Save control setting to cookie
     saveSetting(name) {
         const ctrl = document.getElementById('noVNC_setting_' + name);
+        if (!ctrl) return;
         let val;
         if (ctrl.type === 'checkbox') {
             val = ctrl.checked;
@@ -1161,7 +1433,7 @@ const UI = {
             val = ctrl.value;
         }
         WebUtil.writeSetting(name, val);
-        //Log.Debug("Setting saved '" + name + "=" + val + "'");
+        Log.Debug("Setting saved '" + name + "=" + val + "'");
         return val;
     },
 
@@ -1170,7 +1442,7 @@ const UI = {
         const ctrl = document.getElementById('noVNC_setting_' + name);
         let val = WebUtil.readSetting(name);
 
-        if (val != null && ctrl.type === 'checkbox') {
+        if (val != null && ctrl?.type === 'checkbox') {
             const str = String(val).toLowerCase();
             const falseStrings = [ '0', 'no', 'false'];
             if (falseStrings.includes(str)) {
@@ -1181,6 +1453,10 @@ const UI = {
         }
 
         return val;
+    },
+
+    getSettingElement(name) {
+        return document.getElementById('noVNC_setting_' + name);
     },
 
     // These helpers compensate for the lack of parent-selectors and
@@ -1247,7 +1523,7 @@ const UI = {
         UI.updateSetting('video_scaling', 2);
         UI.updateSetting('max_video_resolution_x', 960);
         UI.updateSetting('max_video_resolution_y', 540);
-        UI.updateSetting('framerate', 30);
+        UI.updateSetting('framerate', FPS.MIN);
         UI.updateSetting('compression');
         UI.updateSetting('shared');
         UI.updateSetting('view_only');
@@ -1379,13 +1655,48 @@ const UI = {
        }
     },
 
-    //recieved bottleneck stats
+    generateFpsChartPath() {
+      if (this.fpsChartTicks.length === 0) {
+            return '';
+        }
+
+        const stepX = UI_FPS_CHART.WIDTH / (UI_FPS_CHART.MAX_POINTS - 1);
+        const scaleY = UI_FPS_CHART.HEIGHT / UI_FPS_CHART.MAX_FPS_VALUE;
+
+        let d = `M 0 ${UI_FPS_CHART.HEIGHT}`;
+
+        for (let i = 0; i < UI.fpsChartTicks.length; i++) {
+            const x = i * stepX;
+            const y = UI_FPS_CHART.HEIGHT - UI.fpsChartTicks[i] * scaleY;
+            d += ` L ${x} ${y}`;
+        }
+
+
+        d += ` L ${(UI.fpsChartTicks.length - 1) * stepX} ${UI_FPS_CHART.HEIGHT} L 0 ${UI_FPS_CHART.HEIGHT} Z`;
+
+        return d;
+    },
+
+    updateFpsChart(fpsValue) {
+        UI.fpsChartTicks.push(fpsValue);
+
+        if (UI.fpsChartTicks.length > UI_FPS_CHART.MAX_POINTS) {
+            UI.fpsChartTicks.shift();
+        }
+        const path = document.getElementById('noVNC_fps_chart_path');
+        if (path) {
+            path.setAttribute('d', UI.generateFpsChartPath());
+        }
+    },
+
+    //received bottleneck stats
     bottleneckStatsRecieve(e) {
         if (UI.rfb) {
             try {
                 let obj = JSON.parse(e.detail.text);
                 let fps = UI.rfb.statsFps;
                 document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
+                UI.updateFpsChart(Number(fps));
                 console.log(e.detail.text);
             } catch (err) {
                 console.log('Invalid bottleneck stats recieved from server.')
@@ -1411,6 +1722,32 @@ const UI = {
         Log.Debug(">> UI.clipboardSend: " + text.substr(0, 40) + "...");
         UI.rfb.clipboardPasteFrom(text);
         Log.Debug("<< UI.clipboardSend");
+    },
+
+    setConnectionQualityValues() {
+        UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
+        UI.rfb.antiAliasing = parseInt(UI.getSetting('anti_aliasing'));
+        UI.rfb.dynamicQualityMin = parseInt(UI.getSetting('dynamic_quality_min'));
+        UI.rfb.dynamicQualityMax = parseInt(UI.getSetting('dynamic_quality_max'));
+        UI.rfb.jpegVideoQuality = parseInt(UI.getSetting('jpeg_video_quality'));
+        UI.rfb.webpVideoQuality = parseInt(UI.getSetting('webp_video_quality'));
+        UI.rfb.videoArea = parseInt(UI.getSetting('video_area'));
+        UI.rfb.videoTime = parseInt(UI.getSetting('video_time'));
+        UI.rfb.videoOutTime = parseInt(UI.getSetting('video_out_time'));
+        UI.rfb.videoScaling = parseInt(UI.getSetting('video_scaling'));
+        UI.rfb.treatLossless = parseInt(UI.getSetting('treat_lossless'));
+        UI.rfb.maxVideoResolutionX = parseInt(UI.getSetting('max_video_resolution_x'));
+        UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
+        UI.rfb.frameRate = parseInt(UI.getSetting('framerate'));
+        UI.rfb.enableWebP = UI.getSetting('enable_webp');
+        UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
+        UI.rfb.enableHiDpi = UI.getSetting('enable_hidpi');
+        UI.rfb.threading = UI.getSetting('enable_threading');
+
+        UI.rfb.streamMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE));
+        // UI.rfb.hwEncoderProfile = parseInt(UI.getSetting(UI_SETTINGS.HW_PROFILE));
+        UI.rfb.gop = parseInt(UI.getSetting(UI_SETTINGS.GOP));
+        UI.rfb.videoStreamQuality = parseInt(UI.getSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY));
     },
 
 /* ------^-------
@@ -1473,6 +1810,7 @@ const UI = {
                             repeaterID: UI.getSetting('repeaterID'),
                             credentials: { password: password }
                         },
+                        UI.codecDetector?.getSupportedCodecIds(),
                         true );
         UI.rfb.addEventListener("connect", UI.connectFinished);
         UI.rfb.addEventListener("disconnect", UI.disconnectFinished);
@@ -1488,41 +1826,34 @@ const UI = {
         UI.rfb.addEventListener("screenregistered", UI.screenRegistered);
         UI.rfb.addEventListener("sharedSessionUserJoin", UI.sharedSessionUserJoin);
         UI.rfb.addEventListener("sharedSessionUserLeft", UI.sharedSessionUserLeft);
+        UI.rfb.addEventListener("imagemode", UI.switchToImageMode);
+        UI.rfb.addEventListener("videocodecschange", (e) => {
+            Log.Info('Codec configurations received:', e.detail?.configurations);
+            UI.initStreamModeSetting(e.detail?.codecs, e.detail?.configurations);
+        });
+
         UI.rfb.translateShortcuts = UI.getSetting('translate_shortcuts');
         UI.rfb.clipViewport = UI.getSetting('view_clip');
         UI.rfb.scaleViewport = UI.getSetting('resize') === 'scale';
         UI.rfb.resizeSession = UI.getSetting('resize') === 'remote';
-        UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
-        UI.rfb.dynamicQualityMin = parseInt(UI.getSetting('dynamic_quality_min'));
-        UI.rfb.dynamicQualityMax = parseInt(UI.getSetting('dynamic_quality_max'));
-        UI.rfb.jpegVideoQuality = parseInt(UI.getSetting('jpeg_video_quality'));
-        UI.rfb.webpVideoQuality = parseInt(UI.getSetting('webp_video_quality'));
-        UI.rfb.videoArea = parseInt(UI.getSetting('video_area'));
-        UI.rfb.videoTime = parseInt(UI.getSetting('video_time'));
-        UI.rfb.videoOutTime = parseInt(UI.getSetting('video_out_time'));
-        UI.rfb.videoScaling = parseInt(UI.getSetting('video_scaling'));
-        UI.rfb.treatLossless = parseInt(UI.getSetting('treat_lossless'));
-        UI.rfb.maxVideoResolutionX = parseInt(UI.getSetting('max_video_resolution_x'));
-        UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
-        UI.rfb.frameRate = parseInt(UI.getSetting('framerate'));
+
+        UI.setConnectionQualityValues();
+
         UI.rfb.compressionLevel = parseInt(UI.getSetting('compression'));
         UI.rfb.showDotCursor = UI.getSetting('show_dot');
         UI.rfb.idleDisconnect = UI.getSetting('idle_disconnect');
         UI.rfb.pointerRelative = UI.getSetting('pointer_relative');
-        UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
-        UI.rfb.antiAliasing = UI.getSetting('anti_aliasing');
         UI.rfb.clipboardUp = UI.getSetting('clipboard_up');
         UI.rfb.clipboardDown = UI.getSetting('clipboard_down');
         UI.rfb.clipboardSeamless = UI.getSetting('clipboard_seamless');
         UI.rfb.keyboard.enableIME = UI.getSetting('enable_ime');
         UI.rfb.clipboardBinary = supportsBinaryClipboard() && UI.rfb.clipboardSeamless;
         UI.rfb.enableWebRTC = UI.getSetting('enable_webrtc');
-        UI.rfb.enableHiDpi = UI.getSetting('enable_hidpi');
-        UI.rfb.threading = UI.getSetting('enable_threading');
         UI.rfb.mouseButtonMapper = UI.initMouseButtonMapper();
+        // UI.rfb.qualityPreset = UI.getSetting(UI_SETTINGS.PRESET);
         if (UI.rfb.videoQuality === 5) {
             UI.rfb.enableQOI = true;
-	    }
+        }
 
         //Only explicitly request permission to clipboard on browsers that support binary clipboard access
         if (supportsBinaryClipboard()) {
@@ -1537,7 +1868,6 @@ const UI = {
             UI.rfb.clipboardSeamless = false;
         }
         UI.rfb.preferLocalCursor = UI.getSetting('prefer_local_cursor');
-        UI.rfb.enableWebP = UI.getSetting('enable_webp');
         UI.updateViewOnly(); // requires UI.rfb
 
         /****
@@ -1717,6 +2047,23 @@ const UI = {
         UI.showStatus(msg, 'error');
     },
 
+    switchToImageMode(e) {
+        Log.Warn('Switching to image mode due to decoder error or incompatibility');
+
+        const streamModeElem = UI.getSettingElement(UI_SETTINGS.STREAM_MODE);
+        const mode = encodings.pseudoEncodingStreamingModeJpegWebp;
+        streamModeElem.value = mode;
+        UI.forceSetting(UI_SETTINGS.STREAM_MODE, mode, false);
+        UI.applyStreamMode(mode);
+
+        const availableModes = [...streamModeElem.options].map(option => ({
+            id: Number(option.value),
+            label: option.text
+        }));
+
+        UI.sendMessage("update_codecs", {current: mode, codecs: availableModes});
+    },
+
     //send message to parent window
     sendMessage(name, value) {
         if (WebUtil.isInsideKasmVDI()) {
@@ -1735,13 +2082,30 @@ const UI = {
                     }
                     break;
                 case 'setvideoquality':
+                    let value;
+
                     if (event.data.qualityLevel !== undefined) {
+                        value = parseInt(event.data.qualityLevel);
+                    } else if (event.data.value !== undefined) {
+                        value = parseInt(event.data.value);
+                    } else {
+                        Log.Error("Invalid message received from parent window: " + event.data.action);
+                        break;
+                    }
+
+                    const streamMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE));
+                    const isJpegWebp = streamMode === encodings.pseudoEncodingStreamingModeJpegWebp;
+                    const settingKey = isJpegWebp ? 'video_quality' : UI_SETTINGS.VIDEO_STREAM_QUALITY;
+                    const settingValue = isJpegWebp ? value : UI.rfb.videoCodecConfigurations[streamMode].presets[value];
+
+                    UI.forceSetting(settingKey, settingValue, false);
+
+                    if (event.data.frameRate !== undefined) {
                         //apply preset mode values, but don't apply to connection
-                        UI.forceSetting('video_quality', parseInt(event.data.qualityLevel), false);
                         // apply quality preset quality level and override some settings (fps)
+                        WebUtil.writeSetting('framerate', event.data.frameRate);
                         UI.updateQuality(event.data.frameRate);
                     } else {
-                        UI.forceSetting('video_quality', parseInt(event.data.value), false);
                         UI.updateQuality();
                     }
                     break;
@@ -1849,6 +2213,32 @@ const UI = {
                     if (UI.rfb) {
                         UI.rfb.terminate();
                     }
+                    break;
+                case 'set_streaming_mode':
+                    let mode = encodings.pseudoEncodingStreamingModeJpegWebp;
+                    if (event.data.value !== 'image') {
+                        mode = parseInt(event.data.value);
+                    }
+
+                    UI.forceSetting(UI_SETTINGS.STREAM_MODE, mode, false);
+                    if (mode !== encodings.pseudoEncodingStreamingModeJpegWebp) {
+                        const imageQuality = parseInt(UI.getSetting('video_quality'));
+                        const presets = UI.rfb?.videoCodecConfigurations?.[mode]?.presets;
+                        if (Array.isArray(presets) && presets.length > 0) {
+                            const index = Number.isFinite(imageQuality)
+                                ? Math.max(0, Math.min(presets.length - 1, imageQuality))
+                                : 0;
+                            const streamQuality = presets[index];
+                            if (streamQuality !== undefined) {
+                                UI.forceSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY, streamQuality, false);
+                            }
+                        }
+                    }
+                    UI.applyStreamMode(mode);
+                    break;
+                case 'set_gop':
+                    UI.forceSetting(UI_SETTINGS.GOP, parseInt(event.data.value), false);
+                    UI.updateQuality();
                     break;
 
             }
@@ -1981,11 +2371,7 @@ const UI = {
     },
 
     identify(data) {
-        document.getElementById('noVNC_identify_monitor').innerHTML = '1'
-        document.getElementById('noVNC_identify_monitor').classList.add("show")
-        setTimeout(() => {
-            document.getElementById('noVNC_identify_monitor').classList.remove("show")
-        }, 3500)
+        showNotification('1');
     },
 
     openDisplays() {
@@ -2524,6 +2910,15 @@ const UI = {
     updateQuality(fps) {
         let present_mode = parseInt(UI.getSetting('video_quality'));
         let enable_qoi = false;
+        const imageMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE)) === encodings.pseudoEncodingStreamingModeJpegWebp;
+
+        const forceFramerate = (fps) => {
+            if (imageMode) {
+                UI.forceSetting('framerate_image_mode', fps);
+                UI.forceSetting('framerate_streaming_mode', fps, false);
+                WebUtil.writeSetting('framerate', fps);
+            }
+        };
 
         // video_quality preset values
         switch (present_mode) {
@@ -2537,16 +2932,16 @@ const UI = {
                 UI.enableSetting('max_video_resolution_y');
                 UI.enableSetting('jpeg_video_quality');
                 UI.enableSetting('webp_video_quality');
-                UI.enableSetting('framerate');
+                UI.enableSetting('framerate_image_mode');
                 UI.enableSetting('video_scaling');
                 UI.enableSetting('video_out_time');
                 break;
             case 5: //lossless
                 enable_qoi = true;
-                fps = (fps && Number.isFinite(fps)) ? fps : 60;
+                fps = (fps && Number.isFinite(fps)) ? fps : FPS.MAX;
                 UI.forceSetting('dynamic_quality_min', 9);
                 UI.forceSetting('dynamic_quality_max', 9);
-                UI.forceSetting('framerate', fps);
+                forceFramerate(fps);
                 UI.forceSetting('treat_lossless', 9);
                 UI.forceSetting('video_time', 100);
                 UI.forceSetting('video_area', 100);
@@ -2558,10 +2953,10 @@ const UI = {
                 UI.forceSetting('video_out_time', 3);
                 break;
             case 4: //extreme
-                fps = (fps && Number.isFinite(fps)) ? fps : 60;
+                fps = (fps && Number.isFinite(fps)) ? fps : FPS.MAX;
                 UI.forceSetting('dynamic_quality_min', 8);
                 UI.forceSetting('dynamic_quality_max', 9);
-                UI.forceSetting('framerate', fps);
+                forceFramerate(fps);
                 UI.forceSetting('treat_lossless', 9);
                 UI.forceSetting('video_time', 100);
                 UI.forceSetting('video_area', 100);
@@ -2573,14 +2968,14 @@ const UI = {
                 UI.forceSetting('video_out_time', 3);
                 break;
             case 3: // high
-                fps = (fps && Number.isFinite(fps)) ? fps : 60;
+                fps = (fps && Number.isFinite(fps)) ? fps : FPS.MAX;
                 UI.forceSetting('jpeg_video_quality', 8);
                 UI.forceSetting('webp_video_quality', 8);
                 UI.forceSetting('dynamic_quality_min', 7);
                 UI.forceSetting('dynamic_quality_max', 9);
                 UI.forceSetting('max_video_resolution_x', 1920);
                 UI.forceSetting('max_video_resolution_y', 1080);
-                UI.forceSetting('framerate', fps);
+                forceFramerate(fps);
                 UI.forceSetting('treat_lossless', 8);
                 UI.forceSetting('video_time', 5);
                 UI.forceSetting('video_area', 65);
@@ -2588,14 +2983,14 @@ const UI = {
                 UI.forceSetting('video_out_time', 3);
                 break;
             case 1: // low, resolution capped at 720p keeping aspect ratio
-                fps = (fps && Number.isFinite(fps)) ? fps : 24;
+                fps = (fps && Number.isFinite(fps)) ? fps : FPS.MIN;
                 UI.forceSetting('jpeg_video_quality', 5);
                 UI.forceSetting('webp_video_quality', 4);
                 UI.forceSetting('dynamic_quality_min', 3);
                 UI.forceSetting('dynamic_quality_max', 7);
                 UI.forceSetting('max_video_resolution_x', 960);
                 UI.forceSetting('max_video_resolution_y', 540);
-                UI.forceSetting('framerate', fps);
+                forceFramerate(fps);
                 UI.forceSetting('treat_lossless', 7);
                 UI.forceSetting('video_time', 5);
                 UI.forceSetting('video_area', 65);
@@ -2605,42 +3000,28 @@ const UI = {
             case 2: // medium
             case 0: // static resolution, but same settings as medium
             default:
-                fps = (fps && Number.isFinite(fps)) ? fps : 24;
-                UI.forceSetting('jpeg_video_quality', 7);
-                UI.forceSetting('webp_video_quality', 7);
-                UI.forceSetting('dynamic_quality_min', 4);
-                UI.forceSetting('dynamic_quality_max', 9);
-                UI.forceSetting('max_video_resolution_x', 960);
-                UI.forceSetting('max_video_resolution_y', 540);
-                UI.forceSetting('framerate', (fps) ? fps : 24);
-                UI.forceSetting('treat_lossless', 7);
-                UI.forceSetting('video_time', 5);
-                UI.forceSetting('video_area', 65);
-                UI.forceSetting('video_scaling', 0);
-                UI.forceSetting('video_out_time', 3);
+                if (imageMode) {
+                    fps = (fps && Number.isFinite(fps)) ? fps : FPS.MIN;
+                    UI.forceSetting('jpeg_video_quality', 7);
+                    UI.forceSetting('webp_video_quality', 7);
+                    UI.forceSetting('dynamic_quality_min', 4);
+                    UI.forceSetting('dynamic_quality_max', 9);
+                    UI.forceSetting('max_video_resolution_x', 960);
+                    UI.forceSetting('max_video_resolution_y', 540);
+                    forceFramerate((fps) ? fps : FPS.MIN);
+                    UI.forceSetting('treat_lossless', 7);
+                    UI.forceSetting('video_time', 5);
+                    UI.forceSetting('video_area', 65);
+                    UI.forceSetting('video_scaling', 0);
+                    UI.forceSetting('video_out_time', 3);
+                }
                 break;
         }
 
         if (UI.rfb) {
-            UI.rfb.qualityLevel = parseInt(UI.getSetting('quality'));
-            UI.rfb.antiAliasing = parseInt(UI.getSetting('anti_aliasing'));
-            UI.rfb.dynamicQualityMin = parseInt(UI.getSetting('dynamic_quality_min'));
-            UI.rfb.dynamicQualityMax = parseInt(UI.getSetting('dynamic_quality_max'));
-            UI.rfb.jpegVideoQuality = parseInt(UI.getSetting('jpeg_video_quality'));
-            UI.rfb.webpVideoQuality = parseInt(UI.getSetting('webp_video_quality'));
-            UI.rfb.videoArea = parseInt(UI.getSetting('video_area'));
-            UI.rfb.videoTime = parseInt(UI.getSetting('video_time'));
-            UI.rfb.videoOutTime = parseInt(UI.getSetting('video_out_time'));
-            UI.rfb.videoScaling = parseInt(UI.getSetting('video_scaling'));
-            UI.rfb.treatLossless = parseInt(UI.getSetting('treat_lossless'));
-            UI.rfb.maxVideoResolutionX = parseInt(UI.getSetting('max_video_resolution_x'));
-            UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
-            UI.rfb.frameRate = parseInt(UI.getSetting('framerate'));
-            UI.rfb.enableWebP = UI.getSetting('enable_webp');
-            UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
+            UI.setConnectionQualityValues();
+
             UI.rfb.enableQOI = enable_qoi;
-            UI.rfb.enableHiDpi = UI.getSetting('enable_hidpi');
-            UI.rfb.threading = UI.getSetting('enable_threading');
 
             // Gracefully update settings server side
             UI.rfb.updateConnectionSettings();

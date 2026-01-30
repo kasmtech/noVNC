@@ -375,7 +375,7 @@ msgid "Identify"
 msgstr "Identifier"
 
 msgid "Done"
-msgstr "Quitter"
+msgstr "OK"
 
 msgid "Control Panel"
 msgstr "Panneau de contrôle"

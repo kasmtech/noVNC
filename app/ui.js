@@ -1752,7 +1752,13 @@ const UI = {
                     }
                 } catch (e) {
                     console.error('Error parsing downloads response:', e, xhr.responseText);
-                    downloadsList.innerHTML = '<div style="padding: 10px; text-align: center; color: #f44336;">Error parsing response: ' + e.message + '</div>';
+                    downloadsList.innerHTML = '';
+                    const errorDiv = document.createElement('div');
+                    errorDiv.style.padding = '10px';
+                    errorDiv.style.textAlign = 'center';
+                    errorDiv.style.color = '#f44336';
+                    errorDiv.textContent = 'Error parsing response: ' + e.message;
+                    downloadsList.appendChild(errorDiv);
                 }
             } else {
                 // Try to parse error message from server
@@ -1766,7 +1772,13 @@ const UI = {
                     // Ignore parse errors, use default message
                 }
                 console.error('Downloads API error:', xhr.status, xhr.responseText);
-                downloadsList.innerHTML = '<div style="padding: 10px; text-align: center; color: #f44336;">' + errorMsg + '</div>';
+                downloadsList.innerHTML = '';
+                const errorDiv = document.createElement('div');
+                errorDiv.style.padding = '10px';
+                errorDiv.style.textAlign = 'center';
+                errorDiv.style.color = '#f44336';
+                errorDiv.textContent = errorMsg;
+                downloadsList.appendChild(errorDiv);
             }
         });
 
@@ -1811,7 +1823,10 @@ const UI = {
             try {
                 let obj = JSON.parse(e.detail.text);
                 let fps = UI.rfb.statsFps;
-                document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
+                const statsElement = document.getElementById("noVNC_connection_stats");
+                if (statsElement) {
+                    statsElement.textContent = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
+                }
                 console.log(e.detail.text);
             } catch (err) {
                 console.log('Invalid bottleneck stats recieved from server.')

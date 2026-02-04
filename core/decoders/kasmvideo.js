@@ -221,6 +221,7 @@ export default class KasmVideoDecoder {
             if (sock.rQwait("KasmVideo", 5)) {
                 return [0, null];
             }
+            this._readTime = performance.now();
 
             this._keyFrame = sock.rQshift8();
             let byte = sock.rQshift8();
@@ -244,6 +245,8 @@ export default class KasmVideoDecoder {
         this._len = 0;
         this._keyFrame = 0;
 
+        console.log('Frame reading time: ', performance.now() - this._readTime);
+        this._readTime = 0
         return [keyFrame, data];
     }
 

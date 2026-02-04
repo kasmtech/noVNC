@@ -316,7 +316,7 @@ export default class Display {
             scale = 1 / this._screens[i].pixelRatio;
         }
         //physically small device with high DPI
-        else if (this._renderer.antiAliasing === 0 && this._screens[i].pixelRatio > 1 && width < 1000 & width > 0) {
+        else if (this._renderer?.antiAliasing === 0 && this._screens[i].pixelRatio > 1 && width < 1000 & width > 0) {
             Log.Info('Device Pixel ratio: ' + this._screens[i].pixelRatio + ' Reported Resolution: ' + width + 'x' + height);
             let targetDevicePixelRatio = 1.5;
             if (this._screens[i].pixelRatio > 2) { targetDevicePixelRatio = 2; }
@@ -547,7 +547,7 @@ export default class Display {
             height = this._fbHeight;
         }
 
-        if (this._renderer.viewportChangeSize(width, height)) {
+        if (this._renderer?.viewportChangeSize(width, height)) {
             const vp = this._screens[0];
             vp.serverWidth = width;
             vp.serverHeight = height;
@@ -578,7 +578,7 @@ export default class Display {
         this._fbWidth = width;
         this._fbHeight = height;
 
-        this._renderer.resize(width, height, this._screens);
+        this._renderer?.resize(width, height, this._screens);
 
         // Readjust the viewport as it may be incorrectly sized
         // and positioned
@@ -662,7 +662,7 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            this._renderer.fillRect(x, y, width, height, color);
+            this._renderer?.fillRect(x, y, width, height, color);
         }
     }
 
@@ -681,7 +681,7 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            this._renderer.copyImage(oldX, oldY, newX, newY, w, h);
+            this._renderer?.copyImage(oldX, oldY, newX, newY, w, h);
         }
     }
 
@@ -845,7 +845,7 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            this._renderer.blitImage(x, y, width, height, arr, offset);
+            this._renderer?.blitImage(x, y, width, height, arr, offset);
         }
     }
 
@@ -863,13 +863,13 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            this._renderer.blitQoi(arr, x, y);
+            this._renderer?.blitQoi(arr, x, y);
         }
     }
 
     drawImage(img, x, y, w, h, overlay = false) {
         try {
-            this._renderer.drawImage(img, x, y, w, h);
+            this._renderer?.drawImage(img, x, y, w, h);
         } catch (error) {
             Log.Error('Invalid image received.'); //KASM-2090
         }
@@ -877,8 +877,7 @@ export default class Display {
 
     drawVideoFrame(videoFrame, x, y, width, height) {
         try {
-            this._renderer.drawImage(videoFrame, x, y, width, height);
-            videoFrame.close();
+            this._renderer?.drawVideoFrame(videoFrame, x, y, width, height);
         } catch (error) {
             Log.Error('Invalid video frame received. ', error);
         }
@@ -886,7 +885,7 @@ export default class Display {
 
     putImage(img, x, y) {
         try {
-            this._renderer.putImage(img, x, y);
+            this._renderer?.putImage(img, x, y);
             img = null;
         } catch (error) {
             Log.Error('Invalid image received.');
@@ -907,7 +906,7 @@ export default class Display {
             this._processRectScreens(rect);
             this._asyncRenderQPush(rect);
         } else {
-            this._renderer.clearRect(x, y, width, height);
+            this._renderer?.clearRect(x, y, width, height);
         }
     }
 
@@ -1034,9 +1033,9 @@ export default class Display {
             this._syncFrameQueue.shift();
         }
 
-        if (this._renderer.enableCanvasBuffer && drawRectCnt > 0) {
-            this._renderer._writeCtxBuffer();
-            this._renderer.drawTransparentOverlayImg()
+        if (this._renderer?.enableCanvasBuffer && drawRectCnt > 0) {
+            this._renderer?._writeCtxBuffer();
+            this._renderer?.drawTransparentOverlayImg()
         }
 
         if (this._syncFrameQueue.length > 0) {
@@ -1416,16 +1415,16 @@ export default class Display {
                 }
             }
 
-            if (this._renderer.enableCanvasBuffer) {
+            if (this._renderer?.enableCanvasBuffer) {
                 if (primaryScreenRects > 0) {
-                    this._renderer._writeCtxBuffer();
+                    this._renderer?._writeCtxBuffer();
                 }
 
-                if (this._renderer.transparentOverlayImg) {
+                if (this._renderer?.transparentOverlayImg) {
                     if (primaryScreenRects > 0) {
-                        this._renderer.drawTransparentOverlayImg();
+                        this._renderer?.drawTransparentOverlayImg();
                     }
-                    const transparentOverlayRect = this._renderer.transparentOverlayRect;
+                    const transparentOverlayRect = this._renderer?.transparentOverlayRect;
                     if (secondaryScreenRects > 0 && this._lastTransparentRectId !== transparentOverlayRect.hash_id) {
                         for (let sI = 1; sI < transparentOverlayRect.screenLocations.length; sI++) {
                             if (this._screens[transparentOverlayRect.screenLocations[sI].screenIndex].channel) {
@@ -1520,7 +1519,7 @@ export default class Display {
         const width = factor * vp.serverWidth + 'px';
         const height = factor * vp.serverHeight + 'px';
 
-        this._renderer.rescale(factor, width, height, vp.serverWidth, vp.serverHeight, vp.width);
+        this._renderer?.rescale(factor, width, height, vp.serverWidth, vp.serverHeight, vp.width);
 
         requestAnimationFrame( () => { this._pushAsyncFrame(); });
     }

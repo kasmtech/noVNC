@@ -16,6 +16,7 @@ import UI from '../app/ui.js';
 import { encodings } from "./encodings.js";
 import {Canvas2DRenderer} from "./renderers/Canvas2DRenderer";
 import {WebGLRenderer} from "./renderers/WebGLRenderer";
+import { perfLogger } from './util/performance-logger.js';
 
 export default class Display {
     constructor(target, isPrimaryDisplay) {
@@ -749,8 +750,11 @@ export default class Display {
     }
 
     videoFrameRect(screenId, frame, frame_id, x, y, width, height) {
+        const startTime = perfLogger.start('videoFrameRender');
+
         if (frame.displayWidth === 0 || frame.displayHeight === 0 || frame.codedWidth === 0 || frame.codedHeight === 0) {
             frame.close();
+            perfLogger.end('videoFrameRender', startTime);
             return false;
         }
 
@@ -768,12 +772,19 @@ export default class Display {
         // this.drawVideoFrame(frame, x, y, width, height);
 
         if (rect.screenId < this._screens.length) {
+            const routeStart = perfLogger.start('screenRouting');
             this._processRectScreens(rect);
+            perfLogger.end('screenRouting', routeStart);
+
+            const queueStart = perfLogger.start('asyncQueuePush');
             this._asyncRenderQPush(rect);
+            perfLogger.end('asyncQueuePush', queueStart);
         } else {
             frame.close();
             Log.Debug(`ScreenId ${screenId} not found in display list`);
         }
+
+        perfLogger.end('videoFrameRender', startTime);
     }
 
     transparentRect(x, y, width, height, img, frame_id, hashId) {
@@ -1220,7 +1231,12 @@ export default class Display {
     Push the oldest frame in the buffer to the canvas if it is marked ready
     */
     _pushAsyncFrame(force=false) {
+        // Record frame-to-frame interval
+        perfLogger.recordFrameInterval();
+
         if (this._asyncFrameQueue[0][3] || force) {
+            const frameStart = perfLogger.start('frameProcessing');
+
             let frame = this._asyncFrameQueue[0][2];
             let frameId = this._asyncFrameQueue.shift()[0];
             if (this._asyncFrameQueue.length < this._maxAsyncFrameQueue) {
@@ -1344,7 +1360,11 @@ export default class Display {
                                 if (a.frame.format !== null) {
                                     if (this._screens[screenLocation.screenIndex]?.channel) {
                                         Log.Debug(`[PRIMARY] Converting VideoFrame to ImageBitmap`);
+                                        const bitmapStart = perfLogger.start('imageBitmapCreate');
                                         createImageBitmap(a.frame).then((bitmap) => {
+                                            perfLogger.end('imageBitmapCreate', bitmapStart);
+
+                                            const broadcastStart = perfLogger.start('broadcastChannelSend');
                                             this._screens[screenLocation.screenIndex].channel.postMessage({
                                                 eventType: 'rect',
                                                 rect: {
@@ -1359,9 +1379,11 @@ export default class Display {
                                                 },
                                                 screenLocationIndex: sI
                                             }, [bitmap]); // Transfer ImageBitmap
+                                            perfLogger.end('broadcastChannelSend', broadcastStart);
 
                                             Log.Debug(`[PRIMARY] ImageBitmap posted to secondary screen ${screenLocation.screenIndex}`);
                                         }).catch((error) => {
+                                            perfLogger.end('imageBitmapCreate', bitmapStart);
                                             Log.Error(`[PRIMARY] Failed to create ImageBitmap from VideoFrame: ${error.message}`);
                                         });
                                     } else {
@@ -1450,6 +1472,8 @@ export default class Display {
                 this._flushing = false;
                 this.onflush();
             }
+
+            perfLogger.end('frameProcessing', frameStart);
 
             // if there is more data in queue, then keep checking
             if (this._asyncFrameQueue[0][2].length > 0) {

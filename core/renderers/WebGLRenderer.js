@@ -1,5 +1,6 @@
 import {Canvas2DRenderer} from "./Canvas2DRenderer";
 import * as Log from "../util/logging";
+import { perfLogger } from '../util/performance-logger.js';
 
 export class WebGLRenderer {
     static vertexShaderSource = `
@@ -209,6 +210,8 @@ export class WebGLRenderer {
     }
 
     drawVideoFrame(frame, x, y, w, h) {
+        const renderStart = perfLogger.start('webglRender');
+
         const gl = this.gl;
         const fbWidth = this._canvas2D._target.width;
         const fbHeight = this._canvas2D._target.height;
@@ -230,6 +233,8 @@ export class WebGLRenderer {
 
         // Close frame to release resources
         frame.close();
+
+        perfLogger.end('webglRender', renderStart);
     }
 
     _resizeWebGLCanvas(fbWidth, fbHeight) {

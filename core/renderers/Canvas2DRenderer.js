@@ -1,4 +1,5 @@
 import * as Log from "../util/logging";
+import { perfLogger } from '../util/performance-logger.js';
 
 export class Canvas2DRenderer {
     constructor(canvas, backbuffer) {
@@ -227,7 +228,9 @@ export class Canvas2DRenderer {
     }
 
     drawVideoFrame(videoFrame, x, y, width, height) {
+        const renderStart = perfLogger.start('canvasRender');
         this._targetCtx.drawImage(videoFrame, x, y, width, height);
+        perfLogger.end('canvasRender', renderStart);
     }
 
     fillRect(x, y, width, height, color) {

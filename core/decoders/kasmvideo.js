@@ -11,12 +11,7 @@
 
 import * as Log from '../util/logging.js';
 import { perfLogger } from '../util/performance-logger.js';
-
-const VIDEO_CODEC_NAMES = {
-    1: 'avc1.42E01E',
-    2: 'hev1.1.6.L93.B0',
-    3: 'av01.0.04M.08'
-};
+import {VIDEO_CODEC_NAMES} from "../codecs";
 
 const TARGET_FPS = 120;
 const FRAME_DURATION_US = Math.round(1_000_000 / TARGET_FPS);

@@ -44,11 +44,23 @@ export const CODEC_VARIANT_NAMES = {
     [CODEC_IDS.AV1SW]: 'SW AV1 (experimental)'
 }
 
+const CODECS = {
+    [CODEC_NAMES.AVC]: 'avc1.42E01E',
+    [CODEC_NAMES.HEVC]: 'hev1.1.6.L93.B0',
+    [CODEC_NAMES.AV1]: 'av01.0.04M.08'
+};
+
+export const VIDEO_CODEC_NAMES = {
+    1: CODECS[CODEC_NAMES.AVC],
+    2: CODECS[CODEC_NAMES.HEVC],
+    3: CODECS[CODEC_NAMES.AV1]
+};
+
 export const preferredCodecs = [
     encodings.pseudoEncodingStreamingModeHEVCVAAPI,
     encodings.pseudoEncodingStreamingModeAVCVAAPI,
-    encodings.pseudoEncodingStreamingModeHEVCSW,
-    encodings.pseudoEncodingStreamingModeAVCSW
+    encodings.pseudoEncodingStreamingModeAVCSW,
+    encodings.pseudoEncodingStreamingModeHEVCSW
 ];
 
 export default class CodecDetector {
@@ -65,14 +77,7 @@ export default class CodecDetector {
             return;
         }
 
-        const codecs = {
-            [CODEC_NAMES.AVC]: 'avc1.42E01E',
-            [CODEC_NAMES.HEVC]: 'hev1.1.6.L93.B0',
-            [CODEC_NAMES.AV1]: 'av01.0.04M.08'
-        };
-
-
-        for (const [name, codec] of Object.entries(codecs)) {
+        for (const [name, codec] of Object.entries(CODECS)) {
             try {
                 const config = {
                     codec: codec,

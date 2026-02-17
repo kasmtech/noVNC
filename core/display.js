@@ -19,7 +19,7 @@ import {WebGLRenderer} from "./renderers/WebGLRenderer";
 import { perfLogger } from './util/performance-logger.js';
 
 export default class Display {
-    constructor(target, isPrimaryDisplay) {
+    constructor(target, rfb, isPrimaryDisplay) {
         Log.Debug(">> Display.constructor");
 
         /*
@@ -167,6 +167,9 @@ export default class Display {
         if (!this._isPrimaryDisplay) {
             this._broadcastChannel.addEventListener('message', this._handleSecondaryDisplayMessage.bind(this));
         }
+
+        this._rfb = rfb;
+        this._decoder = null;
 
         Log.Debug("<< Display.constructor");
     }
@@ -942,55 +945,86 @@ export default class Display {
     }
 
     // ===== PRIVATE METHODS =====
-
-
     _handleSecondaryDisplayMessage(event) {
-        if (!this._isPrimaryDisplay && event.data) {
-            switch (event.data.eventType) {
-                case 'rect':
-                    let rect = event.data.rect;
-                    //overwrite screen locations when received on the secondary display
-                    rect.screenLocations = [ rect.screenLocations[event.data.screenLocationIndex] ]
-                    rect.screenLocations[0].screenIndex = 0;
-                    switch (rect.type) {
-                        case 'img':
-                            rect.img = new Image();
-                            rect.img.src = rect.src;
-                            break;
-                        case '_img':
-                            rect.img = new Image();
-                            rect.img.src = rect.src;
-                            rect.type = 'img';
-                            break;
-                        case 'transparent':
-                            let imageBmpPromise = createImageBitmap(rect.arr);
-                            imageBmpPromise.then( function(img) {
-                                this._renderer.transparentOverlayImg = img;
-                            }.bind(this) );
-                            this._renderer.transparentOverlayRect = rect;
-                            break;
-                    }
-                    this._syncFrameQueue.push(rect);
+        if (this._isPrimaryDisplay || !event.data)
+            return;
 
-                    //if the secondary display is not in focus, the browser may not call requestAnimationFrame, thus we need to limit our buffer
-                    if (this._syncFrameQueue.length > 5000) {
-                        this._syncFrameQueue.shift();
-                        this._droppedRects++;
-                    }
-                    break;
-                case 'frameComplete':
-                        window.requestAnimationFrame( () => { this._pushSyncRects(); });
+        switch (event.data.eventType) {
+            case 'rect':
+                let rect = event.data.rect;
+                //overwrite screen locations when received on the secondary display
+                rect.screenLocations = [rect.screenLocations[event.data.screenLocationIndex]]
+                rect.screenLocations[0].screenIndex = 0;
+                switch (rect.type) {
+                    case 'img':
+                    case '_img':
+                        rect.img = new Image();
+                        rect.img.src = rect.src;
+                        rect.type = 'img';
                         break;
-                case 'registered':
-                        if (!this._isPrimaryDisplay) {
-                            this._screens[0].screenIndex = event.data.screenIndex;
-                            Log.Info(`Screen with index (${event.data.screenIndex}) successfully registered with the primary display.`);
-                            if (this._screens.length > 0) {
-                                this.resize(this._screens[0].serverWidth, this._screens[0].serverHeight);
-                            }
-                        }
-                    break;
-            }
+                    case 'transparent':
+                        let imageBmpPromise = createImageBitmap(rect.arr);
+                        imageBmpPromise.then(function (img) {
+                            this._renderer.transparentOverlayImg = img;
+                        }.bind(this));
+                        this._renderer.transparentOverlayRect = rect;
+                        break;
+                }
+                this._syncFrameQueue.push(rect);
+
+                //if the secondary display is not in focus, the browser may not call requestAnimationFrame, thus we need to limit our buffer
+                if (this._syncFrameQueue.length > 5000) {
+                    this._syncFrameQueue.shift();
+                    this._droppedRects++;
+                }
+                break;
+/*            case 'register_decoder':
+                if (!this._decoder) {
+                    this._decoder = new KasmVideoDecoder(this._rfb, this);
+                }*/
+                break;
+            case 'frameComplete':
+                window.requestAnimationFrame(() => {
+                    this._pushSyncRects();
+                });
+                break;
+            case 'registered':
+                this._screens[0].screenIndex = event.data.screenIndex;
+                Log.Info(`Screen with index (${event.data.screenIndex}) successfully registered with the primary display.`);
+                if (this._screens.length > 0) {
+                    this.resize(this._screens[0].serverWidth, this._screens[0].serverHeight);
+                }
+
+                /*const sharedWorker = new SharedWorker('port-relay-worker.js');
+                sharedWorker.port.start();
+
+                sharedWorker.port.postMessage({type: 'register', role: 'secondary_monitor'});
+                Log.Info('Registered secondary monitor with SharedWorker');
+
+                sharedWorker.port.onmessage = (event) => {
+                    if (event.data.type === 'receive_port') {
+                        this._messagePort = event.ports[0];
+                        Log.Info('Received MessagePort via SharedWorker');
+
+                        // Listen for data on the port
+                        this._messagePort.onmessage = (e) => {
+                            const receiveTime = Date.now();
+                            console.log('Received message at', receiveTime);
+
+                            const buffer = e.data.buffer;
+                            const sendTime = e.data.sentAt;
+
+                            const view = new DataView(buffer);
+                            const embeddedTime = view.getFloat64(0);
+
+                            const transferTime = receiveTime - sendTime;
+                            const throughput = (buffer.byteLength / (1024 * 1024)) / (transferTime / 1000);
+
+                        };
+                    }
+                }*/
+                break;
+
         }
     }
 
@@ -1248,7 +1282,6 @@ export default class Display {
 
             //render the selected frame
             for (let i = 0; i < frame.length; i++) {
-
                 const a = frame[i];
 
                 for (let sI = 0; sI < a.screenLocations.length; sI++) {

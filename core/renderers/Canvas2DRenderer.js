@@ -17,7 +17,9 @@ export class Canvas2DRenderer {
             throw new Error("no getContext method");
         }
 
-        this._targetCtx = this._target.getContext('2d');
+        this._targetCtx = this._target.getContext('2d', {
+            alpha: false
+        });
 
         //optional offscreen canvas
         this._enableCanvasBuffer = false;
@@ -231,6 +233,7 @@ export class Canvas2DRenderer {
         const renderStart = perfLogger.start('canvasRender');
         this._targetCtx.drawImage(videoFrame, x, y, width, height);
         perfLogger.end('canvasRender', renderStart);
+        videoFrame.close();
     }
 
     fillRect(x, y, width, height, color) {

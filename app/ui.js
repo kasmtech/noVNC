@@ -300,6 +300,7 @@ const UI = {
         UI.initSetting('webp_video_quality', 5);
         UI.initSetting('video_quality', 2);
         UI.initSetting('anti_aliasing', 0);
+        UI.initSetting('video_rendering_mode', 'canvas2d');
         UI.initSetting('video_area', 65);
         UI.initSetting('video_time', 5);
         UI.initSetting('video_out_time', 3);
@@ -629,6 +630,8 @@ const UI = {
         UI.addSettingChangeHandler('treat_lossless', UI.updateQuality);
         UI.addSettingChangeHandler('anti_aliasing');
         UI.addSettingChangeHandler('anti_aliasing', UI.updateQuality);
+        UI.addSettingChangeHandler('video_rendering_mode');
+        UI.addSettingChangeHandler('video_rendering_mode', UI.updateVideoRenderingMode);
         UI.addSettingChangeHandler('video_quality');
         UI.addSettingChangeHandler('video_quality', UI.updateQuality);
         UI.addSettingChangeHandler('jpeg_video_quality');

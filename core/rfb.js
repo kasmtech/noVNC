@@ -103,6 +103,7 @@ export default class RFB extends EventTargetMixin {
         this._wsProtocols = options.wsProtocols || ['binary'];
         this._isPrimaryDisplay = (isPrimaryDisplay !== false);
         this.videoCodecs = videoCodecs;
+        this._videoRenderingMode = options.videoRenderingMode || 'canvas2d';
 
         // Internal state
         this._rfbConnectionState = '';

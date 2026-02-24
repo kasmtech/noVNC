@@ -19,7 +19,7 @@ import {WebGLRenderer} from "./renderers/WebGLRenderer";
 import { perfLogger } from './util/performance-logger.js';
 
 export default class Display {
-    constructor(target, rfb, isPrimaryDisplay) {
+    constructor(target, rfb, isPrimaryDisplay, videoRenderingMode = 'canvas2d') {
         Log.Debug(">> Display.constructor");
 
         /*
@@ -49,49 +49,57 @@ export default class Display {
         this._backbuffer = document.createElement('canvas');
         this._target = target;
 
-        const webglCanvas = document.createElement('canvas');
-        const gl = webglCanvas.getContext('webgl2', {
-            alpha: false,
-            antialias: false,
-            depth: false,
-            stencil: false,
-            powerPreference: 'high-performance',
-            desynchronized: true,
-            preserveDrawingBuffer: false
-        }) || webglCanvas.getContext('webgl', {
-            alpha: false,
-            antialias: false,
-            depth: false,
-            stencil: false,
-            powerPreference: 'high-performance',
-            desynchronized: true,
-            preserveDrawingBuffer: false
-        });
-
         const canvas2DRenderer = new Canvas2DRenderer(target, this._backbuffer);
-        if (gl) {
-            // Initialize WebGL canvas with zero size - will be resized on first frame
-            webglCanvas.width = 0;
-            webglCanvas.height = 0;
 
-            // Setup WebGL canvas to overlay the 2D canvas
-            webglCanvas.style.position = 'absolute';
-            webglCanvas.style.left = '0';
-            webglCanvas.style.top = '0';
-            webglCanvas.style.pointerEvents = 'none';
-            webglCanvas.style.zIndex = '1';
-            webglCanvas.style.width = '0px';
-            webglCanvas.style.height = '0px';
+        // Initialize renderer based on video rendering mode setting
+        if (videoRenderingMode === 'webgl') {
+            const webglCanvas = document.createElement('canvas');
+            const gl = webglCanvas.getContext('webgl2', {
+                alpha: false,
+                antialias: false,
+                depth: false,
+                stencil: false,
+                powerPreference: 'high-performance',
+                desynchronized: true,
+                preserveDrawingBuffer: false
+            }) || webglCanvas.getContext('webgl', {
+                alpha: false,
+                antialias: false,
+                depth: false,
+                stencil: false,
+                powerPreference: 'high-performance',
+                desynchronized: true,
+                preserveDrawingBuffer: false
+            });
 
-            // Add WebGL canvas to DOM as a sibling of the target canvas
-            if (target.parentNode) {
-                target.parentNode.appendChild(webglCanvas);
+            if (gl) {
+                // Initialize WebGL canvas with zero size - will be resized on first frame
+                webglCanvas.width = 0;
+                webglCanvas.height = 0;
+
+                // Setup WebGL canvas to overlay the 2D canvas
+                webglCanvas.style.position = 'absolute';
+                webglCanvas.style.left = '0';
+                webglCanvas.style.top = '0';
+                webglCanvas.style.pointerEvents = 'none';
+                webglCanvas.style.zIndex = '1';
+                webglCanvas.style.width = '0px';
+                webglCanvas.style.height = '0px';
+
+                // Add WebGL canvas to DOM as a sibling of the target canvas
+                if (target.parentNode) {
+                    target.parentNode.appendChild(webglCanvas);
+                }
+
+                this._renderer = new WebGLRenderer(canvas2DRenderer, gl, webglCanvas);
+                Log.Info("WebGL renderer initialized.");
+            } else {
+                this._renderer = canvas2DRenderer;
+                Log.Info("WebGL unavailable, falling back to Canvas2DRenderer.");
             }
-
-            this._renderer = new WebGLRenderer(canvas2DRenderer, gl, webglCanvas);
         } else {
             this._renderer = canvas2DRenderer;
-            Log.Info("WebGL unavailable, falling back to Canvas2DRenderer.");
+            Log.Info("Canvas2D renderer initialized.");
         }
 
         Log.Debug("User Agent: " + navigator.userAgent);

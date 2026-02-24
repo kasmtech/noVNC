@@ -68,7 +68,7 @@ export class PerformanceLogger {
         };
     }
 
-    enable(reportIntervalMs = 5000) {
+    enable(reportIntervalMs = 60000) {
         this._enabled = true;
         Log.Info(`Performance logging enabled. Target: ${this._targetFps} FPS (${this._targetFrameTime.toFixed(2)}ms per frame)`);
 

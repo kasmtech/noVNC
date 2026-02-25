@@ -924,7 +924,9 @@ const UI = {
 
         Log.Info('Switching to mode: ', modeName ? modeName : 'Unknown Mode ', 'value:', mode);
 
-        showNotification(modeName || 'Mode Changed');
+        // TODO: remove true
+        if (!WebUtil.isInsideKasmVDI() || true)
+            showNotification(modeName || 'Mode Changed');
     },
 
     initStreamModeSetting(codecs, configurations) {

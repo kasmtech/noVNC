@@ -1817,7 +1817,8 @@ const UI = {
                         {
                             shared: UI.getSetting('shared'),
                             repeaterID: UI.getSetting('repeaterID'),
-                            credentials: { password: password }
+                            credentials: { password: password },
+                            videoRenderingMode: UI.getSetting('video_rendering_mode')
                         },
                         UI.codecDetector?.getSupportedCodecIds(),
                         true );

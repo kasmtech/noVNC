@@ -3059,6 +3059,20 @@ const UI = {
         UI.rfb.compressionLevel = parseInt(UI.getSetting('compression'));
     },
 
+    updateVideoRenderingMode() {
+        const mode = UI.getSetting('video_rendering_mode');
+        Log.Info('Video rendering mode changed to: ', mode);
+        UI.saveSetting('video_rendering_mode');
+        // Reconnect to apply the new rendering mode
+        if (UI.connected) {
+            //UI.inhibitReconnect = false;
+            UI.disconnect();
+            setTimeout(() => {
+                UI.connect(null, UI.reconnectPassword);
+            }, 100);
+        }
+    },
+
 
 
 /* ------^-------

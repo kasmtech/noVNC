@@ -292,7 +292,7 @@ export default class RFB extends EventTargetMixin {
         // NB: nothing that needs explicit teardown should be done
         // before this point, since this can throw an exception
         try {
-            this._display = new Display(this._canvas, this._isPrimaryDisplay);
+            this._display = new Display(this._canvas, this, this._isPrimaryDisplay, this._videoRenderingMode);
         } catch (exc) {
             Log.Error("Display exception: " + exc);
             throw exc;

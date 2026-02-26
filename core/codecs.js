@@ -45,7 +45,7 @@ export const CODEC_VARIANT_NAMES = {
 }
 
 const CODECS = {
-    [CODEC_NAMES.AVC]: 'avc1.42E01E',
+    [CODEC_NAMES.AVC]: 'avc1.64001F', // avc1.42E01E',
     [CODEC_NAMES.HEVC]: 'hev1.1.6.L93.B0',
     [CODEC_NAMES.AV1]: 'av01.0.04M.08'
 };

@@ -57,8 +57,8 @@ export const VIDEO_CODEC_NAMES = {
 };
 
 export const preferredCodecs = [
-    encodings.pseudoEncodingStreamingModeHEVCVAAPI,
     encodings.pseudoEncodingStreamingModeAVCVAAPI,
+    encodings.pseudoEncodingStreamingModeHEVCVAAPI,
     encodings.pseudoEncodingStreamingModeAVCSW,
     encodings.pseudoEncodingStreamingModeHEVCSW
 ];

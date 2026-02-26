@@ -1701,8 +1701,8 @@ const UI = {
             const min = Math.min(...UI.fpsChartTicks);
             const avg = UI.fpsChartTicks.reduce((a, b) => a + b, 0) / UI.fpsChartTicks.length;
             document.getElementById('noVNC_fps_chart_max').textContent = `Max: ${max.toFixed(1)}`;
-            document.getElementById('noVNC_fps_chart_min').textContent = `Avg: ${avg.toFixed(1)}`;
-            document.getElementById('noVNC_fps_chart_avg').textContent = `Min: ${min.toFixed(1)}`;
+            document.getElementById('noVNC_fps_chart_min').textContent = `Min: ${min.toFixed(1)}`;
+            document.getElementById('noVNC_fps_chart_avg').textContent = `Avg: ${avg.toFixed(1)}`;
         }
     },
 

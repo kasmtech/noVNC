@@ -155,7 +155,8 @@ const UI = {
                             shared: UI.getSetting('shared', true),
                             repeaterID: UI.getSetting('repeaterID', false),
                             credentials: { password: null },
-                            hiDpi: UI.getSetting('enable_hidpi', true, false)
+                            hiDpi: UI.getSetting('enable_hidpi', true, false),
+                            videoRenderingMode: UI.getSetting('video_rendering_mode')
                         },
                         null,
                         false // Not a primary display

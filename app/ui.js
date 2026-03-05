@@ -921,8 +921,7 @@ const UI = {
 
         Log.Info('Switching to mode: ', modeName ? modeName : 'Unknown Mode ', 'value:', mode);
 
-        // TODO: remove true
-        if (!WebUtil.isInsideKasmVDI() || true)
+        if (!WebUtil.isInsideKasmVDI() || UI.getSettingElement(UI_SETTINGS.SHOW_NOTIFICATIONS) || WebUtil.getConfigVar(UI_SETTINGS.SHOW_NOTIFICATIONS))
             showNotification(modeName || 'Mode Changed');
     },
 

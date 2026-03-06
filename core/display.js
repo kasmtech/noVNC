@@ -1076,7 +1076,7 @@ export default class Display {
                     a.img.close();
                     break;
                 case 'video_frame':
-                    this.drawVideoFrame(a.frame, pos.x, pos.y, a.frame.codedWidth, a.frame.codedHeight);
+                    this.drawVideoFrame(a.frame, pos.x, pos.y, a.width, a.height);
                     break;
                 default:
                     this._syncFrameQueue.shift();
@@ -1321,7 +1321,7 @@ export default class Display {
                                 this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
                                 break;
                             case 'video_frame':
-                                this.drawVideoFrame(a.frame, screenLocation.x, screenLocation.y, a.frame.codedWidth, a.frame.codedHeight);
+                                this.drawVideoFrame(a.frame, screenLocation.x, screenLocation.y, a.width, a.height);
                                 break;
                             default:
                                 continue;

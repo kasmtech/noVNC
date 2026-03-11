@@ -70,8 +70,8 @@ export default class KasmVideoDecoder {
 
         const config = {
             codec: VIDEO_CODEC_NAMES[screen.codec],
-            codedWidth: screen.width,
-            codedHeight: screen.height,
+            displayAspectWidth: screen.width,
+            displayAspectHeight: screen.height,
             optimizeForLatency: true,
         };
 

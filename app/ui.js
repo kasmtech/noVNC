@@ -1013,7 +1013,7 @@ const UI = {
     getBestStreamingMode(availableModes, fallbackOption, previousValue) {
         let result = fallbackOption.id;
         // TEMPORARILY ADDED FORCING TO IMAGE MODE
-        if (UI.forcedCodecs.length > 0 || !WebUtil.getConfigVar('allow_streaming_mode')) {
+        if (UI.forcedCodecs.length > 0) {
             const forcedMode = UI.forcedCodecs.find(id => availableModes.some(option => option.id === id));
             return forcedMode !== undefined ? forcedMode : fallbackOption.id;
         }
@@ -1755,7 +1755,8 @@ const UI = {
         UI.rfb.treatLossless = parseInt(UI.getSetting('treat_lossless'));
         UI.rfb.maxVideoResolutionX = parseInt(UI.getSetting('max_video_resolution_x'));
         UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
-        UI.rfb.frameRate = parseInt(UI.getSetting('framerate'));
+        const isImageMode = UI.rfb.streamMode === encodings.pseudoEncodingStreamingModeJpegWebp;
+        UI.rfb.frameRate = parseInt(UI.getSetting(isImageMode ? 'framerate_image_mode' : 'framerate_streaming_mode'));
         UI.rfb.enableWebP = UI.getSetting('enable_webp');
         UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
         UI.rfb.enableHiDpi = UI.getSetting('enable_hidpi');

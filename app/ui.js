@@ -1833,6 +1833,11 @@ const UI = {
                         UI.codecDetector?.getSupportedCodecIds(),
                         true );
         UI.rfb.addEventListener("connect", UI.connectFinished);
+        UI.rfb.addEventListener("badencoding", (e) => {
+            Log.Warn("Reconnecting due to encoding error or corrupted frame...");
+            UI.disconnect();
+            setTimeout(() => UI.connect(null, UI.reconnectPassword), 100);
+        });
         UI.rfb.addEventListener("disconnect", UI.disconnectFinished);
         UI.rfb.addEventListener("credentialsrequired", UI.credentials);
         UI.rfb.addEventListener("securityfailure", UI.securityFailed);

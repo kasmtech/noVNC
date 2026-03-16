@@ -4438,10 +4438,10 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleDataRect() {
-        let decoder = this._decoders[this._FBU.encoding];
+        const decoder = this._decoders[this._FBU.encoding];
         if (!decoder) {
-            this._fail("Unsupported encoding (encoding: " +
-                       this._FBU.encoding + ")");
+            Log.Error("Unsupported encoding (encoding: " + this._FBU.encoding + ")");
+            this.dispatchEvent(new CustomEvent("badencoding"));
             return false;
         }
 

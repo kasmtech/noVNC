@@ -327,6 +327,7 @@ const UI = {
         UI.initSetting('enable_ime', false);
         UI.initSetting('enable_webrtc', false);
         UI.initSetting('enable_hidpi', false);
+        UI.initSetting('fallback_image_mode', false);
 
         UI.initSetting(UI_SETTINGS.STREAM_MODE, encodings.pseudoEncodingStreamingModeJpegWebp);
         // UI.initSetting(UI_SETTINGS.HW_PROFILE, UI_SETTING_PROFILE_OPTIONS.BASELINE);
@@ -1016,6 +1017,13 @@ const UI = {
         if (UI.forcedCodecs.length > 0) {
             const forcedMode = UI.forcedCodecs.find(id => availableModes.some(option => option.id === id));
             return forcedMode !== undefined ? forcedMode : fallbackOption.id;
+        }
+
+        // If we had a bad encoding event, force image mode
+        if (UI.getSetting('fallback_image_mode')) {
+            UI.forceSetting('fallback_image_mode', false, false);
+            Log.Info('Defaulting to image mode due to previous encoding error');
+            return encodings.pseudoEncodingStreamingModeJpegWebp;
         }
 
         // Restore selection if possible; otherwise default to JPEG/WEBP
@@ -1835,6 +1843,10 @@ const UI = {
         UI.rfb.addEventListener("connect", UI.connectFinished);
         UI.rfb.addEventListener("badencoding", (e) => {
             Log.Warn("Reconnecting due to encoding error or corrupted frame...");
+
+            // Switch to image mode and mark that we had a bad encoding event
+            UI.forceSetting('fallback_image_mode', true, false);
+
             UI.disconnect();
             setTimeout(() => UI.connect(null, UI.reconnectPassword), 100);
         });

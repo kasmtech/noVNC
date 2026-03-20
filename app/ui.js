@@ -965,7 +965,7 @@ const UI = {
 
         if (!config) {
             qualitySlider.min = 1;
-            qualitySlider.max = 63;
+            qualitySlider.max = 50;
 
             return;
         }
@@ -985,10 +985,7 @@ const UI = {
             output.value = qualitySlider.value;
         }
 
-        // Save updated value if it changed
-        if (currentValue !== parseInt(qualitySlider.value)) {
-            UI.saveSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY);
-        }
+        UI.saveSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY);
     },
 
     getAvailableStreamingModes(codecs) {

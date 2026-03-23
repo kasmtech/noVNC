@@ -231,7 +231,7 @@ export class Canvas2DRenderer {
 
     drawVideoFrame(videoFrame, x, y, width, height) {
         const renderStart = perfLogger.start('canvasRender');
-        this._targetCtx.drawImage(videoFrame, x, y, width, height);
+        this._targetCtx.drawImage(videoFrame, x, y, width, height, 0, 0, width, height);
         perfLogger.end('canvasRender', renderStart);
         videoFrame.close();
     }

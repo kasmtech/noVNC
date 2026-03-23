@@ -309,7 +309,7 @@ const UI = {
         UI.initSetting('max_video_resolution_y', 540);
         UI.initSetting('framerate', FPS.MIN);
         UI.initSetting('framerate_image_mode', FPS.MIN);
-        UI.initSetting('framerate_video_mode', FPS.MIN);
+        UI.initSetting('framerate_streaming_mode', FPS.MIN);
         UI.initSetting('compression', 2);
         UI.initSetting('shared', true);
         UI.initSetting('view_only', false);
@@ -652,15 +652,14 @@ const UI = {
         UI.addSettingChangeHandler('max_video_resolution_y');
         UI.addSettingChangeHandler('max_video_resolution_y', UI.updateQuality);
         UI.addSettingChangeHandler('framerate_image_mode', () => {
-            const settingElem = UI.getSettingElement('framerate_image_mode');
-            UI.getSettingElement('framerate_streaming_mode').value = settingElem.value;
-            WebUtil.writeSetting('framerate', settingElem.value);
+            const value = UI.getSettingElement('framerate_image_mode').value;
+            UI.getSettingElement('framerate_streaming_mode').value = value;
+            WebUtil.writeSetting('framerate_streaming_mode', value);
             UI.updateQuality();
         });
         UI.addSettingChangeHandler('framerate_streaming_mode', () => {
-            const settingElem = UI.getSettingElement('framerate_streaming_mode');
-            UI.getSettingElement('framerate_image_mode').value = settingElem.value;
-            WebUtil.writeSetting('framerate', settingElem.value);
+            const value = UI.getSettingElement('framerate_streaming_mode').value;
+            WebUtil.writeSetting('framerate_streaming_mode', value);
             UI.updateQuality();
         });
         UI.addSettingChangeHandler('compression');
@@ -1760,14 +1759,18 @@ const UI = {
         UI.rfb.treatLossless = parseInt(UI.getSetting('treat_lossless'));
         UI.rfb.maxVideoResolutionX = parseInt(UI.getSetting('max_video_resolution_x'));
         UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
+
+        // Read streamMode first so we can use it to determine which framerate setting to read
+        UI.rfb.streamMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE));
         const isImageMode = UI.rfb.streamMode === encodings.pseudoEncodingStreamingModeJpegWebp;
-        UI.rfb.frameRate = parseInt(UI.getSetting(isImageMode ? 'framerate_image_mode' : 'framerate_streaming_mode'));
+        const framerateSettingName = isImageMode ? 'framerate_image_mode' : 'framerate_streaming_mode';
+        UI.rfb.frameRate = parseInt(UI.getSetting(framerateSettingName));
+        Log.Info(`setConnectionQualityValues: streamMode=${UI.rfb.streamMode}, isImageMode=${isImageMode}, reading from '${framerateSettingName}', frameRate=${UI.rfb.frameRate}`);
+
         UI.rfb.enableWebP = UI.getSetting('enable_webp');
         UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
         UI.rfb.enableHiDpi = UI.getSetting('enable_hidpi');
         UI.rfb.threading = UI.getSetting('enable_threading');
-
-        UI.rfb.streamMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE));
         // UI.rfb.hwEncoderProfile = parseInt(UI.getSetting(UI_SETTINGS.HW_PROFILE));
         UI.rfb.gop = parseInt(UI.getSetting(UI_SETTINGS.GOP));
         UI.rfb.videoStreamQuality = parseInt(UI.getSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY));

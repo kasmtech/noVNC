@@ -339,6 +339,11 @@ export default class Display {
 
         data.screens = this._screens;
 
+        // Expose DPI information so the RFB layer can forward it to the server
+        // for DPI-aware session configuration (e.g. setting Xft.dpi, GDK_SCALE).
+        data.pixelRatio = this._screens[0].pixelRatio;
+        data.hiDpiActive = hiDpi && this._screens[0].pixelRatio > 1;
+
         return data;
     }
 
@@ -1607,10 +1612,19 @@ export default class Display {
         var pixR = Math.abs(Math.ceil(window.devicePixelRatio));
         var isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
 
-        if (this.antiAliasing === 2 || (this.antiAliasing === 0 && factor === 1 && this._target.style.imageRendering !== 'pixelated' && pixR === window.devicePixelRatio && vp.width > 0)) {
+        // Check if canvas pixels map 1:1 to physical pixels. This happens in
+        // hiDpi (native resolution) mode where factor = 1/devicePixelRatio and
+        // the browser scales the CSS-sized canvas back up by devicePixelRatio,
+        // yielding a net 1:1 mapping. Smoothing should be disabled in this case
+        // to avoid blurring the already-sharp native-resolution content.
+        var effectiveRatio = factor * window.devicePixelRatio;
+        var isOneToOneMapping = pixR === window.devicePixelRatio &&
+            Math.abs(effectiveRatio - Math.round(effectiveRatio)) < 0.01;
+
+        if (this.antiAliasing === 2 || (this.antiAliasing === 0 && (factor === 1 || isOneToOneMapping) && this._target.style.imageRendering !== 'pixelated' && pixR === window.devicePixelRatio && vp.width > 0)) {
             this._target.style.imageRendering = ((!isFirefox) ? 'pixelated' : 'crisp-edges' );
             Log.Debug('Smoothing disabled');
-        } else if (this.antiAliasing === 1 || (this.antiAliasing === 0 && factor !== 1 && this._target.style.imageRendering !== 'auto')) {
+        } else if (this.antiAliasing === 1 || (this.antiAliasing === 0 && factor !== 1 && !isOneToOneMapping && this._target.style.imageRendering !== 'auto')) {
             this._target.style.imageRendering = 'auto'; //auto is really smooth (blurry) using trilinear of linear
             Log.Debug('Smoothing enabled');
         }

@@ -909,6 +909,19 @@ const UI = {
 
         if (mode !== encodings.pseudoEncodingStreamingModeJpegWebp) {
             const config = configuration || UI.rfb?.videoCodecConfigurations[mode];
+
+            // TODO: This is a temporary workaround, which should be removed once host window starts sending quality preset
+            if (WebUtil.isInsideKasmVDI()) {
+                const settingValue = UI.rfb?.videoCodecConfigurations[mode].presets;
+                if (settingValue) {
+                    const quality = WebUtil.readSetting('video_quality', 2);
+                    const curQualityValue = parseInt(UI.getSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY));
+                    if (curQualityValue !== settingValue[quality]) {
+                        UI.forceSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY, settingValue[quality], false);
+                    }
+                }
+            }
+
             UI.updateQualitySliderRange(mode, config);
         }
 

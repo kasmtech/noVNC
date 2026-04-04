@@ -6,7 +6,9 @@
 
 import { supportsCursorURIs, isTouchDevice } from './browser.js';
 
-const needsFallback = !supportsCursorURIs || isTouchDevice;
+// Temporary diagnostic: force the JS-painted cursor path so we can rule out
+// browser-native CSS cursor hotspot/rendering issues.
+const needsFallback = true;
 
 export default class Cursor {
     constructor() {
@@ -100,7 +102,7 @@ export default class Cursor {
         }
         if (!needsFallback) {
             let url = this._canvas.toDataURL();
-            this._target.style.cursor = 'url(' + url + ')' + hotx + ' ' + hoty + ', default';
+            this._target.style.cursor = 'url(' + url + ') ' + hotx + ' ' + hoty + ', default';
         }
     }
 

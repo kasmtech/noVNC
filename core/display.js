@@ -620,6 +620,15 @@ export default class Display {
         this._fbWidth = width;
         this._fbHeight = height;
 
+        if (this._screens.length === 1) {
+            this._screens[0].serverWidth = width;
+            this._screens[0].serverHeight = height;
+            this._screens[0].serverReportedWidth = width;
+            this._screens[0].serverReportedHeight = height;
+            this._screens[0].x2 = this._screens[0].x + width;
+            this._screens[0].y2 = this._screens[0].y + height;
+        }
+
         this._renderer?.resize(width, height, this._screens);
 
         // Readjust the viewport as it may be incorrectly sized

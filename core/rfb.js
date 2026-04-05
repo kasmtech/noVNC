@@ -211,6 +211,8 @@ export default class RFB extends EventTargetMixin {
         this._pointerLock = false;
         this._pointerLockPos = { x: 0, y: 0 };
         this._pointerRelativeEnabled = false;
+        this._directMouseEnabled = false;
+        this._directMouseRemainder = { x: 0, y: 0 };
         this._mouseLastPinchAndZoomTime = 0;
         this._viewportDragging = false;
         this._viewportDragPos = {};
@@ -383,15 +385,16 @@ export default class RFB extends EventTargetMixin {
     set pointerRelative(value)
     {
         this._pointerRelativeEnabled = value;
+        this._directMouseEnabled = value;
+        this._directMouseRemainder = { x: 0, y: 0 };
         if (value) {
             let max_w = ((this._display.scale === 1) ? this._fbWidth : (this._fbWidth * this._display.scale));
             let max_h = ((this._display.scale === 1) ? this._fbHeight : (this._fbHeight * this._display.scale));
             this._pointerLockPos.x = Math.floor(max_w / 2);
             this._pointerLockPos.y = Math.floor(max_h / 2);
-
-            // reset the cursor position to center
-            this._mousePos = { x: this._pointerLockPos.x , y: this._pointerLockPos.y };
-            this._cursor.move(this._pointerLockPos.x, this._pointerLockPos.y);
+            // Do not reset _mousePos or move the cursor — in direct drive mode
+            // we track position using raw movementX/Y deltas so the visual cursor
+            // stays where the server cursor actually is.
         }
     }
 
@@ -2293,7 +2296,33 @@ export default class RFB extends EventTargetMixin {
                 break;
             case 'mousemove':
             	ev.preventDefault();
-                if (this._isPrimaryDisplay) {
+                if (this._isPrimaryDisplay && this._pointerLock && this._directMouseEnabled) {
+                    // Direct drive: convert display-pixel deltas to server-pixel
+                    // deltas by dividing by the viewport scale factor.  Accumulate
+                    // the sub-pixel remainder so there is no drift at non-1x scales.
+                    const scale = this._display.scale || 1;
+                    this._directMouseRemainder.x += ev.movementX / scale;
+                    this._directMouseRemainder.y += ev.movementY / scale;
+                    const serverDX = Math.trunc(this._directMouseRemainder.x);
+                    const serverDY = Math.trunc(this._directMouseRemainder.y);
+                    this._directMouseRemainder.x -= serverDX;
+                    this._directMouseRemainder.y -= serverDY;
+                    if (serverDX !== 0 || serverDY !== 0) {
+                        this._sendDirectMouse(serverDX, serverDY, this._mouseButtonMask, 0, 0);
+                    }
+                    // Track cursor position in canvas-relative pixels for clamping,
+                    // then convert to client (viewport) coordinates for cursor.move().
+                    // The VNC canvas is CSS-centered in the window (pillarbox/letterbox),
+                    // so canvas-relative coords differ from client coords by the canvas
+                    // offset.  cursor.move() uses position:fixed and expects client coords.
+                    const max_w = (scale === 1) ? this._fbWidth : (this._fbWidth * scale);
+                    const max_h = (scale === 1) ? this._fbHeight : (this._fbHeight * scale);
+                    const newX = Math.max(0, Math.min(max_w, this._mousePos.x + ev.movementX));
+                    const newY = Math.max(0, Math.min(max_h, this._mousePos.y + ev.movementY));
+                    this._mousePos = { x: newX, y: newY };
+                    const canvasBounds = this._canvas.getBoundingClientRect();
+                    this._cursor.move(newX + canvasBounds.left, newY + canvasBounds.top);
+                } else if (this._isPrimaryDisplay) {
                     this._handleMouseMove(pos.x, pos.y, (ev.buttons > 0));
                 } else {
                     this._proxyRFBMessage('mousemove', [ pos.x, pos.y, (ev.buttons > 0), this._sendLeftClickonNextMove ]);
@@ -2435,7 +2464,10 @@ export default class RFB extends EventTargetMixin {
         if (this._viewOnly) { return; } // View only, skip mouse events
         if (!this._isPrimaryDisplay) { return; }
 
-        if (this._pointerLock && this._pointerRelativeEnabled) {
+        if (this._pointerLock && this._pointerRelativeEnabled && this._directMouseEnabled) {
+            // Direct drive: button state changes only (movement is sent raw from _handleMouse)
+            this._sendDirectMouse(0, 0, mask, 0, 0);
+        } else if (this._pointerLock && this._pointerRelativeEnabled) {
 
             // Use releative cursor position
             var rel_16_x = toSignedRelative16bit(x - this._pointerLockPos.x);
@@ -2456,11 +2488,20 @@ export default class RFB extends EventTargetMixin {
         if (this._rfbConnectionState !== 'connected') { return; }
         if (this._viewOnly) { return; } // View only, skip mouse events
 
-        if (this._isPrimaryDisplay) {
+        if (this._pointerLock && this._directMouseEnabled) {
+            this._sendDirectMouse(0, 0, this._mouseButtonMask, dX, dY);
+        } else if (this._isPrimaryDisplay) {
             RFB.messages.pointerEvent(this._sock, this._display.absX(x), this._display.absY(y), 0, dX, dY);
         } else {
             this._proxyRFBMessage('scroll', [ x, y, dX, dY ]);
         }
+    }
+
+    _sendDirectMouse(dx, dy, buttonMask, scrollDX, scrollDY) {
+        if (this._rfbConnectionState !== 'connected') { return; }
+        if (this._viewOnly) { return; }
+        if (!this._isPrimaryDisplay) { return; }
+        RFB.messages.directMouseEvent(this._sock, dx, dy, buttonMask, scrollDX, scrollDY);
     }
 
     _handleWheel(ev) {
@@ -3289,6 +3330,7 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingDesktopName);
         encs.push(encodings.pseudoEncodingExtendedClipboard);
         encs.push(encodings.pseudoEncodingKasmDisconnectNotify);
+        encs.push(encodings.pseudoEncodingDirectMouse);
         if (this._hasWebp())
             encs.push(encodings.pseudoEncodingWEBP);
         if (this._enableQOI)
@@ -3826,6 +3868,9 @@ export default class RFB extends EventTargetMixin {
             case messages.msgTypeServerDisconnect: // KASM disconnect notice
                 return this._handleDisconnectNotify();
 
+            case messages.msgTypeForceGameMode:
+                return this._handleForceGameMode();
+
             case messages.msgTypeVideoEncoders:
                 return this._handleServerVideoEncoders();
 
@@ -4043,6 +4088,13 @@ export default class RFB extends EventTargetMixin {
                 configurations: codecConfigurations
             }
         }));
+    }
+
+    _handleForceGameMode() {
+        // No payload — the server is requesting that this client enter game mode.
+        // Fire an event so the UI layer can engage pointer lock on the next user gesture.
+        this.dispatchEvent(new CustomEvent("gamemodeforced"));
+        return true;
     }
 
     _handleDisconnectNotify() {
@@ -4280,7 +4332,19 @@ export default class RFB extends EventTargetMixin {
         if (this._pointerLock) {
             // Only attempt to match the server's pointer position if we are in
             // pointer lock mode.
-            this._mousePos = { x: x, y: y };
+            if (this._directMouseEnabled) {
+                // Direct drive mode: _mousePos must be in canvas-relative CSS
+                // pixels.  x/y from the wire are server framebuffer pixels, so
+                // multiply by the viewport scale to convert.
+                const scale = this._display.scale || 1;
+                this._mousePos = { x: x * scale, y: y * scale };
+                // Also update the visual cursor so it tracks the server position.
+                const canvasBounds = this._canvas.getBoundingClientRect();
+                this._cursor.move(x * scale + canvasBounds.left,
+                                  y * scale + canvasBounds.top);
+            } else {
+                this._mousePos = { x: x, y: y };
+            }
         }
 
         return true;
@@ -4635,6 +4699,25 @@ RFB.messages = {
         buff[offset + 10] = dY;
 
         sock._sQlen += 11;
+        sock.flush();
+    },
+
+    directMouseEvent(sock, dx, dy, buttonMask, scrollDX, scrollDY) {
+        const buff = sock._sQ;
+        const offset = sock._sQlen;
+
+        buff[offset]     = messages.msgTypeDirectMouseEvent;
+        buff[offset + 1] = buttonMask & 0xff;
+        buff[offset + 2] = (dx >> 8) & 0xff;
+        buff[offset + 3] = dx & 0xff;
+        buff[offset + 4] = (dy >> 8) & 0xff;
+        buff[offset + 5] = dy & 0xff;
+        buff[offset + 6] = (scrollDX >> 8) & 0xff;
+        buff[offset + 7] = scrollDX & 0xff;
+        buff[offset + 8] = (scrollDY >> 8) & 0xff;
+        buff[offset + 9] = scrollDY & 0xff;
+
+        sock._sQlen += 10;
         sock.flush();
     },
 

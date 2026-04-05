@@ -39,6 +39,7 @@ export const encodings = {
     pseudoEncodingVideoOutTimeLevel100: -1887,
     pseudoEncodingQOI: -1886,
     pseudoEncodingKasmDisconnectNotify: -1885,
+    pseudoEncodingDirectMouse: -1884,
 
     pseudoEncodingHardwareProfile0: -1170,
     pseudoEncodingHardwareProfile4: -1166,

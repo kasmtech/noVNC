@@ -147,6 +147,29 @@ export default class KasmVideoDecoder {
             return true;
         }
 
+        // Fast path: secondary screen with a direct MessagePort.
+        // Transfer the raw encoded bytes (zero-copy ArrayBuffer) and skip local decode entirely.
+        const targetScreen = this._display._screens[screenId];
+        if (targetScreen?.encodedFramePort) {
+            const buffer = dataArr.buffer.slice(
+                dataArr.byteOffset, dataArr.byteOffset + dataArr.byteLength);
+            // Translate from global VNC framebuffer coordinates to screen-local coordinates.
+            const localX = x - targetScreen.x;
+            const localY = y - targetScreen.y;
+            targetScreen.encodedFramePort.postMessage({
+                type: 'encoded_frame',
+                codec: VIDEO_CODEC_NAMES[codec],
+                keyFrame: !!keyFrame,
+                data: buffer,
+                x: localX, y: localY, width, height, frameId
+            }, [buffer]);
+            // Push a null-frame placeholder so the primary's async queue rect count
+            // stays correct. Without this the primary frame never reaches its expected
+            // rect count and stalls, showing characters one keystroke late.
+            display.enqueueVideoFrameRect(screenId, frameId, x, y, width, height);
+            return true;
+        }
+
         let screen;
         if (this._decoders.has(screenId)) {
             screen = this._decoders.get(screenId);

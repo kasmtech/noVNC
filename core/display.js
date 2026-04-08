@@ -164,6 +164,14 @@ export default class Display {
         }];
         this._threading = true;
         this._primaryChannel = null;
+        this._portRelayWorker = null;      // SharedWorker instance (primary only)
+        this._encodedFramePort = null;     // MessagePort from primary (secondary only)
+        this._localDecoder = null;         // VideoDecoder on secondary
+        this._localDecoderCodec = null;
+        this._localDecoderW = 0;
+        this._localDecoderH = 0;
+        this._localDecoderMeta = new Map(); // timestamp → {x, y, width, height, frameId}
+        this._localDecoderTs = 0;
 
         this._damageBounds = { left: 0, top: 0, right: this._backbuffer.width, bottom: this._backbuffer.height };
 
@@ -455,6 +463,7 @@ export default class Display {
                 containerHeight: containerHeight,
                 containerWidth: containerWidth,
                 channel: new BroadcastChannel(`channel_${screenID}`),
+                encodedFramePort: null,
                 scale: scale,
                 x2: x + serverWidth,
                 y2: serverHeight
@@ -466,6 +475,26 @@ export default class Display {
                 new_screen.channel.postMessage({eventType: "registered", screenIndex: new_screen.screenIndex});
             } else
                 Log.Debug(`Channel not found for screenId ${screenID}`);
+
+            // Set up SharedWorker port relay for encoded-frame fast path
+            if (!this._portRelayWorker) {
+                this._portRelayWorker = new SharedWorker(
+                    new URL('../app/port-relay-worker.js', import.meta.url));
+                this._portRelayWorker.port.start();
+                this._portRelayWorker.port.onmessage = (e) => {
+                    if (e.data.type === 'port') {
+                        const screen = this._screens[e.data.screenIndex];
+                        if (screen) {
+                            screen.encodedFramePort = e.data.port;
+                            Log.Info(`[PRIMARY] encodedFramePort established for screen ${e.data.screenIndex}`);
+                        }
+                    }
+                };
+            }
+            this._portRelayWorker.port.postMessage({
+                type: 'primary_ready',
+                screenIndex: new_screen.screenIndex
+            });
 
             return new_screen.screenIndex;
         }
@@ -760,6 +789,23 @@ export default class Display {
         }
     }
 
+    // Push a placeholder rect for a secondary video frame that was already forwarded
+    // via encodedFramePort. The rect has a null frame so _pushAsyncFrame skips rendering,
+    // but it still counts toward the frame's expected rect count so the primary doesn't stall.
+    enqueueVideoFrameRect(screenId, frameId, x, y, width, height) {
+        const rect = {
+            type: 'video_frame',
+            screenId,
+            frame: null,
+            x, y, width, height,
+            frame_id: frameId,
+        };
+        if (screenId < this._screens.length) {
+            this._processRectScreens(rect);
+            this._asyncRenderQPush(rect);
+        }
+    }
+
     videoFrameRect(screenId, frame, frame_id, x, y, width, height) {
         const startTime = perfLogger.start('videoFrameRender');
 
@@ -997,40 +1043,27 @@ export default class Display {
                 });
                 break;
             case 'registered':
-                this._screens[0].screenIndex = event.data.screenIndex;
-                Log.Info(`Screen with index (${event.data.screenIndex}) successfully registered with the primary display.`);
-                if (this._screens.length > 0) {
-                    this.resize(this._screens[0].serverWidth, this._screens[0].serverHeight);
-                }
-
-                /*const sharedWorker = new SharedWorker('port-relay-worker.js');
-                sharedWorker.port.start();
-
-                sharedWorker.port.postMessage({type: 'register', role: 'secondary_monitor'});
-                Log.Info('Registered secondary monitor with SharedWorker');
-
-                sharedWorker.port.onmessage = (event) => {
-                    if (event.data.type === 'receive_port') {
-                        this._messagePort = event.ports[0];
-                        Log.Info('Received MessagePort via SharedWorker');
-
-                        // Listen for data on the port
-                        this._messagePort.onmessage = (e) => {
-                            const receiveTime = Date.now();
-                            console.log('Received message at', receiveTime);
-
-                            const buffer = e.data.buffer;
-                            const sendTime = e.data.sentAt;
-
-                            const view = new DataView(buffer);
-                            const embeddedTime = view.getFloat64(0);
-
-                            const transferTime = receiveTime - sendTime;
-                            const throughput = (buffer.byteLength / (1024 * 1024)) / (transferTime / 1000);
-
-                        };
+                if (!this._isPrimaryDisplay) {
+                    const screenIndex = event.data.screenIndex;
+                    this._screens[0].screenIndex = screenIndex;
+                    Log.Info(`Screen with index (${screenIndex}) successfully registered with the primary display.`);
+                    if (this._screens.length > 0) {
+                        this.resize(this._screens[0].serverWidth, this._screens[0].serverHeight);
                     }
-                }*/
+                    // Connect to SharedWorker to receive direct MessagePort from primary
+                    const relayWorker = new SharedWorker(
+                        new URL('../app/port-relay-worker.js', import.meta.url));
+                    relayWorker.port.start();
+                    relayWorker.port.onmessage = (e) => {
+                        if (e.data.type === 'port') {
+                            this._encodedFramePort = e.data.port;
+                            this._encodedFramePort.start();
+                            this._encodedFramePort.onmessage = this._handleEncodedFrame.bind(this);
+                            Log.Info(`[SECONDARY] encodedFramePort established`);
+                        }
+                    };
+                    relayWorker.port.postMessage({type: 'secondary_ready', screenIndex});
+                }
                 break;
 
         }
@@ -1398,7 +1431,11 @@ export default class Display {
                                 break;
                             case 'video_frame':
                                 secondaryScreenRects++;
-                                if (a.frame.format !== null) {
+                                if (this._screens[screenLocation.screenIndex]?.encodedFramePort) {
+                                    // Encoded bytes already forwarded by KasmVideoDecoder; release frame.
+                                    if (a.frame)
+                                        a.frame.close();
+                                } else if (a.frame.format !== null) {
                                     if (this._screens[screenLocation.screenIndex]?.channel) {
                                         Log.Debug(`[PRIMARY] Converting VideoFrame to ImageBitmap`);
                                         const bitmapStart = perfLogger.start('imageBitmapCreate');
@@ -1528,6 +1565,56 @@ export default class Display {
                 this._pushAsyncFrame(true);
             }
         }
+    }
+
+    _handleEncodedFrame(e) {
+        const { codec, keyFrame, data, x, y, width, height, frameId } = e.data;
+
+        // Reconfigure decoder on first use or when codec/dimensions change
+        if (!this._localDecoder || this._localDecoderCodec !== codec ||
+            this._localDecoderW !== width || this._localDecoderH !== height) {
+            if (this._localDecoder) {
+                this._localDecoder.close();
+                this._localDecoderMeta.clear();
+            }
+            this._localDecoder = new VideoDecoder({
+                output: (frame) => {
+                    const meta = this._localDecoderMeta.get(frame.timestamp);
+                    this._localDecoderMeta.delete(frame.timestamp);
+                    if (meta) {
+                        // drawVideoFrame delegates to the renderer which closes the frame internally.
+                        this.drawVideoFrame(frame, meta.x, meta.y, meta.width, meta.height);
+                        // Flush back-buffer to visible canvas if double-buffering is active.
+                        if (this._renderer?.enableCanvasBuffer) {
+                            this._renderer._writeCtxBuffer();
+                        }
+                    } else {
+                        frame.close();
+                    }
+                },
+                error: (err) => {
+                    Log.Error('Secondary VideoDecoder error:', err);
+                    this._localDecoder = null;
+                }
+            });
+            this._localDecoder.configure({
+                codec,
+                displayAspectWidth: width,
+                displayAspectHeight: height,
+                optimizeForLatency: true,
+            });
+            this._localDecoderCodec = codec;
+            this._localDecoderW = width;
+            this._localDecoderH = height;
+        }
+
+        const ts = ++this._localDecoderTs;
+        this._localDecoderMeta.set(ts, { x, y, width, height, frameId });
+        this._localDecoder.decode(new EncodedVideoChunk({
+            type: keyFrame ? 'key' : 'delta',
+            data,
+            timestamp: ts,
+        }));
     }
 
     _processRectScreens(rect) {

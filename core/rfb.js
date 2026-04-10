@@ -1575,22 +1575,40 @@ export default class RFB extends EventTargetMixin {
 
     _handleFocusChange(event) {
         this._resendClipboardNextUserDrivenEvent = true;
-        if (event.type == 'focus' && event.currentTarget instanceof Window) {
 
-            if (this._lastVisibilityState === 'visible') {
-                const lastWindow = window.localStorage.getItem('lastWindow')
-                Log.Debug("Window focused while user switched between windows.");
-                // added for multi-montiors
-                // as user moves from window to window, focus change loses a click, this marks the next mouse
-                // move to simulate a left click. We wait for the next mouse move because we need accurate x,y coords
-                if (lastWindow != event.currentTarget.name) {
-                    this._sendLeftClickonNextMove = true;
-                    window.localStorage.setItem('lastWindow', event.currentTarget.name)
-                }
-            } else {
-                Log.Debug("Window focused while user switched between tabs.");
+        if (event.currentTarget instanceof Window) {
+            switch (event.type) {
+                // Handle window blur - release all keys to prevent stuck key state
+                case 'blur':
+                    Log.Debug("Window lost focus, releasing all keys.");
+                    if (this._keyboard) {
+                        this._keyboard.clearKeysDown();
+                    }
+
+                    break;
+                case 'focus':
+                    // CRITICAL: Clear stuck modifier keys on focus
+                    // This handles cases where blur didn't fire (e.g., screenshot on macOS)
+                    Log.Debug("Window gained focus, clearing stuck modifier keys.");
+                    if (this._keyboard) {
+                        this._keyboard.clearKeysDown();
+                    }
+
+                    if (this._lastVisibilityState === 'visible') {
+                        const lastWindow = window.localStorage.getItem('lastWindow')
+                        Log.Debug("Window focused while user switched between windows.");
+                        // added for multi-montiors
+                        // as user moves from window to window, focus change loses a click, this marks the next mouse
+                        // move to simulate a left click. We wait for the next mouse move because we need accurate x,y coords
+                        if (lastWindow !== event.currentTarget.name) {
+                            this._sendLeftClickonNextMove = true;
+                            window.localStorage.setItem('lastWindow', event.currentTarget.name)
+                        }
+                    } else {
+                        Log.Debug("Window focused while user switched between tabs.");
+                    }
+                    break;
             }
-
         }
 
         if (document.visibilityState === "visible" && this._lastVisibilityState === "hidden") {

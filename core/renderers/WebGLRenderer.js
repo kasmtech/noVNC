@@ -1,6 +1,5 @@
 import {Canvas2DRenderer} from "./Canvas2DRenderer";
 import * as Log from "../util/logging";
-import { perfLogger } from '../util/performance-logger.js';
 
 export class WebGLRenderer {
     static vertexShaderSource = `
@@ -29,6 +28,34 @@ export class WebGLRenderer {
         this._lastWidth = 0;
         this._lastHeight = 0;
         this._isWebGL2 = gl instanceof WebGL2RenderingContext;
+
+        // Dedicated watermark canvas above WebGL canvas (z-index: 2) so the
+        // watermark is always visible regardless of video content on the 2D canvas
+        this._watermarkCanvas = document.createElement('canvas');
+        this._watermarkCanvas.width = 0;
+        this._watermarkCanvas.height = 0;
+        this._watermarkCanvas.style.position = 'absolute';
+        this._watermarkCanvas.style.left = '0';
+        this._watermarkCanvas.style.top = '0';
+        this._watermarkCanvas.style.pointerEvents = 'none';
+        this._watermarkCanvas.style.zIndex = '2';
+        this._watermarkCanvas.style.width = '0px';
+        this._watermarkCanvas.style.height = '0px';
+        this._watermarkCtx = this._watermarkCanvas.getContext('2d');
+        if (webglCanvas.parentNode) {
+            // The watermark canvas is absolutely positioned; it must be contained
+            // by a positioned ancestor to align with the WebGL canvas. If the
+            // direct parent is position:static, warn so the DOM can be fixed.
+            const parent = webglCanvas.parentNode;
+            if (parent instanceof Element) {
+                const parentPos = window.getComputedStyle(parent).position;
+                if (parentPos === 'static') {
+                    Log.Warn('WebGLRenderer: parent element uses position:static; ' +
+                        'watermark overlay may be misaligned. Expected relative/absolute/fixed.');
+                }
+            }
+            parent.appendChild(this._watermarkCanvas);
+        }
 
         this._logWebGLInfo(gl);
         this._initShaders(gl);
@@ -174,15 +201,53 @@ export class WebGLRenderer {
 
     // Delegate methods
     drawTransparentOverlayImg() {
-        this._canvas2D.drawTransparentOverlayImg();
+        const img = this._canvas2D.transparentOverlayImg;
+        const rect = this._canvas2D.transparentOverlayRect;
+        const target = this._canvas2D._target;
+        if (!img || !rect) {
+            if (this._watermarkCtx && target) {
+                this._watermarkCtx.clearRect(0, 0, target.width, target.height);
+            }
+            return;
+        }
+
+        const fbWidth = target.width;
+        const fbHeight = target.height;
+        if (this._watermarkCanvas.width !== fbWidth || this._watermarkCanvas.height !== fbHeight) {
+            this._watermarkCanvas.width = fbWidth;
+            this._watermarkCanvas.height = fbHeight;
+        }
+        // Keep CSS size in sync with the target canvas on every draw so the
+        // overlay is visible even if drawTransparentOverlayImg runs before any
+        // resize/rescale/viewportChangeSize has had a chance to sync styles.
+        const targetStyle = target.style;
+        if (this._watermarkCanvas.style.width !== targetStyle.width) {
+            this._watermarkCanvas.style.width = targetStyle.width;
+        }
+        if (this._watermarkCanvas.style.height !== targetStyle.height) {
+            this._watermarkCanvas.style.height = targetStyle.height;
+        }
+        this._watermarkCtx.clearRect(0, 0, fbWidth, fbHeight);
+        if (img.width !== rect.width || img.height !== rect.height) {
+            this._watermarkCtx.drawImage(img, rect.x, rect.y, rect.width, rect.height);
+        } else {
+            this._watermarkCtx.drawImage(img, rect.x, rect.y);
+        }
     }
 
     viewportChangeSize(width, height) {
-        return this._canvas2D.viewportChangeSize(width, height);
+        const result = this._canvas2D.viewportChangeSize(width, height);
+        const targetStyle = this._canvas2D._target.style;
+        this._watermarkCanvas.style.width = targetStyle.width;
+        this._watermarkCanvas.style.height = targetStyle.height;
+        return result;
     }
 
     rescale(factor, width, height, serverWidth, serverHeight, viewPortWidth) {
         this._canvas2D.rescale(factor, width, height, serverWidth, serverHeight, viewPortWidth);
+        const targetStyle = this._canvas2D._target.style;
+        this._watermarkCanvas.style.width = targetStyle.width;
+        this._watermarkCanvas.style.height = targetStyle.height;
     }
 
     resize(width, height, screens) {
@@ -245,6 +310,8 @@ export class WebGLRenderer {
         const targetStyle = this._canvas2D._target.style;
         this._webglCanvas.style.width = targetStyle.width;
         this._webglCanvas.style.height = targetStyle.height;
+        this._watermarkCanvas.style.width = targetStyle.width;
+        this._watermarkCanvas.style.height = targetStyle.height;
 
         // Update viewport
         this.gl.viewport(0, 0, fbWidth, fbHeight);
@@ -286,6 +353,11 @@ export class WebGLRenderer {
             this._webglCanvas.parentNode.removeChild(this._webglCanvas);
         }
 
+        // Remove watermark canvas from DOM
+        if (this._watermarkCanvas?.parentNode) {
+            this._watermarkCanvas.parentNode.removeChild(this._watermarkCanvas);
+        }
+
         // Dispose canvas2D
         this._canvas2D?.dispose();
 
@@ -293,5 +365,7 @@ export class WebGLRenderer {
         this._canvas2D = null;
         this.gl = null;
         this._webglCanvas = null;
+        this._watermarkCanvas = null;
+        this._watermarkCtx = null;
     }
 }

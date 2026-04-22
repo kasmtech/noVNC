@@ -20,6 +20,7 @@ export class Canvas2DRenderer {
         this._targetCtx = this._target.getContext('2d', {
             alpha: false
         });
+        this._visibleCtx = this._targetCtx; // persistent ref to visible canvas, never reassigned
 
         //optional offscreen canvas
         this._enableCanvasBuffer = false;
@@ -51,11 +52,11 @@ export class Canvas2DRenderer {
         }
 
         this._enableCanvasBuffer = value;
-        this._targetCtx = value ? this._drawCtx : this._targetCtx;
+        this._targetCtx = value ? this._drawCtx : this._visibleCtx;
 
         if (value && this._target) {
             //copy current visible canvas to backbuffer
-            let saveImg = this._targetCtx.getImageData(0, 0, this._target.width, this._target.height);
+            let saveImg = this._visibleCtx.getImageData(0, 0, this._target.width, this._target.height);
             this._drawCtx.putImageData(saveImg, 0, 0);
 
             if (this._transparentOverlayImg) {
@@ -63,8 +64,8 @@ export class Canvas2DRenderer {
             }
         } else if (!value && this._target) {
             //copy backbuffer to canvas to clear any overlays
-            let saveImg = this._targetCtx.getImageData(0, 0, this._target.width, this._target.height);
-            this._drawCtx.putImageData(saveImg, 0, 0);
+            let saveImg = this._drawCtx.getImageData(0, 0, this._target.width, this._target.height);
+            this._visibleCtx.putImageData(saveImg, 0, 0);
         }
     }
 
@@ -107,14 +108,14 @@ export class Canvas2DRenderer {
 
         let saveImg = null;
         if (canvas.width > 0 && canvas.height > 0) {
-            saveImg = this._targetCtx.getImageData(0, 0, canvas.width, canvas.height);
+            saveImg = this._visibleCtx.getImageData(0, 0, canvas.width, canvas.height);
         }
 
         canvas.width = width;
         canvas.height = height;
 
         if (saveImg) {
-            this._targetCtx.putImageData(saveImg, 0, 0);
+            this._visibleCtx.putImageData(saveImg, 0, 0);
         }
 
         return true;
@@ -221,11 +222,12 @@ export class Canvas2DRenderer {
                             newX, newY, w, h);
     }
 
-    drawImage(img, x, y, w, h) {
+    drawImage(img, x, y, w, h, overlay = false) {
+        const ctx = (overlay && this._enableCanvasBuffer) ? this._visibleCtx : this._targetCtx;
         if (img.width !== w || img.height !== h) {
-            this._targetCtx.drawImage(img, x, y, w, h);
+            ctx.drawImage(img, x, y, w, h);
         } else {
-            this._targetCtx.drawImage(img, x, y);
+            ctx.drawImage(img, x, y);
         }
     }
 
@@ -248,7 +250,7 @@ export class Canvas2DRenderer {
     _writeCtxBuffer() {
         //TODO: KASM-5450 Damage tracking with transparent rect overlay support
         if (this._backbuffer.width > 0) {
-            this._targetCtx.drawImage(this._backbuffer, 0, 0);
+            this._visibleCtx.drawImage(this._backbuffer, 0, 0);
         }
     }
 
@@ -261,8 +263,8 @@ export class Canvas2DRenderer {
     }
 
     dispose() {
-        if (this._targetCtx && this._target) {
-            this._targetCtx.clearRect(0, 0, this._target.width, this._target.height);
+        if (this._visibleCtx && this._target) {
+            this._visibleCtx.clearRect(0, 0, this._target.width, this._target.height);
         }
     }
 }

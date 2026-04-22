@@ -935,7 +935,7 @@ export default class Display {
         }
     }
 
-    drawImage(img, x, y, w, h, overlay = false) {
+    drawImage(img, x, y, w, h) {
         try {
             this._renderer?.drawImage(img, x, y, w, h);
         } catch (error) {
@@ -1587,6 +1587,7 @@ export default class Display {
                         // Flush back-buffer to visible canvas if double-buffering is active.
                         if (this._renderer?.enableCanvasBuffer) {
                             this._renderer._writeCtxBuffer();
+                            this._renderer.drawTransparentOverlayImg();
                         }
                     } else {
                         frame.close();

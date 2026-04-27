@@ -70,7 +70,10 @@ export class PerformanceLogger {
 
     enable(reportIntervalMs = 60000) {
         this._enabled = true;
-        Log.Info(`Performance logging enabled. Target: ${this._targetFps} FPS (${this._targetFrameTime.toFixed(2)}ms per frame)`);
+
+        Log.Debug('=== PERFORMANCE LOGGING ENABLED ===');
+        Log.Debug(`Reports every ${reportIntervalMs / 1000} seconds. Check console for "=== PERFORMANCE REPORT ===" messages"`);
+        Log.Debug(`Performance logging enabled. Target: ${this._targetFps} FPS (${this._targetFrameTime.toFixed(2)}ms per frame)`);
 
         if (reportIntervalMs > 0) {
             this._reportInterval = setInterval(() => {
@@ -85,7 +88,7 @@ export class PerformanceLogger {
             clearInterval(this._reportInterval);
             this._reportInterval = null;
         }
-        Log.Info('Performance logging disabled');
+        Log.Debug('Performance logging disabled');
     }
 
     start(operation) {
@@ -198,9 +201,9 @@ export class PerformanceLogger {
 
         const reportStart = performance.now();
 
-        Log.Info('=== PERFORMANCE REPORT ===');
-        Log.Info(`Target: ${this._targetFps} FPS (${this._targetFrameTime.toFixed(2)}ms per frame)`);
-        Log.Info('');
+        Log.Debug('=== PERFORMANCE REPORT ===');
+        Log.Debug(`Target: ${this._targetFps} FPS (${this._targetFrameTime.toFixed(2)}ms per frame)`);
+        Log.Debug('');
 
         const categories = {
             'Network & Data': ['frameRead'],
@@ -217,7 +220,7 @@ export class PerformanceLogger {
         let bottlenecks = [];
 
         for (const [category, operations] of Object.entries(categories)) {
-            Log.Info(`--- ${category} ---`);
+            Log.Debug(`--- ${category} ---`);
 
             for (const op of operations) {
                 const stats = this._calculateStats(this._metrics[op]);
@@ -228,13 +231,13 @@ export class PerformanceLogger {
 
                     const marker = isCritical ? 'CRITICAL' : (isSlow ? 'SLOW' : '');
 
-                    Log.Info(`${marker} ${op}:`);
-                    Log.Info(`   Avg: ${stats.avg}ms | Max: ${stats.max}ms | P95: ${stats.p95}ms | P99: ${stats.p99}ms | Count: ${stats.count}`);
+                    Log.Debug(`${marker} ${op}:`);
+                    Log.Debug(`   Avg: ${stats.avg}ms | Max: ${stats.max}ms | P95: ${stats.p95}ms | P99: ${stats.p99}ms | Count: ${stats.count}`);
 
                     if (op === 'frameInterval') {
-                        Log.Info(`   Min: ${stats.min}ms`);
+                        Log.Debug(`   Min: ${stats.min}ms`);
                         const avgFps = (1000 / parseFloat(stats.avg)).toFixed(2);
-                        Log.Info(`   Actual FPS: ${avgFps}`);
+                        Log.Debug(`   Actual FPS: ${avgFps}`);
                     }
 
                     if (isCritical || isSlow) {
@@ -247,7 +250,7 @@ export class PerformanceLogger {
                     }
                 }
             }
-            Log.Info('');
+            Log.Debug('');
         }
 
         if (bottlenecks.length > 0) {
@@ -265,11 +268,11 @@ export class PerformanceLogger {
                 Log.Warn(`${i + 1}. Optimize ${b.operation} - currently using ${((b.avg / this._targetFrameTime) * 100).toFixed(0)}% of frame time budget`);
             });
         } else {
-            Log.Info('OK - No bottlenecks detected - performance within targets');
+            Log.Debug('OK - No bottlenecks detected - performance within targets');
         }
 
-        Log.Info('');
-        Log.Info('--- Logging Performance Summary ---');
+        Log.Debug('');
+        Log.Debug('--- Logging Performance Summary ---');
         const avgStartOverhead = this._loggingStats.startCalls > 0
             ? (this._loggingStats.totalStartTime / this._loggingStats.startCalls).toFixed(4)
             : 0;
@@ -277,19 +280,19 @@ export class PerformanceLogger {
             ? (this._loggingStats.totalEndTime / this._loggingStats.endCalls).toFixed(4)
             : 0;
 
-        Log.Info(`Start calls: ${this._loggingStats.startCalls} (avg: ${avgStartOverhead}ms per call)`);
-        Log.Info(`End calls: ${this._loggingStats.endCalls} (avg: ${avgEndOverhead}ms per call)`);
-        Log.Info(`Total logging overhead: ${(this._loggingStats.totalStartTime + this._loggingStats.totalEndTime).toFixed(2)}ms`);
+        Log.Debug(`Start calls: ${this._loggingStats.startCalls} (avg: ${avgStartOverhead}ms per call)`);
+        Log.Debug(`End calls: ${this._loggingStats.endCalls} (avg: ${avgEndOverhead}ms per call)`);
+        Log.Debug(`Total logging overhead: ${(this._loggingStats.totalStartTime + this._loggingStats.totalEndTime).toFixed(2)}ms`);
 
         const overheadStats = this._calculateStats(this._metrics.loggingOverhead);
         if (overheadStats.count > 0) {
-            Log.Info(`Per-operation overhead: avg ${overheadStats.avg}ms | max ${overheadStats.max}ms | p95 ${overheadStats.p95}ms`);
+            Log.Debug(`Per-operation overhead: avg ${overheadStats.avg}ms | max ${overheadStats.max}ms | p95 ${overheadStats.p95}ms`);
             const overheadPercentage = ((parseFloat(overheadStats.avg) / this._targetFrameTime) * 100).toFixed(2);
 
             if (parseFloat(overheadPercentage) > 5) {
                 Log.Warn(`WARNING Logging overhead is ${overheadPercentage}% of frame budget - consider reducing logging frequency`);
             } else {
-                Log.Info(`OK Logging overhead is acceptable (${overheadPercentage}% of frame budget)`);
+                Log.Debug(`OK Logging overhead is acceptable (${overheadPercentage}% of frame budget)`);
             }
         }
 
@@ -298,9 +301,9 @@ export class PerformanceLogger {
         this._loggingStats.reportGenerationTime += reportDuration;
         this._loggingStats.reportCount++;
         const avgReportTime = (this._loggingStats.reportGenerationTime / this._loggingStats.reportCount).toFixed(2);
-        Log.Info(`Report generation time: ${reportDuration.toFixed(2)}ms (avg: ${avgReportTime}ms)`);
+        Log.Debug(`Report generation time: ${reportDuration.toFixed(2)}ms (avg: ${avgReportTime}ms)`);
 
-        Log.Info('=== END PERFORMANCE REPORT ===');
+        Log.Debug('=== END PERFORMANCE REPORT ===');
     }
 
     reset() {
@@ -323,7 +326,7 @@ export class PerformanceLogger {
             reportCount: 0
         };
 
-        Log.Info('Performance metrics reset');
+        Log.Debug('Performance metrics reset');
     }
 
     getMetrics() {

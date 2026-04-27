@@ -54,8 +54,6 @@ import { perfLogger } from '../core/util/performance-logger.js';
 
 // Enable performance logging
 // perfLogger.enable(5000);
-console.log('=== PERFORMANCE LOGGING ENABLED ===');
-console.log('Reports every 5 seconds. Check console for "=== PERFORMANCE REPORT ===" messages');
 
 const PAGE_TITLE = "KasmVNC";
 

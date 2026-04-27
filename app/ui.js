@@ -884,8 +884,8 @@ const UI = {
         if (UI.rfb) {
             UI.rfb.videoStreamQuality = Number(event.target.value);
         }
-        Log.Info('Saving quality:', event.target.value, 'Stream mode:', UI.getSetting(UI_SETTINGS.STREAM_MODE));
-        Log.Info('Codec configs:', UI.rfb?.videoCodecConfigurations);
+        Log.Debug('Saving quality:', event.target.value, 'Stream mode:', UI.getSetting(UI_SETTINGS.STREAM_MODE));
+        Log.Debug('Codec configs:', UI.rfb?.videoCodecConfigurations);
         UI.saveSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY);
     },
 

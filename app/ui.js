@@ -2961,11 +2961,9 @@ const UI = {
         const imageMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE)) === encodings.pseudoEncodingStreamingModeJpegWebp;
 
         const forceFramerate = (fps) => {
-            if (imageMode) {
-                UI.forceSetting('framerate_image_mode', fps);
-                UI.forceSetting('framerate_streaming_mode', fps, false);
-                WebUtil.writeSetting('framerate', fps);
-            }
+            UI.forceSetting('framerate_image_mode', fps);
+            UI.forceSetting('framerate_streaming_mode', fps, false);
+            WebUtil.writeSetting('framerate', fps);
         };
 
         // video_quality preset values

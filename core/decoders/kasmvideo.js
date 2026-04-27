@@ -81,7 +81,7 @@ export default class KasmVideoDecoder {
             screen.decoder.configure(config);
         } catch (e) {
             Log.Error('Failed to configure decoder: ', e, 'config:', config);
-            throw e;
+            this._handleDecoderError();
         }
     }
 

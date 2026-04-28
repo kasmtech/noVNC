@@ -362,6 +362,10 @@ const UI = {
             UI.initSetting('resize', 'remote');
         }
 
+        if (WebUtil.isInsideKasmVDI()) {
+            UI.initSetting('video_quality', WebUtil.getConfigVar('video_quality', 2));
+        }
+
         UI.setupSettingLabels();
         UI.updateQuality();
 
@@ -908,7 +912,6 @@ const UI = {
         if (mode !== encodings.pseudoEncodingStreamingModeJpegWebp) {
             const config = configuration || UI.rfb?.videoCodecConfigurations[mode];
 
-            // TODO: This is a temporary workaround, which should be removed once host window starts sending quality preset
             if (WebUtil.isInsideKasmVDI()) {
                 const settingValue = UI.rfb?.videoCodecConfigurations[mode].presets;
                 if (settingValue) {

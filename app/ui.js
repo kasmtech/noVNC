@@ -1020,7 +1020,6 @@ const UI = {
 
     getBestStreamingMode(availableModes, fallbackOption, previousValue) {
         let result = fallbackOption.id;
-        // TEMPORARILY ADDED FORCING TO IMAGE MODE
         if (UI.forcedCodecs.length > 0) {
             const forcedMode = UI.forcedCodecs.find(id => availableModes.some(option => option.id === id));
             return forcedMode !== undefined ? forcedMode : fallbackOption.id;

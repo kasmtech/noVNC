@@ -1,5 +1,5 @@
-import {Canvas2DRenderer} from "./Canvas2DRenderer";
 import * as Log from "../util/logging";
+import {perfLogger} from "../util/performance-logger";
 
 export class WebGLRenderer {
     static vertexShaderSource = `

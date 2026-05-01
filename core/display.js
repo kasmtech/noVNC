@@ -172,6 +172,7 @@ export default class Display {
         this._localDecoderH = 0;
         this._localDecoderMeta = new Map(); // timestamp → {x, y, width, height, frameId}
         this._localDecoderTs = 0;
+        this._rfb = rfb;
 
         this._damageBounds = { left: 0, top: 0, right: this._backbuffer.width, bottom: this._backbuffer.height };
 
@@ -183,9 +184,6 @@ export default class Display {
         if (!this._isPrimaryDisplay) {
             this._broadcastChannel.addEventListener('message', this._handleSecondaryDisplayMessage.bind(this));
         }
-
-        this._rfb = rfb;
-        this._decoder = null;
 
         Log.Debug("<< Display.constructor");
     }
@@ -1031,11 +1029,6 @@ export default class Display {
                     this._syncFrameQueue.shift();
                     this._droppedRects++;
                 }
-                break;
-/*            case 'register_decoder':
-                if (!this._decoder) {
-                    this._decoder = new KasmVideoDecoder(this._rfb, this);
-                }*/
                 break;
             case 'frameComplete':
                 window.requestAnimationFrame(() => {

@@ -11,7 +11,10 @@ const UI = {
     screenID: null,
     screen: {},
     screens: [],
-    supportsBroadcastChannel: (typeof BroadcastChannel !== "undefined"),
+    multiMonitorSupport: (typeof BroadcastChannel !== "undefined" && typeof SharedWorker !== "undefined"),
+    get supportsMultiMonitor() {
+        return this.multiMonitorSupport;
+    },
     controlChannel: null,
     draggingTab: false,
     //Initial Loading of the UI
@@ -206,7 +209,7 @@ const UI = {
             UI.rfb.enableQOI = true;
         }
 
-        if (UI.supportsBroadcastChannel) {
+        if (UI.supportsMultiMonitor) {
             UI.controlChannel = new BroadcastChannel(UI.rfb.connectionID);
             UI.controlChannel.addEventListener('message', UI.handleControlMessage)
         }
@@ -366,7 +369,7 @@ const UI = {
     disconnect() {
         if (UI.rfb) {
             UI.rfb.disconnect();
-            if (UI.supportsBroadcastChannel) {
+            if (UI.supportsMultiMonitor) {
                 UI.controlChannel.removeEventListener('message', UI.handleControlMessage);
                 UI.rfb.removeEventListener("connect", UI.connectFinished);
             }

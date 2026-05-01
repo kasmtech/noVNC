@@ -91,7 +91,10 @@ const UI = {
     monitorStartX: 0,
     monitorStartY: 0,
 
-    supportsBroadcastChannel: (typeof BroadcastChannel !== "undefined"),
+    multiMonitorSupport: (typeof BroadcastChannel !== "undefined" && typeof SharedWorker !== "undefined"),
+    get supportsMultiMonitor() {
+        return this.multiMonitorSupport;
+    },
     codecDetector: null,
     forcedCodecs: [],
 
@@ -714,7 +717,7 @@ const UI = {
     },
 
     addDisplaysHandler() {
-        if (UI.supportsBroadcastChannel) {
+        if (UI.supportsMultiMonitor) {
             UI.showControlInput("noVNC_displays_button");
             UI.addClickHandle('noVNC_displays_button', UI.openDisplays);
             UI.addClickHandle('noVNC_close_displays', UI.closeDisplays);
@@ -1859,9 +1862,8 @@ const UI = {
 
             // Switch to image mode and mark that we had a bad encoding event
             UI.forceSetting('fallback_image_mode', true, false);
-
+            UI.forceReconnect = true;
             UI.disconnect();
-            setTimeout(() => UI.connect(null, UI.reconnectPassword), 100);
         });
         UI.rfb.addEventListener("disconnect", UI.disconnectFinished);
         UI.rfb.addEventListener("credentialsrequired", UI.credentials);
@@ -3094,11 +3096,8 @@ const UI = {
         UI.saveSetting('video_rendering_mode');
         // Reconnect to apply the new rendering mode
         if (UI.connected) {
-            //UI.inhibitReconnect = false;
+            UI.forceReconnect = true;
             UI.disconnect();
-            setTimeout(() => {
-                UI.connect(null, UI.reconnectPassword);
-            }, 100);
         }
     },
 

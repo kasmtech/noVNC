@@ -155,7 +155,7 @@ export default class RFB extends EventTargetMixin {
         this._useUdp = true;
         this._hiDpi = 'hiDpi' in options ? !!options.hiDpi : false;
         this._enableQOI = false;
-        this._videoQuality =  2;
+        this._videoQuality = 2;
         this._enableWebP = false;
         this.TransitConnectionStates = {
             Tcp: Symbol("tcp"),
@@ -228,12 +228,13 @@ export default class RFB extends EventTargetMixin {
         this._gestureLastMagnitudeY = 0;
 
         // Secondary Displays
-        this._supportsBroadcastChannel = (typeof BroadcastChannel !== "undefined");
-        if (this._supportsBroadcastChannel) {
+        this._supportsMultiMonitor = (typeof BroadcastChannel !== "undefined" && typeof SharedWorker !== "undefined");
+        if (this._supportsMultiMonitor) {
             this._controlChannel = new BroadcastChannel(this._connectionID);
             this._controlChannel.addEventListener('message', this._handleControlMessage.bind(this));
             Log.Debug("Attached to registrationChannel for secondary displays.")
-
+        } else {
+            Log.Warn("This browser does not support multi-monitor setups.");
         }
         if (!this._isPrimaryDisplay) {
             this._screenIndex = 2;

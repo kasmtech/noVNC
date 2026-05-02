@@ -254,6 +254,12 @@ export default class Display {
             y = toSigned32bit(y / this._screens[screenIndex].scale + this._screens[screenIndex].y);
         }
 
+        // Clamp to the valid framebuffer range — same reason as in absX/absY.
+        if (x < 0) x = 0;
+        else if (this._fbWidth && x >= this._fbWidth) x = this._fbWidth - 1;
+        if (y < 0) y = 0;
+        else if (this._fbHeight && y >= this._fbHeight) y = this._fbHeight - 1;
+
         return [x, y];
     }
 
@@ -570,14 +576,27 @@ export default class Display {
         if (this._scale === 0) {
             return 0;
         }
-        return toSigned32bit(x / this._scale + this._screens[0].x);
+        // Clamp to the valid framebuffer range. Upstream coordinate
+        // sources (e.g. clientToElement's multi-screen extension) can
+        // produce negative values when the cursor leaves the primary
+        // screen on a side with no adjacent virtual screen. Without
+        // this clamp the negative value gets packed into a uint16 on
+        // the wire and the server sees a huge positive coord, snapping
+        // the cursor to the far edge.
+        const v = toSigned32bit(x / this._scale + this._screens[0].x);
+        if (v < 0) return 0;
+        if (this._fbWidth && v >= this._fbWidth) return this._fbWidth - 1;
+        return v;
     }
 
     absY(y) {
         if (this._scale === 0) {
             return 0;
         }
-        return toSigned32bit(y / this._scale + this._screens[0].y);
+        const v = toSigned32bit(y / this._scale + this._screens[0].y);
+        if (v < 0) return 0;
+        if (this._fbHeight && v >= this._fbHeight) return this._fbHeight - 1;
+        return v;
     }
 
     resize(width, height) {

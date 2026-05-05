@@ -373,6 +373,7 @@ const UI = {
                 UI.controlChannel.removeEventListener('message', UI.handleControlMessage);
                 UI.rfb.removeEventListener("connect", UI.connectFinished);
             }
+            UI.rfb = null;
         }
     },
 

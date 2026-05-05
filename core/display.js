@@ -522,6 +522,7 @@ export default class Display {
                 this.screens[i].screenIndex = i;
                 if (i > 0) {
                     this._screens[i].channel?.postMessage({ eventType: "registered", screenIndex: i });
+                    this._portRelayWorker?.port.postMessage({ type: 'primary_ready', screenIndex: i });
                 }
             }
             return removed;

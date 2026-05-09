@@ -50,6 +50,10 @@ import {
 } from './constants.js';
 import {encodings} from "../core/encodings.js";
 import CodecDetector, {CODEC_VARIANT_NAMES, preferredCodecs} from "../core/codecs";
+import { perfLogger } from '../core/util/performance-logger.js';
+
+// Enable performance logging
+// perfLogger.enable(5000);
 
 const PAGE_TITLE = "KasmVNC";
 
@@ -87,7 +91,10 @@ const UI = {
     monitorStartX: 0,
     monitorStartY: 0,
 
-    supportsBroadcastChannel: (typeof BroadcastChannel !== "undefined"),
+    multiMonitorSupport: (typeof BroadcastChannel !== "undefined" && typeof SharedWorker !== "undefined"),
+    get supportsMultiMonitor() {
+        return this.multiMonitorSupport;
+    },
     codecDetector: null,
     forcedCodecs: [],
 
@@ -294,6 +301,7 @@ const UI = {
         UI.initSetting('webp_video_quality', 5);
         UI.initSetting('video_quality', 2);
         UI.initSetting('anti_aliasing', 0);
+        UI.initSetting('video_rendering_mode', 'canvas2d');
         UI.initSetting('video_area', 65);
         UI.initSetting('video_time', 5);
         UI.initSetting('video_out_time', 3);
@@ -302,7 +310,7 @@ const UI = {
         UI.initSetting('max_video_resolution_y', 540);
         UI.initSetting('framerate', FPS.MIN);
         UI.initSetting('framerate_image_mode', FPS.MIN);
-        UI.initSetting('framerate_video_mode', FPS.MIN);
+        UI.initSetting('framerate_streaming_mode', FPS.MIN);
         UI.initSetting('compression', 2);
         UI.initSetting('shared', true);
         UI.initSetting('view_only', false);
@@ -320,6 +328,7 @@ const UI = {
         UI.initSetting('enable_ime', false);
         UI.initSetting('enable_webrtc', false);
         UI.initSetting('enable_hidpi', false);
+        UI.initSetting('fallback_image_mode', false);
 
         UI.initSetting(UI_SETTINGS.STREAM_MODE, encodings.pseudoEncodingStreamingModeJpegWebp);
         // UI.initSetting(UI_SETTINGS.HW_PROFILE, UI_SETTING_PROFILE_OPTIONS.BASELINE);
@@ -354,6 +363,10 @@ const UI = {
             }
             UI.initSetting('enable_webp', true);
             UI.initSetting('resize', 'remote');
+        }
+
+        if (WebUtil.isInsideKasmVDI()) {
+            UI.initSetting('video_quality', WebUtil.getConfigVar('video_quality', 2));
         }
 
         UI.setupSettingLabels();
@@ -623,6 +636,8 @@ const UI = {
         UI.addSettingChangeHandler('treat_lossless', UI.updateQuality);
         UI.addSettingChangeHandler('anti_aliasing');
         UI.addSettingChangeHandler('anti_aliasing', UI.updateQuality);
+        UI.addSettingChangeHandler('video_rendering_mode');
+        UI.addSettingChangeHandler('video_rendering_mode', UI.updateVideoRenderingMode);
         UI.addSettingChangeHandler('video_quality');
         UI.addSettingChangeHandler('video_quality', UI.updateQuality);
         UI.addSettingChangeHandler('jpeg_video_quality');
@@ -642,15 +657,14 @@ const UI = {
         UI.addSettingChangeHandler('max_video_resolution_y');
         UI.addSettingChangeHandler('max_video_resolution_y', UI.updateQuality);
         UI.addSettingChangeHandler('framerate_image_mode', () => {
-            const settingElem = UI.getSettingElement('framerate_image_mode');
-            UI.getSettingElement('framerate_streaming_mode').value = settingElem.value;
-            WebUtil.writeSetting('framerate', settingElem.value);
+            const value = UI.getSettingElement('framerate_image_mode').value;
+            UI.getSettingElement('framerate_streaming_mode').value = value;
+            WebUtil.writeSetting('framerate_streaming_mode', value);
             UI.updateQuality();
         });
         UI.addSettingChangeHandler('framerate_streaming_mode', () => {
-            const settingElem = UI.getSettingElement('framerate_streaming_mode');
-            UI.getSettingElement('framerate_image_mode').value = settingElem.value;
-            WebUtil.writeSetting('framerate', settingElem.value);
+            const value = UI.getSettingElement('framerate_streaming_mode').value;
+            WebUtil.writeSetting('framerate_streaming_mode', value);
             UI.updateQuality();
         });
         UI.addSettingChangeHandler('compression');
@@ -703,7 +717,7 @@ const UI = {
     },
 
     addDisplaysHandler() {
-        if (UI.supportsBroadcastChannel) {
+        if (UI.supportsMultiMonitor) {
             UI.showControlInput("noVNC_displays_button");
             UI.addClickHandle('noVNC_displays_button', UI.openDisplays);
             UI.addClickHandle('noVNC_close_displays', UI.closeDisplays);
@@ -900,14 +914,23 @@ const UI = {
 
         if (mode !== encodings.pseudoEncodingStreamingModeJpegWebp) {
             const config = configuration || UI.rfb?.videoCodecConfigurations[mode];
+
+            if (WebUtil.isInsideKasmVDI()) {
+                const settingValue = UI.rfb?.videoCodecConfigurations[mode].presets;
+                if (settingValue) {
+                    const quality = parseInt(WebUtil.readSetting('video_quality'));
+                    const curQualityValue = parseInt(UI.getSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY));
+                    if (settingValue[quality] !== undefined && curQualityValue !== settingValue[quality]) {
+                        UI.forceSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY, settingValue[quality], false);
+                    }
+                }
+            }
+
             UI.updateQualitySliderRange(mode, config);
         }
 
         UI.updateQuality();
-
-        if (mode === encodings.pseudoEncodingStreamingModeJpegWebp) {
-            UI.rfb._requestFullRefresh();
-        }
+        UI.rfb?._requestFullRefresh();
 
         const streamModeElem = UI.getSettingElement(UI_SETTINGS.STREAM_MODE);
         const modeName = [...streamModeElem.options]
@@ -915,7 +938,8 @@ const UI = {
 
         Log.Info('Switching to mode: ', modeName ? modeName : 'Unknown Mode ', 'value:', mode);
 
-        showNotification(modeName || 'Mode Changed');
+        if (!WebUtil.isInsideKasmVDI() || UI.getSettingElement(UI_SETTINGS.SHOW_NOTIFICATIONS) || WebUtil.getConfigVar(UI_SETTINGS.SHOW_NOTIFICATIONS))
+            showNotification(modeName || 'Mode Changed');
     },
 
     initStreamModeSetting(codecs, configurations) {
@@ -957,7 +981,7 @@ const UI = {
 
         if (!config) {
             qualitySlider.min = 1;
-            qualitySlider.max = 63;
+            qualitySlider.max = 50;
 
             return;
         }
@@ -977,10 +1001,7 @@ const UI = {
             output.value = qualitySlider.value;
         }
 
-        // Save updated value if it changed
-        if (currentValue !== parseInt(qualitySlider.value)) {
-            UI.saveSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY);
-        }
+        UI.saveSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY);
     },
 
     getAvailableStreamingModes(codecs) {
@@ -1008,6 +1029,13 @@ const UI = {
         if (UI.forcedCodecs.length > 0) {
             const forcedMode = UI.forcedCodecs.find(id => availableModes.some(option => option.id === id));
             return forcedMode !== undefined ? forcedMode : fallbackOption.id;
+        }
+
+        // If we had a bad encoding event, force image mode
+        if (UI.getSetting('fallback_image_mode')) {
+            UI.forceSetting('fallback_image_mode', false, false);
+            Log.Info('Defaulting to image mode due to previous encoding error');
+            return encodings.pseudoEncodingStreamingModeJpegWebp;
         }
 
         // Restore selection if possible; otherwise default to JPEG/WEBP
@@ -1687,6 +1715,15 @@ const UI = {
         if (path) {
             path.setAttribute('d', UI.generateFpsChartPath());
         }
+
+        if (UI.fpsChartTicks.length > 0) {
+            const max = Math.max(...UI.fpsChartTicks);
+            const min = Math.min(...UI.fpsChartTicks);
+            const avg = UI.fpsChartTicks.reduce((a, b) => a + b, 0) / UI.fpsChartTicks.length;
+            document.getElementById('noVNC_fps_chart_max').textContent = `Max: ${max.toFixed(1)}`;
+            document.getElementById('noVNC_fps_chart_min').textContent = `Min: ${min.toFixed(1)}`;
+            document.getElementById('noVNC_fps_chart_avg').textContent = `Avg: ${avg.toFixed(1)}`;
+        }
     },
 
     //received bottleneck stats
@@ -1738,16 +1775,22 @@ const UI = {
         UI.rfb.treatLossless = parseInt(UI.getSetting('treat_lossless'));
         UI.rfb.maxVideoResolutionX = parseInt(UI.getSetting('max_video_resolution_x'));
         UI.rfb.maxVideoResolutionY = parseInt(UI.getSetting('max_video_resolution_y'));
-        UI.rfb.frameRate = parseInt(UI.getSetting('framerate'));
+
+        // Read streamMode first so we can use it to determine which framerate setting to read
+        UI.rfb.streamMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE));
+        const isImageMode = UI.rfb.streamMode === encodings.pseudoEncodingStreamingModeJpegWebp;
+        const framerateSettingName = isImageMode ? 'framerate_image_mode' : 'framerate_streaming_mode';
+        UI.rfb.frameRate = parseInt(UI.getSetting(framerateSettingName));
+        Log.Info(`setConnectionQualityValues: streamMode=${UI.rfb.streamMode}, isImageMode=${isImageMode}, reading from '${framerateSettingName}', frameRate=${UI.rfb.frameRate}`);
+
         UI.rfb.enableWebP = UI.getSetting('enable_webp');
         UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
         UI.rfb.enableHiDpi = UI.getSetting('enable_hidpi');
         UI.rfb.threading = UI.getSetting('enable_threading');
-
-        UI.rfb.streamMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE));
         // UI.rfb.hwEncoderProfile = parseInt(UI.getSetting(UI_SETTINGS.HW_PROFILE));
         UI.rfb.gop = parseInt(UI.getSetting(UI_SETTINGS.GOP));
         UI.rfb.videoStreamQuality = parseInt(UI.getSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY));
+        Log.Info('Loaded from localStorage - Quality: ', UI.rfb.videoStreamQuality, ' Stream mode: ', UI.rfb.streamMode, ' GOP:', UI.rfb.gop);
     },
 
 /* ------^-------
@@ -1808,11 +1851,20 @@ const UI = {
                         {
                             shared: UI.getSetting('shared'),
                             repeaterID: UI.getSetting('repeaterID'),
-                            credentials: { password: password }
+                            credentials: { password: password },
+                            videoRenderingMode: UI.getSetting('video_rendering_mode')
                         },
                         UI.codecDetector?.getSupportedCodecIds(),
                         true );
         UI.rfb.addEventListener("connect", UI.connectFinished);
+        UI.rfb.addEventListener("badencoding", (e) => {
+            Log.Warn("Reconnecting due to encoding error or corrupted frame...");
+
+            // Switch to image mode and mark that we had a bad encoding event
+            UI.forceSetting('fallback_image_mode', true, false);
+            UI.forceReconnect = true;
+            UI.disconnect();
+        });
         UI.rfb.addEventListener("disconnect", UI.disconnectFinished);
         UI.rfb.addEventListener("credentialsrequired", UI.credentials);
         UI.rfb.addEventListener("securityfailure", UI.securityFailed);
@@ -2912,11 +2964,9 @@ const UI = {
         const imageMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE)) === encodings.pseudoEncodingStreamingModeJpegWebp;
 
         const forceFramerate = (fps) => {
-            if (imageMode) {
-                UI.forceSetting('framerate_image_mode', fps);
-                UI.forceSetting('framerate_streaming_mode', fps, false);
-                WebUtil.writeSetting('framerate', fps);
-            }
+            UI.forceSetting('framerate_image_mode', fps);
+            UI.forceSetting('framerate_streaming_mode', fps, false);
+            WebUtil.writeSetting('framerate', fps);
         };
 
         // video_quality preset values
@@ -3037,6 +3087,17 @@ const UI = {
         if (!UI.rfb) return;
 
         UI.rfb.compressionLevel = parseInt(UI.getSetting('compression'));
+    },
+
+    updateVideoRenderingMode() {
+        const mode = UI.getSetting('video_rendering_mode');
+        Log.Info('Video rendering mode changed to: ', mode);
+        UI.saveSetting('video_rendering_mode');
+        // Reconnect to apply the new rendering mode
+        if (UI.connected) {
+            UI.forceReconnect = true;
+            UI.disconnect();
+        }
     },
 
 

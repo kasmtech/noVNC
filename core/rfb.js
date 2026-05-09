@@ -103,6 +103,7 @@ export default class RFB extends EventTargetMixin {
         this._wsProtocols = options.wsProtocols || ['binary'];
         this._isPrimaryDisplay = (isPrimaryDisplay !== false);
         this.videoCodecs = videoCodecs;
+        this._videoRenderingMode = options.videoRenderingMode || 'canvas2d';
 
         // Internal state
         this._rfbConnectionState = '';
@@ -154,7 +155,7 @@ export default class RFB extends EventTargetMixin {
         this._useUdp = true;
         this._hiDpi = 'hiDpi' in options ? !!options.hiDpi : false;
         this._enableQOI = false;
-        this._videoQuality =  2;
+        this._videoQuality = 2;
         this._enableWebP = false;
         this.TransitConnectionStates = {
             Tcp: Symbol("tcp"),
@@ -227,12 +228,13 @@ export default class RFB extends EventTargetMixin {
         this._gestureLastMagnitudeY = 0;
 
         // Secondary Displays
-        this._supportsBroadcastChannel = (typeof BroadcastChannel !== "undefined");
-        if (this._supportsBroadcastChannel) {
+        this._supportsMultiMonitor = (typeof BroadcastChannel !== "undefined" && typeof SharedWorker !== "undefined");
+        if (this._supportsMultiMonitor) {
             this._controlChannel = new BroadcastChannel(this._connectionID);
             this._controlChannel.addEventListener('message', this._handleControlMessage.bind(this));
             Log.Debug("Attached to registrationChannel for secondary displays.")
-
+        } else {
+            Log.Warn("This browser does not support multi-monitor setups.");
         }
         if (!this._isPrimaryDisplay) {
             this._screenIndex = 2;
@@ -291,7 +293,7 @@ export default class RFB extends EventTargetMixin {
         // NB: nothing that needs explicit teardown should be done
         // before this point, since this can throw an exception
         try {
-            this._display = new Display(this._canvas, this._isPrimaryDisplay);
+            this._display = new Display(this._canvas, this, this._isPrimaryDisplay, this._videoRenderingMode);
         } catch (exc) {
             Log.Error("Display exception: " + exc);
             throw exc;
@@ -4437,10 +4439,10 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleDataRect() {
-        let decoder = this._decoders[this._FBU.encoding];
+        const decoder = this._decoders[this._FBU.encoding];
         if (!decoder) {
-            this._fail("Unsupported encoding (encoding: " +
-                       this._FBU.encoding + ")");
+            Log.Error("Unsupported encoding (encoding: " + this._FBU.encoding + ")");
+            this.dispatchEvent(new CustomEvent("badencoding"));
             return false;
         }
 

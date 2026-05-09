@@ -3,6 +3,7 @@ export const UI_SETTINGS_CONTROL_ID = {
     HW_PROFILE: 'hw_encoder_profile',
     GOP: 'gop',
     VIDEO_STREAM_QUALITY: 'video_stream_quality',
+    SHOW_NOTIFICATIONS: 'show_notifications',
     PRESET: 'preset',
 };
 

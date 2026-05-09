@@ -80,6 +80,9 @@
     <div id="noVNC_fps_chart">
         <svg width="200" height="50">
             <path id="noVNC_fps_chart_path" fill="#00ffa2d4" stroke="#00ffa2d4" stroke-width="1"/>
+            <text id="noVNC_fps_chart_max" x="5" y="12" fill="#ffffff" font-size="10" font-family="monospace"></text>
+            <text id="noVNC_fps_chart_avg" x="5" y="30" fill="#ffffff" font-size="10" font-family="monospace"></text>
+            <text id="noVNC_fps_chart_min" x="5" y="48" fill="#ffffff" font-size="10" font-family="monospace"></text>
         </svg>
     </div>
 
@@ -463,6 +466,13 @@
 <!--                                                    </select>-->
 <!--                                                </label>-->
 <!--                                            </li>-->
+                                            <li>
+                                                <label for="noVNC_setting_video_rendering_mode">Video renderer:</label>
+                                                <select id="noVNC_setting_video_rendering_mode" name="vncVideoRenderingMode">
+                                                    <option value="canvas2d">Canvas2D</option>
+                                                    <option value="webgl">WebGL</option>
+                                                </select>
+                                            </li>
                                             <li>
                                                 <label for="noVNC_setting_gop">Keyframe interval (GOP):</label>
                                                 <input id="noVNC_setting_gop" type="range" min="1" max="60" value="24" onchange="noVNC_setting_gop_output.value=value">

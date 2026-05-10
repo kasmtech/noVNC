@@ -98,7 +98,7 @@ export default class Keyboard {
                         break;
                     case "AltLeft":
                     case "AltRight":
-                        if (!event.altKey) {
+                        if (!event.altKey && !event.key == "AltGraph") {
                             Log.Error("A alt key is stuck down, sending up. ");
                             this._sendKeyEvent(value, key, false);
                         }

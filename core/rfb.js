@@ -40,7 +40,6 @@ import KasmVideoDecoder from "./decoders/kasmvideo.js";
 import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
 import UDPDecoder from './decoders/udp.js';
-import { toSignedRelative16bit } from './util/int.js';
 import {FPS, UI_SETTING_PROFILE_OPTIONS} from '../app/constants.js';
 
 // How many seconds to wait for a disconnect to finish
@@ -209,8 +208,6 @@ export default class RFB extends EventTargetMixin {
         this._mouseButtonMask = 0;
         this._mouseLastMoveTime = 0;
         this._pointerLock = false;
-        this._pointerLockPos = { x: 0, y: 0 };
-        this._pointerRelativeEnabled = false;
         this._directMouseEnabled = false;
         this._directMouseRemainder = { x: 0, y: 0 };
         this._mouseLastPinchAndZoomTime = 0;
@@ -381,21 +378,11 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    get pointerRelative() { return this._pointerRelativeEnabled; }
+    get pointerRelative() { return this._directMouseEnabled; }
     set pointerRelative(value)
     {
-        this._pointerRelativeEnabled = value;
         this._directMouseEnabled = value;
         this._directMouseRemainder = { x: 0, y: 0 };
-        if (value) {
-            let max_w = ((this._display.scale === 1) ? this._fbWidth : (this._fbWidth * this._display.scale));
-            let max_h = ((this._display.scale === 1) ? this._fbHeight : (this._fbHeight * this._display.scale));
-            this._pointerLockPos.x = Math.floor(max_w / 2);
-            this._pointerLockPos.y = Math.floor(max_h / 2);
-            // Do not reset _mousePos or move the cursor — in direct drive mode
-            // we track position using raw movementX/Y deltas so the visual cursor
-            // stays where the server cursor actually is.
-        }
     }
 
     get keyboard() { return this._keyboard; }
@@ -1624,7 +1611,7 @@ export default class RFB extends EventTargetMixin {
 
         // Re-enable pointerLock if relative cursor is enabled
         // pointerLock must come from user initiated event
-        if (!this._pointerLock && this._pointerRelativeEnabled) {
+        if (!this._pointerLock && this._directMouseEnabled) {
             this.pointerLock = true;
         }
 
@@ -2224,7 +2211,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         let pos;
-        if (this._pointerLock && !this._pointerRelativeEnabled) {
+        if (this._pointerLock) {
             let max_w = ((this._display.scale === 1) ? this._fbWidth : (this._fbWidth * this._display.scale));
             let max_h = ((this._display.scale === 1) ? this._fbHeight : (this._fbHeight * this._display.scale));
             pos = {
@@ -2242,11 +2229,6 @@ export default class RFB extends EventTargetMixin {
                 pos.y = max_h;
             }
             this._cursor.move(pos.x, pos.y);
-        } else if (this._pointerLock && this._pointerRelativeEnabled) {
-            pos = {
-                x: this._mousePos.x + ev.movementX,
-                y: this._mousePos.y + ev.movementY,
-            };
         } else {
             pos = clientToElement(ev.clientX, ev.clientY,
                                   this._canvas);
@@ -2464,20 +2446,9 @@ export default class RFB extends EventTargetMixin {
         if (this._viewOnly) { return; } // View only, skip mouse events
         if (!this._isPrimaryDisplay) { return; }
 
-        if (this._pointerLock && this._pointerRelativeEnabled && this._directMouseEnabled) {
+        if (this._pointerLock && this._directMouseEnabled) {
             // Direct drive: button state changes only (movement is sent raw from _handleMouse)
             this._sendDirectMouse(0, 0, mask, 0, 0);
-        } else if (this._pointerLock && this._pointerRelativeEnabled) {
-
-            // Use releative cursor position
-            var rel_16_x = toSignedRelative16bit(x - this._pointerLockPos.x);
-            var rel_16_y = toSignedRelative16bit(y - this._pointerLockPos.y);
-
-            RFB.messages.pointerEvent(this._sock, rel_16_x, rel_16_y, mask);
-
-            // reset the cursor position to center
-            this._mousePos = { x: this._pointerLockPos.x , y: this._pointerLockPos.y };
-            this._cursor.move(this._pointerLockPos.x, this._pointerLockPos.y);
         } else {
             RFB.messages.pointerEvent(this._sock, this._display.absX(x), this._display.absY(y), mask);
         }

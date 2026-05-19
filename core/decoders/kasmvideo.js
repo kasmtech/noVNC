@@ -96,7 +96,19 @@ export default class KasmVideoDecoder {
     }
 
     _skipRect(x, y, width, height, _sock, display, _depth, frameId) {
-        display.clearRect(x, y, width, height, 0, frameId, false);
+        // Under WebRTC media the server emits skip-rects in place of
+        // encoded video (the payload rides the RTCPeerConnection).
+        // Clearing the canvas here would paint the visible area black
+        // during the ~1-2s ICE/SDP handshake before the first WebRTC
+        // frame arrives. Leave the canvas alone in that mode so the
+        // user sees the last image-mode frame until the <video> takes
+        // over on its 'playing' event.
+        const webrtcActive = this._rfb && this._rfb._webrtc &&
+            (this._rfb._webrtc.state === 'connected' ||
+             this._rfb._webrtc.state === 'negotiating');
+        if (!webrtcActive) {
+            display.clearRect(x, y, width, height, 0, frameId, false);
+        }
         return true;
     }
 

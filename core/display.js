@@ -805,6 +805,26 @@ export default class Display {
         }
     }
 
+    // Push a no-op placeholder rect that occupies one slot in a frame's
+    // expected rect count but renders nothing. Used by callers that
+    // skipped or dropped a real rect (e.g. UDP video reorder dropping a
+    // delta while waiting for an IDR) and still need the LastRect flip
+    // to fire. Safe on both primary and secondary screens: 'dummy' type
+    // falls through the default branch in _pushAsyncFrame on primary,
+    // and is explicitly no-op on secondary.
+    enqueueDummyRect(screenId, frameId, x, y, width, height) {
+        const rect = {
+            type: 'dummy',
+            screenId,
+            x, y, width, height,
+            frame_id: frameId,
+        };
+        if (screenId < this._screens.length) {
+            this._processRectScreens(rect);
+            this._asyncRenderQPush(rect);
+        }
+    }
+
     videoFrameRect(screenId, frame, frame_id, x, y, width, height) {
         const startTime = perfLogger.start('videoFrameRender');
 

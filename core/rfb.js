@@ -37,6 +37,8 @@ import CopyRectDecoder from "./decoders/copyrect.js";
 import RREDecoder from "./decoders/rre.js";
 import HextileDecoder from "./decoders/hextile.js";
 import KasmVideoDecoder from "./decoders/kasmvideo.js";
+import WebRTCVideoTransport from "./transport/webrtc_video.js";
+import { WEBRTC_MSG_TYPE, WebRTCSignalKind } from "./transport/webrtc_signaling.js";
 import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
 import UDPDecoder from './decoders/udp.js';
@@ -153,6 +155,28 @@ export default class RFB extends EventTargetMixin {
         this._clipboardBinary = true;
         this._resendClipboardNextUserDrivenEvent = true;
         this._useUdp = true;
+        // WebRTC media transport (libdatachannel migration, Phase 1+).
+        // Driven by the same UI toggle that controls WebUDP ("Enable
+        // WebRTC UDP Transit") via `set enableWebRTC` below — that
+        // setter calls _applyWebRTCMediaState() which starts/stops the
+        // new transport. Codec preference is derived from streamMode
+        // (set via set streamMode); JpegWebp streamMode disables it.
+        // The legacy WebUDP DataChannel path stays alive in parallel
+        // as fallback when the server doesn't have enableWebRTCMedia
+        // turned on (kind=6 just gets bounced and the server keeps
+        // using WebUDP / image mode).
+        this._webrtc = null;
+        this._webrtcCurrentCodec = null;  // codec the active transport offered
+        // Outgoing transport during a smooth-switch renegotiation. The
+        // active `_webrtc` keeps decoding the old codec onto its
+        // <video> element while `_webrtcPending` negotiates the new
+        // codec in parallel. On `playing` (first decoded frame) of the
+        // pending <video>, the old one is removed and the pending one
+        // becomes active. See _applyWebRTCMediaState and
+        // _onWebRTCVideoReady for the swap logic.
+        this._webrtcPending = null;
+        this._webrtcPendingCodec = null;
+
         this._hiDpi = 'hiDpi' in options ? !!options.hiDpi : false;
         this._enableQOI = false;
         this._videoQuality = 2;
@@ -759,6 +783,12 @@ export default class RFB extends EventTargetMixin {
                 this._sendUdpUpgrade();
             }
         }
+        // Same toggle also drives the new WebRTC media path. If the
+        // server didn't build with ENABLE_WEBRTC_MEDIA, the kind=6
+        // capability message gets bounced with a fallback signal and
+        // _webrtc tears itself down — no harm done, and WebUDP above
+        // remains the active path.
+        this._applyWebRTCMediaState('toggle');
     }
 
     get enableHiDpi() { return this._hiDpi; }
@@ -819,7 +849,165 @@ export default class RFB extends EventTargetMixin {
         if (value !== this._streamMode) {
             this._streamMode = value;
             this._pendingApplyEncodingChanges = true;
+            // Codec change -> tear down and renegotiate WebRTC media
+            // with the new codec preference. If we just switched to
+            // image mode (JpegWebp), the helper tears down without
+            // restarting.
+            this._applyWebRTCMediaState('streamMode');
         }
+    }
+
+    // Map the pseudoEncodingStreamingMode* family on the wire into a
+    // codec preference list for the WebRTC media transport. Returns
+    // null when the stream mode is image-mode (JpegWebp) — in which
+    // case WebRTC media is *not* used regardless of the toggle.
+    _streamModeToWebRTCCodecs(mode) {
+        const E = encodings;
+        switch (mode) {
+            case E.pseudoEncodingStreamingModeAVC:
+            case E.pseudoEncodingStreamingModeAVCSW:
+            case E.pseudoEncodingStreamingModeAVCVAAPI:
+            case E.pseudoEncodingStreamingModeAVCNVENC:
+            case E.pseudoEncodingStreamingModeAVCQSV:
+                return ['H264'];
+            case E.pseudoEncodingStreamingModeHEVC:
+            case E.pseudoEncodingStreamingModeHEVCSW:
+            case E.pseudoEncodingStreamingModeHEVCVAAPI:
+            case E.pseudoEncodingStreamingModeHEVCNVENC:
+            case E.pseudoEncodingStreamingModeHEVCQSV:
+                return ['H265', 'H264'];   // fall back to H264 if browser refuses H265
+            case E.pseudoEncodingStreamingModeAV1:
+            case E.pseudoEncodingStreamingModeAV1SW:
+            case E.pseudoEncodingStreamingModeAV1VAAPI:
+            case E.pseudoEncodingStreamingModeAV1NVENC:
+            case E.pseudoEncodingStreamingModeAV1QSV:
+                return ['AV1', 'H264'];
+            default:
+                return null;   // image mode
+        }
+    }
+
+    // Single source-of-truth that reconciles _useUdp + _streamMode
+    // against the live WebRTC transport state. Called from the
+    // enableWebRTC and streamMode setters, and from the initial
+    // post-connect kickoff. Safe to call repeatedly.
+    //
+    // Smooth-switch design: when the user changes streamMode while a
+    // transport is live, we do NOT tear it down immediately. Instead
+    // we build a parallel `_webrtcPending` that negotiates the new
+    // codec. The old transport keeps decoding onto its <video>
+    // element so the user sees motion-continuous video through the
+    // entire ICE/SDP/encoder-warmup window. When the pending
+    // transport's <video> fires `playing`, the swap completes (see
+    // _onWebRTCVideoReady). If the user is fully disabling WebRTC
+    // (wantOn=false), we still freeze-frame the old <video> until the
+    // canvas underneath catches up — see _freezeFrameWebRTC.
+    _applyWebRTCMediaState(reason) {
+        if (!this._isPrimaryDisplay) return;
+        if (typeof RTCPeerConnection === 'undefined') return;
+
+        const wantCodecs = this._useUdp
+            ? this._streamModeToWebRTCCodecs(this._streamMode)
+            : null;
+        const wantOn  = !!wantCodecs;
+        const haveOn  = !!this._webrtc;
+        const codecKey = wantCodecs ? wantCodecs.join(',') : '';
+        const haveKey  = this._webrtcCurrentCodec || '';
+        const pendingKey = this._webrtcPendingCodec || '';
+
+        // No transport yet — straight-through initial negotiation.
+        if (!haveOn && wantOn && this.isConnected) {
+            Log.Info('Starting WebRTC media (codec preference=' +
+                     codecKey + ', reason=' + reason + ')');
+            this._webRTCMediaCodecs = wantCodecs;
+            this._webrtcCurrentCodec = codecKey;
+            this._initWebRTCMedia();
+            return;
+        }
+
+        // Image-mode requested with a live transport. Hand off to the
+        // canvas: capture the last decoded frame as a freeze-frame on
+        // the canvas, then drop the <video> overlay so image-mode
+        // updates show through. Server-side, kind=5 'unsubscribe'
+        // tears down the live transport.
+        if (haveOn && !wantOn) {
+            Log.Info('Switching WebRTC media -> image mode (reason=' +
+                     reason + ')');
+            this._abandonPendingWebRTCMedia('switch-to-image');
+            this._freezeFrameWebRTC();
+            try {
+                if (this._webrtc.signaling)
+                    this._webrtc.signaling.sendFallback('unsubscribe');
+            } catch (e) {}
+            try { this._webrtc.stop(); } catch (e) {}
+            this._webrtc = null;
+            this._webrtcCurrentCodec = null;
+            return;
+        }
+
+        // Same codec as the live transport — nothing to do, even if
+        // the pending one was mid-negotiation for something else
+        // (the caller has rolled the preference back to the current).
+        if (haveOn && wantOn && codecKey === haveKey) {
+            this._abandonPendingWebRTCMedia('codec-rollback');
+            return;
+        }
+
+        // Codec change with a live transport — smooth-switch path.
+        // Cancel any prior pending (user clicked through codecs fast)
+        // and spin up a new pending transport. Server side: the
+        // kind=6 we send next routes into pendingWebRTCMedia on the
+        // server because the live transport is still alive.
+        if (haveOn && wantOn && codecKey !== haveKey) {
+            if (pendingKey === codecKey) {
+                // Already negotiating the exact codec the user wants;
+                // don't restart and lose ICE progress.
+                return;
+            }
+            Log.Info('Starting pending WebRTC media (codec preference=' +
+                     codecKey + ', reason=' + reason +
+                     ', live codec=' + haveKey + ')');
+            this._abandonPendingWebRTCMedia('superseded');
+            this._webRTCMediaCodecs = wantCodecs;
+            this._webrtcPendingCodec = codecKey;
+            this._initWebRTCMedia({ pending: true });
+            return;
+        }
+    }
+
+    // Capture the last decoded frame from the live WebRTC <video> onto
+    // the canvas so the user sees a still image during the gap before
+    // the next mode's first paint, instead of an empty/black region.
+    _freezeFrameWebRTC() {
+        try {
+            const video = this._webrtc && this._webrtc.video;
+            if (!video || !video.videoWidth || !video.videoHeight) return;
+            const canvas = this._display && this._display._target;
+            if (!canvas || !canvas.getContext) return;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            // Paint scaled to canvas dimensions. The next image-mode
+            // framebuffer update will overwrite this; the freeze-frame
+            // only exists to bridge the gap.
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        } catch (e) {
+            Log.Warn('Freeze-frame capture failed: ' + e);
+        }
+    }
+
+    _abandonPendingWebRTCMedia(reason) {
+        if (!this._webrtcPending) return;
+        Log.Info('Abandoning pending WebRTC media (' + reason + ')');
+        try {
+            if (this._webrtcPending.signaling)
+                this._webrtcPending.signaling.sendFallback('renegotiate');
+        } catch (e) {}
+        try { this._webrtcPending.stop(); } catch (e) {}
+        if (this._webrtcPending.video && this._webrtcPending.video.parentNode) {
+            this._webrtcPending.video.parentNode.removeChild(this._webrtcPending.video);
+        }
+        this._webrtcPending = null;
+        this._webrtcPendingCodec = null;
     }
 
     // ===== PUBLIC METHODS =====
@@ -1404,6 +1592,20 @@ export default class RFB extends EventTargetMixin {
         if (typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
             this._udpBuffer = new Map();
 
+            // Per-screen reorder buffer for HW-encoded video chunks.
+            // WebRTC unordered+unreliable delivery means small delta rects
+            // can complete reassembly before larger keyframe rects, which
+            // would feed the WebCodecs decoder a delta before its IDR and
+            // trigger EncodingError -> imagemode fallback. We hold rects
+            // here keyed by frame_id, drain contiguously, and skip gaps
+            // after a short timeout (asking the server for a fresh IDR).
+            this._videoReorder = {
+                screens: new Map(),     // screenId -> { buffer, lastFedFrameId, waitingForKey, timer }
+                timeoutMs: 100,          // wait this long for a missing frame before skipping
+                refreshCooldownMs: 500,  // minimum interval between gap-driven _requestFullRefresh calls
+                lastRefreshTime: 0       // ms timestamp of last gap-driven refresh request
+            };
+
             this._udpPeer = new RTCPeerConnection({
                 iceServers: [{
                     urls: ["stun:stun.l.google.com:19302"]
@@ -1458,10 +1660,11 @@ export default class RFB extends EventTargetMixin {
                                         (u8[14] << 16) +
                                         (u8[15] << 24), 10);
                 // TODO: check the hash. It's the low 32 bits of XXH64, seed 0
-                const frame_id = parseInt(u8[16] +
-                                        (u8[17] << 8) +
-                                        (u8[18] << 16) +
-                                        (u8[19] << 24), 10);
+                // Wire is uint32_t little-endian (see common/network/Udp.cxx udpsend()).
+                // Use bitwise OR + unsigned >>> 0 so the high bit doesn't sign-flip the
+                // result; with this the comparison domain is [0, 2^32) and the only
+                // wrap is the server-side uint32_t wrap (~828 days @ 60 fps).
+                const frame_id = (u8[16] | (u8[17] << 8) | (u8[18] << 16) | (u8[19] << 24)) >>> 0;
 
                 if (me._transitConnectionState !== me.TransitConnectionStates.Udp) {
                     me._display.clear();
@@ -1473,10 +1676,24 @@ export default class RFB extends EventTargetMixin {
                 } else { // Use buffer
                     const now = Date.now();
 
+                    // Hard cap on piece count to refuse poisoned packets.
+                    if (pieces > 65536 || i >= pieces) {
+                        Log.Warn("Discarding malformed UDP piece (id=" + id +
+                                 ", i=" + i + ", pieces=" + pieces + ")");
+                        return;
+                    }
+
                     if (udpBuffer.has(id)) {
                         let item = udpBuffer.get(id);
-                        item.recieved_pieces += 1;
+                        // Dup-piece / out-of-bounds guard. WebRTC unordered/
+                        // unreliable shouldn't duplicate, but if it ever does
+                        // we must not double-count or we'll fire completion
+                        // with `undefined` slots and throw on finaldata.set().
+                        if (i >= item.total_pieces || item.data[i] !== undefined) {
+                            return;
+                        }
                         item.data[i] = u8.slice(20);
+                        item.recieved_pieces += 1;
                         item.total_bytes += item.data[i].length;
 
                         if (item.total_pieces == item.recieved_pieces) {
@@ -1491,6 +1708,19 @@ export default class RFB extends EventTargetMixin {
                             me._handleUdpRect(finaldata, frame_id);
                         }
                     } else {
+                        // Periodic eviction of stale partial reassemblies.
+                        // If any piece of an old frame was dropped on the
+                        // wire, the entry would otherwise live forever and
+                        // leak memory. 500 ms is well past any reasonable
+                        // intra-frame jitter.
+                        if (udpBuffer.size > 16) {
+                            const cutoff = now - 500;
+                            for (const [k, v] of udpBuffer) {
+                                if (v.arrival < cutoff)
+                                    udpBuffer.delete(k);
+                            }
+                        }
+
                         let item = {
                             total_pieces: pieces,   // number of pieces expected
                                 arrival: now,       //time first piece was recieved
@@ -1509,6 +1739,14 @@ export default class RFB extends EventTargetMixin {
 	    if (this._useUdp && typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
             setTimeout(function() { this._sendUdpUpgrade() }.bind(this), 3000);
         }
+
+        // WebRTC media (libdatachannel) — parallel kickoff after the
+        // WebUDP setTimeout above. The reconciler reads _useUdp and
+        // _streamMode and starts the transport iff both are in a
+        // WebRTC-eligible state (toggle on, codec is not image-mode).
+        // Server-side: enableWebRTCMedia off -> kind=6 gets bounced
+        // and _webrtc tears itself down, leaving WebUDP active.
+        setTimeout(function() { this._applyWebRTCMediaState('connect') }.bind(this), 3000);
 
         Log.Debug("<< RFB.connect");
     }
@@ -3823,6 +4061,9 @@ export default class RFB extends EventTargetMixin {
 
             case 183: // KASM unix relay data
                 return this._handleUnixRelay();
+
+            case WEBRTC_MSG_TYPE: // 187 — KASM WebRTC media signaling
+                return this._handleWebRTCSignal();
             case messages.msgTypeServerDisconnect: // KASM disconnect notice
                 return this._handleDisconnectNotify();
 
@@ -3884,12 +4125,221 @@ export default class RFB extends EventTargetMixin {
                     return false;
                 }
                 break;
+            case encodings.encodingKasmVideo: {
+                // HW-encoded video rect. Stage it in the per-screen reorder
+                // buffer; _drainVideoReorder feeds the decoder in frame_id
+                // order so deltas never reach WebCodecs before their IDR.
+                this._handleVideoUdpRect(frame.x, frame.y,
+                                         frame.width, frame.height,
+                                         data, frame_id);
+                break;
+            }
+            case encodings.encodingCopyRect: {
+                // Server sends CopyRect over UDP too (SMsgWriter::writeCopyRect
+                // when supportsUdp). 4-byte payload after the 12-byte rect
+                // header: srcX (U16 BE), srcY (U16 BE).
+                if (data.length < 16) {
+                    Log.Error("CopyRect UDP rect too short (" + data.length + " bytes)");
+                    return false;
+                }
+                const srcX = (data[12] << 8) | data[13];
+                const srcY = (data[14] << 8) | data[15];
+                this._display.copyImage(srcX, srcY,
+                                        frame.x, frame.y,
+                                        frame.width, frame.height,
+                                        frame_id);
+                break;
+            }
             default:
                 Log.Error("Invalid rect encoding via UDP: " + frame.encoding);
                 return false;
         }
 
         return true;
+    }
+
+    // Stage a HW-video rect into the per-screen reorder buffer and try
+    // to drain. Wire layout inside `data` (already past the 12-byte rect
+    // header): [12]=screenId, [13]=codec_id, [14]=keyframe flag, [15..]=
+    // compact-int length + NAL bytes.
+    _handleVideoUdpRect(x, y, width, height, data, frame_id) {
+        if (data.length < 15) {
+            Log.Warn("KasmVideo UDP rect too short (" + data.length + " bytes)");
+            return;
+        }
+        const reorder = this._videoReorder;
+        const screenId = data[12];
+        const isKey = data[14] === 1;
+
+        let state = reorder.screens.get(screenId);
+        if (!state) {
+            state = {
+                buffer: new Map(),    // frame_id -> {x, y, width, height, data, isKey}
+                lastFedFrameId: -1,   // -1 means we haven't fed any frame yet
+                waitingForKey: true,  // true until we see a usable IDR
+                timer: null
+            };
+            reorder.screens.set(screenId, state);
+        }
+
+        // Drop late arrivals for frames we've already passed.
+        if (state.lastFedFrameId !== -1 && frame_id <= state.lastFedFrameId) {
+            // Still ack the rect-count to the display so the LastRect flip
+            // for the original frame doesn't hang waiting on this rect.
+            this._display.enqueueDummyRect(screenId, frame_id,
+                                           x, y, width, height);
+            return;
+        }
+
+        state.buffer.set(frame_id, {x, y, width, height, data, isKey});
+        this._drainVideoReorder(screenId);
+
+        if (state.buffer.size > 0 && !state.timer) {
+            state.timer = setTimeout(() => {
+                state.timer = null;
+                this._handleVideoReorderTimeout(screenId);
+            }, reorder.timeoutMs);
+        }
+    }
+
+    _drainVideoReorder(screenId) {
+        const state = this._videoReorder.screens.get(screenId);
+        if (!state) return;
+
+        // Cold start: we need to begin with a keyframe. Walk the buffer
+        // in ascending frame_id order looking for one; drop anything
+        // earlier (we can't decode those deltas anyway).
+        if (state.lastFedFrameId === -1) {
+            const ids = [...state.buffer.keys()].sort((a, b) => a - b);
+            let keyId = -1;
+            for (const id of ids) {
+                if (state.buffer.get(id).isKey) {
+                    keyId = id;
+                    break;
+                }
+            }
+            if (keyId === -1) return; // still waiting for an IDR
+
+            for (const id of ids) {
+                if (id < keyId) {
+                    const r = state.buffer.get(id);
+                    // Keep display rect-counts consistent so frames flip.
+                    this._display.enqueueDummyRect(screenId, id,
+                                                  r.x, r.y, r.width, r.height);
+                    state.buffer.delete(id);
+                } else break;
+            }
+            state.lastFedFrameId = keyId - 1;
+            state.waitingForKey = false;
+        }
+
+        // Drain frames whose frame_id is exactly the next expected one.
+        // A gap stops the drain; the timeout handler will skip past it.
+        while (state.buffer.has(state.lastFedFrameId + 1)) {
+            const nextId = state.lastFedFrameId + 1;
+            const r = state.buffer.get(nextId);
+            state.buffer.delete(nextId);
+            state.lastFedFrameId = nextId;
+
+            if (state.waitingForKey && !r.isKey) {
+                // Skip delta while we wait for a recovery IDR, but keep
+                // the display rect-count consistent.
+                this._display.enqueueDummyRect(screenId, nextId,
+                                              r.x, r.y, r.width, r.height);
+                continue;
+            }
+            if (r.isKey) state.waitingForKey = false;
+
+            this._feedKasmVideoUdpRect(r.x, r.y, r.width, r.height,
+                                       r.data, nextId);
+        }
+
+        if (state.buffer.size === 0 && state.timer) {
+            clearTimeout(state.timer);
+            state.timer = null;
+        }
+    }
+
+    _handleVideoReorderTimeout(screenId) {
+        const state = this._videoReorder.screens.get(screenId);
+        if (!state || state.buffer.size === 0) return;
+
+        const ids = [...state.buffer.keys()].sort((a, b) => a - b);
+        const earliest = ids[0];
+        const expected = state.lastFedFrameId + 1;
+
+        if (state.lastFedFrameId === -1 || earliest > expected) {
+            // Skip past the gap. Subsequent deltas are useless until we
+            // see a new IDR, so flip the screen into waitingForKey.
+            state.lastFedFrameId = earliest - 1;
+            state.waitingForKey = true;
+
+            // Rate-limit refresh requests. A lost IDR is the worst case
+            // because the resulting refresh-IDR is itself large and just
+            // as likely to drop pieces, which would re-trigger a refresh
+            // and create an IDR storm. The natural GOP cycle (default 24
+            // frames) keeps us from being stuck forever even if every
+            // requested refresh fails to land.
+            const now = Date.now();
+            const reorder = this._videoReorder;
+            const cooldownExpired =
+                (now - reorder.lastRefreshTime) > reorder.refreshCooldownMs;
+            const udpPartials = this._udpBuffer ? this._udpBuffer.size : 0;
+
+            if (cooldownExpired && typeof this._requestFullRefresh === 'function') {
+                reorder.lastRefreshTime = now;
+                Log.Warn("Video reorder gap on screen " + screenId +
+                         ": expected " + expected + ", earliest buffered " +
+                         earliest + ", udp_partials=" + udpPartials +
+                         ". Requesting full refresh.");
+                this._requestFullRefresh();
+            } else {
+                Log.Warn("Video reorder gap on screen " + screenId +
+                         ": expected " + expected + ", earliest buffered " +
+                         earliest + ", udp_partials=" + udpPartials +
+                         ". Refresh suppressed (cooldown).");
+            }
+
+            this._drainVideoReorder(screenId);
+
+            // Re-arm the timer if we still have buffered frames after the
+            // drain (e.g., all deltas, still no IDR available).
+            if (state.buffer.size > 0 && !state.timer) {
+                state.timer = setTimeout(() => {
+                    state.timer = null;
+                    this._handleVideoReorderTimeout(screenId);
+                }, this._videoReorder.timeoutMs);
+            }
+        }
+    }
+
+    _feedKasmVideoUdpRect(x, y, width, height, data, frame_id) {
+        // Reassembled UDP buffer is complete by the time we get here, so
+        // build a one-shot sock-shim that throws on underrun.
+        const payload = data.subarray(12);
+        let off = 0;
+        const sockShim = {
+            rQwait: function () { return false; },
+            rQshift8: function () {
+                if (off >= payload.length)
+                    throw new Error("KasmVideo UDP rect underrun (u8)");
+                return payload[off++];
+            },
+            rQshiftBytes: function (n) {
+                if (off + n > payload.length)
+                    throw new Error("KasmVideo UDP rect underrun (bytes)");
+                const s = payload.subarray(off, off + n);
+                off += n;
+                return s;
+            }
+        };
+        const videoDecoder = this._decoders[encodings.encodingKasmVideo];
+        try {
+            videoDecoder.decodeRect(x, y, width, height, sockShim,
+                                    this._display, this._fbDepth, frame_id);
+        } catch (err) {
+            Log.Error("Error decoding KasmVideo rect over UDP: " + err);
+        }
     }
 
     _sendUdpUpgrade() {
@@ -3934,6 +4384,163 @@ export default class RFB extends EventTargetMixin {
 
         this._sock._sQlen += 3;
         this._sock.flush();
+    }
+
+    // -------- WebRTC media (libdatachannel migration, Phase 1+) --------
+
+    _handleWebRTCSignal() {
+        // Body: [u8 kind][u16 len][bytes payload]
+        if (this._sock.rQwait('WebRTC sig header', 3, 1)) { return false; }
+        const kind = this._sock.rQshift8();
+        const len  = this._sock.rQshift16();
+        if (this._sock.rQwait('WebRTC sig payload', len, 4)) { return false; }
+        const payload = len ? this._sock.rQshiftStr(len) : '';
+
+        // kind=5 (Fallback) is global — server is telling us WebRTC is
+        // unavailable / done. Tear down BOTH the live and the pending
+        // transports; image mode takes over. Route through the live
+        // transport's fallback path (it owns the _sendUdpDowngrade /
+        // _onWebRTCFallback chain). If only a pending transport
+        // exists, deliver to it so its `pending` _fallback branch
+        // abandons cleanly without dragging the (already-gone) live
+        // half along.
+        if (kind === WebRTCSignalKind.Fallback) {
+            if (this._webrtcPending) {
+                try { this._abandonPendingWebRTCMedia('server-fallback:' + payload); } catch (e) {}
+            }
+            if (this._webrtc) {
+                this._webrtc.signaling.deliver(kind, payload);
+                return true;
+            }
+            return true;
+        }
+        // Negotiation signals (kind=1 offer, kind=3 ICE candidate,
+        // kind=4 ICE servers) route to whichever transport is awaiting
+        // them. During a smooth-switch the pending transport owns
+        // them; otherwise the live transport.
+        const target = this._webrtcPending || this._webrtc;
+        if (!target) {
+            // Server sent us a WebRTC signal but we never initiated.
+            // Could be an old client config / replay. Acknowledge with
+            // a fallback so the server tears down its half cleanly.
+            Log.Warn('Got WebRTC signal kind=' + kind + ' but no local transport; ignoring');
+            return true;
+        }
+        target.signaling.deliver(kind, payload);
+        return true;
+    }
+
+    _initWebRTCMedia(opts) {
+        // Internal — only called by _applyWebRTCMediaState. Caller has
+        // already verified the toggle is on, the codec preference list
+        // is non-null, and isConnected is true. Re-check the primary-
+        // display guard for safety; secondary monitors run their own
+        // RFB sessions and aren't ganged onto a single PC.
+        const pending = !!(opts && opts.pending);
+        if (!pending && this._webrtc) return;
+        if (pending && this._webrtcPending) return;
+        if (!this._isPrimaryDisplay) return;
+        if (typeof RTCPeerConnection === 'undefined') {
+            Log.Warn('RTCPeerConnection not supported — staying on WebUDP/image mode');
+            return;
+        }
+        const codecs = this._webRTCMediaCodecs || ['H264'];
+        const transport = new WebRTCVideoTransport(this, this._sock, { codecs, pending });
+        if (pending) {
+            this._webrtcPending = transport;
+        } else {
+            this._webrtc = transport;
+        }
+        transport.start();
+    }
+
+    _onWebRTCVideoReady(video, transport) {
+        // Overlay the <video> on top of the canvas. The canvas
+        // remains in the DOM so the image-mode fallback path can
+        // take over instantly when WebRTC fails. When this video
+        // belongs to a *pending* transport (smooth codec switch), it
+        // sits on a higher z-index than the live one and only becomes
+        // visible after `playing` fires — at which point we swap it
+        // into the `_webrtc` slot and drop the old transport.
+        const pending = (transport === this._webrtcPending);
+        try {
+            video.style.position = 'absolute';
+            video.style.left   = '0';
+            video.style.top    = '0';
+            video.style.width  = '100%';
+            video.style.height = '100%';
+            // Pending overlay must sit above the live overlay (z=1) so
+            // it visually wins on opacity:1. Both stay click-through.
+            video.style.zIndex = pending ? '2' : '1';
+            // CRITICAL: the overlay must be click-through. Without this,
+            // the <video> intercepts all mouse/touch events and the
+            // canvas underneath (where rfb's input handlers live)
+            // never receives them — the user can see the stream but
+            // can't interact with the remote desktop.
+            video.style.pointerEvents = 'none';
+            // Hide until the first frame is decoded and ready to paint.
+            // Otherwise the user sees a black <video> rectangle covering
+            // whatever the canvas had during ICE/SDP negotiation.
+            video.style.opacity = '0';
+            video.addEventListener('playing', () => {
+                video.style.opacity = '1';
+                if (pending) this._promotePendingWebRTC(transport);
+            }, { once: true });
+            // Find the canvas's parent. _screen is the standard mount
+            // point; if a project embeds rfb differently, the hook can
+            // be overridden by subclassing.
+            const host = this._screen || this._target;
+            if (host && host.appendChild) host.appendChild(video);
+        } catch (e) {
+            Log.Warn('Failed to mount WebRTC <video>: ' + e);
+        }
+    }
+
+    // First decoded frame from the pending transport has painted — the
+    // user is now looking at the new codec. Drop the old transport and
+    // its <video> element, promote pending into _webrtc.
+    _promotePendingWebRTC(transport) {
+        if (transport !== this._webrtcPending) return;  // superseded
+        Log.Info('Pending WebRTC media is playing — promoting ' +
+                 (this._webrtcPendingCodec || '?'));
+        const oldWebrtc = this._webrtc;
+        const oldVideo  = oldWebrtc && oldWebrtc.video;
+        if (oldWebrtc) {
+            try { oldWebrtc.stop(); } catch (e) {}
+        }
+        if (oldVideo && oldVideo.parentNode) {
+            oldVideo.parentNode.removeChild(oldVideo);
+        }
+        this._webrtc = this._webrtcPending;
+        this._webrtcCurrentCodec = this._webrtcPendingCodec;
+        // Drop pending overlay back to z=1 now that it's the live one.
+        try {
+            if (this._webrtc.video) this._webrtc.video.style.zIndex = '1';
+        } catch (e) {}
+        this._webrtcPending = null;
+        this._webrtcPendingCodec = null;
+    }
+
+    _onWebRTCFallback(reason) {
+        Log.Warn('WebRTC media fallback (' + reason + ') — image-mode/WebUDP taking over');
+        // Preserve a freeze-frame on the canvas before we drop the
+        // <video> overlay so the user doesn't see a black flash while
+        // image-mode catches up.
+        this._freezeFrameWebRTC();
+        if (this._webrtc && this._webrtc.video && this._webrtc.video.parentNode) {
+            this._webrtc.video.parentNode.removeChild(this._webrtc.video);
+        }
+        this._webrtc = null;
+        this._webrtcCurrentCodec = null;
+        // Also bin any pending — there's no live transport left for
+        // it to swap into and the server has already declined WebRTC.
+        if (this._webrtcPending) {
+            this._abandonPendingWebRTCMedia('fallback-cascade');
+        }
+        // Do NOT auto-retry: if the server doesn't support WebRTC
+        // media, retrying would loop. A subsequent toggle or stream-
+        // mode change will route through _applyWebRTCMediaState and
+        // try again on the user's terms.
     }
 
     _handleUdpUpgrade() {

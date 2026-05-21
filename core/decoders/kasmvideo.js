@@ -103,9 +103,23 @@ export default class KasmVideoDecoder {
         // frame arrives. Leave the canvas alone in that mode so the
         // user sees the last image-mode frame until the <video> takes
         // over on its 'playing' event.
-        const webrtcActive = this._rfb && this._rfb._webrtc &&
-            (this._rfb._webrtc.state === 'connected' ||
-             this._rfb._webrtc.state === 'negotiating');
+        // Per-screen WebRTC (one PeerConnection per screen): a skip-rect
+        // is only emitted by the server for a screen it is streaming over
+        // WebRTC, so if any screen transport is still up (negotiating or
+        // connected) we leave the canvas alone and let the <video> overlay
+        // show through. A screen that has fallen back to WebSocket video
+        // emits real encoded rects, not skip-rects, so it isn't affected.
+        let webrtcActive = false;
+        const screens = this._rfb && this._rfb._webrtcScreens;
+        if (screens) {
+            for (const slot of screens.values()) {
+                const t = slot.live || slot.pending;
+                if (t && t.state !== 'closed' && t.state !== 'fallback') {
+                    webrtcActive = true;
+                    break;
+                }
+            }
+        }
         if (!webrtcActive) {
             display.clearRect(x, y, width, height, 0, frameId, false);
         }

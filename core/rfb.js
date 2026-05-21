@@ -164,17 +164,25 @@ export default class RFB extends EventTargetMixin {
         // as fallback when the server doesn't have enableWebRTCMedia
         // turned on (kind=6 just gets bounced and the server keeps
         // using WebUDP / image mode).
-        this._webrtc = null;
-        this._webrtcCurrentCodec = null;  // codec the active transport offered
-        // Outgoing transport during a smooth-switch renegotiation. The
-        // active `_webrtc` keeps decoding the old codec onto its
-        // <video> element while `_webrtcPending` negotiates the new
-        // codec in parallel. On `playing` (first decoded frame) of the
-        // pending <video>, the old one is removed and the pending one
-        // becomes active. See _applyWebRTCMediaState and
-        // _onWebRTCVideoReady for the swap logic.
-        this._webrtcPending = null;
-        this._webrtcPendingCodec = null;
+        // Per-screen WebRTC media transports for screens THIS window
+        // renders. Multi-monitor sessions run one RTCPeerConnection per X
+        // screen (see doc/MULTI_MONITOR_WEBRTC_PLAN.md). Map keyed by
+        // screenId (the server's ScreenEncoderManager index):
+        //   screenId -> { live: WebRTCVideoTransport|null,
+        //                 pending: WebRTCVideoTransport|null }
+        // `pending` is a smooth codec-switch transport that replaces
+        // `live` on its first decoded frame (see _onWebRTCVideoReady /
+        // _promotePendingWebRTCScreen). A single-screen session is just a
+        // map of size 1 keyed by screenId 0.
+        this._webrtcScreens = new Map();
+        // Secondary-only: screenId this window must request a fresh offer for
+        // after a reindex, deferred until its relay port is up. null = none.
+        this._pendingWebRTCOfferRequest = null;
+        // Session-level negotiation state (the codec is session-wide).
+        this._webrtcSessionActive = false;  // capability advertised to server
+        this._webrtcSessionCodec = null;    // codecKey currently advertised
+        this._webrtcIceServers = [];        // [{urls}] from the kind=4 signal
+        this._webrtcIceServersRaw = '';     // raw newline list, for relaying
 
         this._hiDpi = 'hiDpi' in options ? !!options.hiDpi : false;
         this._enableQOI = false;
@@ -232,8 +240,8 @@ export default class RFB extends EventTargetMixin {
         this._mouseButtonMask = 0;
         this._mouseLastMoveTime = 0;
         this._pointerLock = false;
-        this._directMouseEnabled = false;
-        this._directMouseRemainder = { x: 0, y: 0 };
+        this._pointerLockPos = { x: 0, y: 0 };
+        this._pointerRelativeEnabled = false;
         this._mouseLastPinchAndZoomTime = 0;
         this._viewportDragging = false;
         this._viewportDragPos = {};
@@ -402,11 +410,20 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    get pointerRelative() { return this._directMouseEnabled; }
+    get pointerRelative() { return this._pointerRelativeEnabled; }
     set pointerRelative(value)
     {
-        this._directMouseEnabled = value;
-        this._directMouseRemainder = { x: 0, y: 0 };
+        this._pointerRelativeEnabled = value;
+        if (value) {
+            let max_w = ((this._display.scale === 1) ? this._fbWidth : (this._fbWidth * this._display.scale));
+            let max_h = ((this._display.scale === 1) ? this._fbHeight : (this._fbHeight * this._display.scale));
+            this._pointerLockPos.x = Math.floor(max_w / 2);
+            this._pointerLockPos.y = Math.floor(max_h / 2);
+
+            // reset the cursor position to center
+            this._mousePos = { x: this._pointerLockPos.x , y: this._pointerLockPos.y };
+            this._cursor.move(this._pointerLockPos.x, this._pointerLockPos.y);
+        }
     }
 
     get keyboard() { return this._keyboard; }
@@ -507,7 +524,7 @@ export default class RFB extends EventTargetMixin {
 
     get antiAliasing() { return this._display.antiAliasing; }
     set antiAliasing(value) {
-       this._display.antiAliasing = value;
+        this._display.antiAliasing = value;
     }
 
     get jpegVideoQuality() { return this._jpegVideoQuality; }
@@ -893,6 +910,11 @@ export default class RFB extends EventTargetMixin {
     // (wantOn=false), we still freeze-frame the old <video> until the
     // canvas underneath catches up — see _freezeFrameWebRTC.
     _applyWebRTCMediaState(reason) {
+        // Only the primary window advertises session capability; the
+        // server then sends one offer per screen. Screens that this
+        // window doesn't render are relayed to their secondary window
+        // (see _dispatchWebRTCSignal). Secondary windows never call this —
+        // they are purely reactive to relayed offers.
         if (!this._isPrimaryDisplay) return;
         if (typeof RTCPeerConnection === 'undefined') return;
 
@@ -900,104 +922,137 @@ export default class RFB extends EventTargetMixin {
             ? this._streamModeToWebRTCCodecs(this._streamMode)
             : null;
         const wantOn  = !!wantCodecs;
-        const haveOn  = !!this._webrtc;
         const codecKey = wantCodecs ? wantCodecs.join(',') : '';
-        const haveKey  = this._webrtcCurrentCodec || '';
-        const pendingKey = this._webrtcPendingCodec || '';
 
-        // No transport yet — straight-through initial negotiation.
-        if (!haveOn && wantOn && this.isConnected) {
-            Log.Info('Starting WebRTC media (codec preference=' +
-                     codecKey + ', reason=' + reason + ')');
-            this._webRTCMediaCodecs = wantCodecs;
-            this._webrtcCurrentCodec = codecKey;
-            this._initWebRTCMedia();
+        if (wantOn && this.isConnected) {
+            // Advertise (or re-advertise on a codec change). The server
+            // replies with the ICE-servers list + one offer per active
+            // screen; a re-advertisement while screens are live triggers a
+            // server-side smooth codec switch (pending transports).
+            if (!this._webrtcSessionActive || this._webrtcSessionCodec !== codecKey) {
+                Log.Info('Advertising WebRTC capability (codecs=' + codecKey +
+                    ', reason=' + reason + ')');
+                this._webRTCMediaCodecs = wantCodecs;
+                this._webrtcSessionActive = true;
+                this._webrtcSessionCodec = codecKey;
+                try {
+                    this._sendWebRTCFrame(WebRTCSignalKind.ClientCapabilities,
+                        WEBRTC_SESSION_SCREEN, codecKey);
+                } catch (e) {
+                    Log.Error('WebRTC capability advertisement failed: ' + e);
+                }
+            }
             return;
         }
 
-        // Image-mode requested with a live transport. Hand off to the
-        // canvas: capture the last decoded frame as a freeze-frame on
-        // the canvas, then drop the <video> overlay so image-mode
-        // updates show through. Server-side, kind=5 'unsubscribe'
-        // tears down the live transport.
-        if (haveOn && !wantOn) {
-            Log.Info('Switching WebRTC media -> image mode (reason=' +
-                     reason + ')');
-            this._abandonPendingWebRTCMedia('switch-to-image');
+        // Image-mode requested while WebRTC is active: freeze-frame the
+        // canvas, tell the server to drop the whole session, and tear
+        // down every screen's transport. Image mode shows through.
+        if (!wantOn && this._webrtcSessionActive) {
+            Log.Info('Disabling WebRTC media (reason=' + reason + ')');
             this._freezeFrameWebRTC();
             try {
-                if (this._webrtc.signaling)
-                    this._webrtc.signaling.sendFallback('unsubscribe');
+                this._sendWebRTCFrame(WebRTCSignalKind.Fallback,
+                    WEBRTC_SESSION_SCREEN, 'unsubscribe');
             } catch (e) {}
-            try { this._webrtc.stop(); } catch (e) {}
-            this._webrtc = null;
-            this._webrtcCurrentCodec = null;
-            return;
-        }
-
-        // Same codec as the live transport — nothing to do, even if
-        // the pending one was mid-negotiation for something else
-        // (the caller has rolled the preference back to the current).
-        if (haveOn && wantOn && codecKey === haveKey) {
-            this._abandonPendingWebRTCMedia('codec-rollback');
-            return;
-        }
-
-        // Codec change with a live transport — smooth-switch path.
-        // Cancel any prior pending (user clicked through codecs fast)
-        // and spin up a new pending transport. Server side: the
-        // kind=6 we send next routes into pendingWebRTCMedia on the
-        // server because the live transport is still alive.
-        if (haveOn && wantOn && codecKey !== haveKey) {
-            if (pendingKey === codecKey) {
-                // Already negotiating the exact codec the user wants;
-                // don't restart and lose ICE progress.
-                return;
-            }
-            Log.Info('Starting pending WebRTC media (codec preference=' +
-                     codecKey + ', reason=' + reason +
-                     ', live codec=' + haveKey + ')');
-            this._abandonPendingWebRTCMedia('superseded');
-            this._webRTCMediaCodecs = wantCodecs;
-            this._webrtcPendingCodec = codecKey;
-            this._initWebRTCMedia({ pending: true });
-            return;
+            this._teardownAllWebRTCScreens();
+            this._webrtcSessionActive = false;
+            this._webrtcSessionCodec = null;
         }
     }
 
-    // Capture the last decoded frame from the live WebRTC <video> onto
-    // the canvas so the user sees a still image during the gap before
-    // the next mode's first paint, instead of an empty/black region.
+    // Write one WebRTC signal frame to the server's WebSocket. The sink
+    // every local per-screen WebRTCSignaling uses.
+    _sendWebRTCFrame(kind, screenId, payload) {
+        writeWebRTCFrame(this._sock, kind, screenId, payload);
+    }
+
+    _makeLocalSignaling(screenId) {
+        return new WebRTCSignaling(screenId,
+            (k, sid, p) => this._sendWebRTCFrame(k, sid, p));
+    }
+
+    _teardownAllWebRTCScreens() {
+        for (const slot of this._webrtcScreens.values()) {
+            if (slot.pending) { try { slot.pending.stop(); } catch (e) {} }
+            if (slot.live)    { try { slot.live.stop(); }    catch (e) {} }
+        }
+        this._webrtcScreens.clear();
+    }
+
+    // SECONDARY: this window was reassigned a new screenIndex because a
+    // non-last monitor closed and the windows re-densified (display.js
+    // removeScreen). Any per-screen WebRTC transport this window still holds
+    // was negotiated for its PREVIOUS screenId; its <video> overlay is
+    // mounted full-window (100%x100%) and would sit frozen on top of the
+    // canvas — where the new screen's WebSocket video now lands — until the
+    // stale PC's ICE-disconnect grace (~5s) finally tears it down. Drop those
+    // stale transports immediately so the new screen renders right away.
+    _teardownStaleSecondaryWebRTC(keepScreenId) {
+        let toreDown = false;
+        for (const [sid, slot] of Array.from(this._webrtcScreens)) {
+            if (sid === keepScreenId) continue;
+            Log.Info('[WEBRTC-DIAG] secondary dropping stale transport screen ' +
+                sid + ' after reindex to ' + keepScreenId);
+            if (slot.pending) { try { slot.pending.stop(); } catch (e) {} }
+            if (slot.live)    { try { slot.live.stop(); }    catch (e) {} }
+            this._webrtcScreens.delete(sid);
+            toreDown = true;
+        }
+        // If this window was streaming over WebRTC for its previous screenId,
+        // it now needs a fresh offer for the screen it took over. The server
+        // can't detect the window swap (the slot's RandR id is unchanged), so
+        // request it explicitly — deferred until our relay port for the new
+        // screen is established (_maybeRequestPendingWebRTCOffer).
+        if (toreDown && !this._webrtcScreens.has(keepScreenId)) {
+            this._pendingWebRTCOfferRequest = keepScreenId;
+        }
+    }
+
+    // SECONDARY: our relay port for the new screen is up; if a reindex left
+    // us without a transport for it, ask the server to (re)offer it so the
+    // monitor recovers RTP instead of staying on WebSocket video.
+    _maybeRequestPendingWebRTCOffer() {
+        const sid = this._pendingWebRTCOfferRequest;
+        if (sid == null) return;
+        this._pendingWebRTCOfferRequest = null;
+        if (this._webrtcScreens.has(sid)) return;   // already (re)building
+        Log.Info('[WEBRTC-DIAG] secondary requesting fresh offer for screen ' + sid);
+        if (this._display && typeof this._display.relayWebRTCSignalUp === 'function') {
+            this._display.relayWebRTCSignalUp(WebRTCSignalKind.RequestOffer, sid, '');
+        }
+    }
+
+    // Capture the last decoded frame from any live WebRTC <video> onto
+    // the canvas so the user sees a still image during the gap before the
+    // next mode's first paint, instead of an empty/black region.
     _freezeFrameWebRTC() {
         try {
-            const video = this._webrtc && this._webrtc.video;
-            if (!video || !video.videoWidth || !video.videoHeight) return;
+            let video = null;
+            for (const slot of this._webrtcScreens.values()) {
+                if (slot.live && slot.live.video && slot.live.video.videoWidth) {
+                    video = slot.live.video; break;
+                }
+            }
+            if (!video || !video.videoHeight) return;
             const canvas = this._display && this._display._target;
             if (!canvas || !canvas.getContext) return;
             const ctx = canvas.getContext('2d');
             if (!ctx) return;
-            // Paint scaled to canvas dimensions. The next image-mode
-            // framebuffer update will overwrite this; the freeze-frame
-            // only exists to bridge the gap.
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         } catch (e) {
             Log.Warn('Freeze-frame capture failed: ' + e);
         }
     }
 
-    _abandonPendingWebRTCMedia(reason) {
-        if (!this._webrtcPending) return;
-        Log.Info('Abandoning pending WebRTC media (' + reason + ')');
-        try {
-            if (this._webrtcPending.signaling)
-                this._webrtcPending.signaling.sendFallback('renegotiate');
-        } catch (e) {}
-        try { this._webrtcPending.stop(); } catch (e) {}
-        if (this._webrtcPending.video && this._webrtcPending.video.parentNode) {
-            this._webrtcPending.video.parentNode.removeChild(this._webrtcPending.video);
-        }
-        this._webrtcPending = null;
-        this._webrtcPendingCodec = null;
+    // Pending (codec-switch) transport for one screen failed before it
+    // could promote — drop just it, keep the live transport streaming.
+    _abandonPendingWebRTCScreen(screenId, reason) {
+        const slot = this._webrtcScreens.get(screenId);
+        if (!slot || !slot.pending) return;
+        Log.Info('Abandoning pending WebRTC (screen ' + screenId + '): ' + reason);
+        try { slot.pending.stop(); } catch (e) {}
+        slot.pending = null;
     }
 
     // ===== PUBLIC METHODS =====
@@ -1281,7 +1336,7 @@ export default class RFB extends EventTargetMixin {
                     navigator.clipboard.readText().then(function (text) {
                         this.clipboardPasteFrom(text);
                     }.bind(this)).catch(function () {
-                      return Log.Debug("Failed to read system clipboard");
+                        return Log.Debug("Failed to read system clipboard");
                     });
                 }
             }
@@ -1428,7 +1483,7 @@ export default class RFB extends EventTargetMixin {
                 Log.Debug("Starting VNC handshake");
             } else {
                 this._fail("Unexpected server connection while " +
-                           this._rfbConnectionState);
+                    this._rfbConnectionState);
             }
         });
         this._sock.on('close', (e) => {
@@ -1460,7 +1515,7 @@ export default class RFB extends EventTargetMixin {
             } else if (e.wasClean === false || e.code === 1006) {
                 this._rfbCleanDisconnect = false;
             }
-        switch (this._rfbConnectionState) {
+            switch (this._rfbConnectionState) {
                 case 'connecting':
                     this._fail("Connection closed " + msg);
                     break;
@@ -1475,11 +1530,11 @@ export default class RFB extends EventTargetMixin {
                     break;
                 case 'disconnected':
                     this._fail("Unexpected server disconnect " +
-                               "when already disconnected " + msg);
+                        "when already disconnected " + msg);
                     break;
                 default:
                     this._fail("Unexpected server disconnect before connecting " +
-                               msg);
+                        msg);
                     break;
             }
             this._sock.off('close');
@@ -1634,21 +1689,21 @@ export default class RFB extends EventTargetMixin {
                 const u8 = new Uint8Array(e.data);
                 // Got an UDP packet. Do we need reassembly?
                 const id = parseInt(u8[0] +
-                                    (u8[1] << 8) +
-                                    (u8[2] << 16) +
-                                    (u8[3] << 24), 10);
+                    (u8[1] << 8) +
+                    (u8[2] << 16) +
+                    (u8[3] << 24), 10);
                 const i = parseInt(u8[4] +
-                                   (u8[5] << 8) +
-                                   (u8[6] << 16) +
-                                   (u8[7] << 24), 10);
+                    (u8[5] << 8) +
+                    (u8[6] << 16) +
+                    (u8[7] << 24), 10);
                 const pieces = parseInt(u8[8] +
-                                        (u8[9] << 8) +
-                                        (u8[10] << 16) +
-                                        (u8[11] << 24), 10);
+                    (u8[9] << 8) +
+                    (u8[10] << 16) +
+                    (u8[11] << 24), 10);
                 const hash = parseInt(u8[12] +
-                                        (u8[13] << 8) +
-                                        (u8[14] << 16) +
-                                        (u8[15] << 24), 10);
+                    (u8[13] << 8) +
+                    (u8[14] << 16) +
+                    (u8[15] << 24), 10);
                 // TODO: check the hash. It's the low 32 bits of XXH64, seed 0
                 // Wire is uint32_t little-endian (see common/network/Udp.cxx udpsend()).
                 // Use bitwise OR + unsigned >>> 0 so the high bit doesn't sign-flip the
@@ -1669,7 +1724,7 @@ export default class RFB extends EventTargetMixin {
                     // Hard cap on piece count to refuse poisoned packets.
                     if (pieces > 65536 || i >= pieces) {
                         Log.Warn("Discarding malformed UDP piece (id=" + id +
-                                 ", i=" + i + ", pieces=" + pieces + ")");
+                            ", i=" + i + ", pieces=" + pieces + ")");
                         return;
                     }
 
@@ -1713,7 +1768,7 @@ export default class RFB extends EventTargetMixin {
 
                         let item = {
                             total_pieces: pieces,   // number of pieces expected
-                                arrival: now,       //time first piece was recieved
+                            arrival: now,       //time first piece was recieved
                             recieved_pieces: 1,     // current number of pieces in data
                             total_bytes: 0,         // total size of all data pieces combined
                             data: new Array(pieces)
@@ -1726,7 +1781,7 @@ export default class RFB extends EventTargetMixin {
             }
         }
 
-	    if (this._useUdp && typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
+        if (this._useUdp && typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
             setTimeout(function() { this._sendUdpUpgrade() }.bind(this), 3000);
         }
 
@@ -1849,7 +1904,7 @@ export default class RFB extends EventTargetMixin {
 
         // Re-enable pointerLock if relative cursor is enabled
         // pointerLock must come from user initiated event
-        if (!this._pointerLock && this._directMouseEnabled) {
+        if (!this._pointerLock && this._pointerRelativeEnabled) {
             this.pointerLock = true;
         }
 
@@ -1952,7 +2007,7 @@ export default class RFB extends EventTargetMixin {
             RFB.messages.setDesktopSize(this._sock, size, this._screenFlags);
 
             Log.Debug('Requested new desktop size: ' +
-                   size.serverWidth + 'x' + size.serverHeight);
+                size.serverWidth + 'x' + size.serverHeight);
         } else if (this._display.screenIndex > 0) {
             //re-register the secondary display with new resolution
             let details = null
@@ -2015,7 +2070,7 @@ export default class RFB extends EventTargetMixin {
             case 'connected':
                 if (oldstate !== 'connecting') {
                     Log.Error("Bad transition to connected state, " +
-                               "previous connection state: " + oldstate);
+                        "previous connection state: " + oldstate);
                     return;
                 }
                 break;
@@ -2023,7 +2078,7 @@ export default class RFB extends EventTargetMixin {
             case 'disconnected':
                 if (oldstate !== 'disconnecting') {
                     Log.Error("Bad transition to disconnected state, " +
-                               "previous connection state: " + oldstate);
+                        "previous connection state: " + oldstate);
                     return;
                 }
                 break;
@@ -2031,7 +2086,7 @@ export default class RFB extends EventTargetMixin {
             case 'connecting':
                 if (oldstate !== '') {
                     Log.Error("Bad transition to connecting state, " +
-                               "previous connection state: " + oldstate);
+                        "previous connection state: " + oldstate);
                     return;
                 }
                 break;
@@ -2039,7 +2094,7 @@ export default class RFB extends EventTargetMixin {
             case 'disconnecting':
                 if (oldstate !== 'connected' && oldstate !== 'connecting') {
                     Log.Error("Bad transition to disconnecting state, " +
-                               "previous connection state: " + oldstate);
+                        "previous connection state: " + oldstate);
                     return;
                 }
                 break;
@@ -2100,10 +2155,10 @@ export default class RFB extends EventTargetMixin {
             case 'disconnected':
                 this.dispatchEvent(new CustomEvent(
                     "disconnect", { detail:
-                                    { clean: this._rfbCleanDisconnect,
-                                      reason: this._disconnectReason,
-                                      code: this._disconnectCode,
-                                      serverNotice: this._lastServerDisconnectNotice } }));
+                            { clean: this._rfbCleanDisconnect,
+                                reason: this._disconnectReason,
+                                code: this._disconnectCode,
+                                serverNotice: this._lastServerDisconnectNotice } }));
                 this._disconnectReason = null;
                 this._disconnectCode = null;
                 this._lastServerDisconnectNotice = null;
@@ -2146,7 +2201,7 @@ export default class RFB extends EventTargetMixin {
     _setCapability(cap, val) {
         this._capabilities[cap] = val;
         this.dispatchEvent(new CustomEvent("capabilities",
-                                           { detail: { capabilities: this._capabilities } }));
+            { detail: { capabilities: this._capabilities } }));
     }
 
     _proxyRFBMessage(messageType, data) {
@@ -2449,7 +2504,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         let pos;
-        if (this._pointerLock) {
+        if (this._pointerLock && !this._pointerRelativeEnabled) {
             let max_w = ((this._display.scale === 1) ? this._fbWidth : (this._fbWidth * this._display.scale));
             let max_h = ((this._display.scale === 1) ? this._fbHeight : (this._fbHeight * this._display.scale));
             pos = {
@@ -2467,9 +2522,14 @@ export default class RFB extends EventTargetMixin {
                 pos.y = max_h;
             }
             this._cursor.move(pos.x, pos.y);
+        } else if (this._pointerLock && this._pointerRelativeEnabled) {
+            pos = {
+                x: this._mousePos.x + ev.movementX,
+                y: this._mousePos.y + ev.movementY,
+            };
         } else {
             pos = clientToElement(ev.clientX, ev.clientY,
-                                  this._canvas);
+                this._canvas);
         }
 
         this._mouseLastScreenIndex = this._display.screenIndex;
@@ -2478,7 +2538,7 @@ export default class RFB extends EventTargetMixin {
         switch (ev.type) {
             case 'mousedown':
                 if (this._display.screens.length === 0 || window.self === window.top) {
-                	ev.preventDefault();
+                    ev.preventDefault();
                 }
                 setCapture(this._canvas);
 
@@ -2515,34 +2575,8 @@ export default class RFB extends EventTargetMixin {
                 Log.Debug('Mouse Up');
                 break;
             case 'mousemove':
-            	ev.preventDefault();
-                if (this._isPrimaryDisplay && this._pointerLock && this._directMouseEnabled) {
-                    // Direct drive: convert display-pixel deltas to server-pixel
-                    // deltas by dividing by the viewport scale factor.  Accumulate
-                    // the sub-pixel remainder so there is no drift at non-1x scales.
-                    const scale = this._display.scale || 1;
-                    this._directMouseRemainder.x += ev.movementX / scale;
-                    this._directMouseRemainder.y += ev.movementY / scale;
-                    const serverDX = Math.trunc(this._directMouseRemainder.x);
-                    const serverDY = Math.trunc(this._directMouseRemainder.y);
-                    this._directMouseRemainder.x -= serverDX;
-                    this._directMouseRemainder.y -= serverDY;
-                    if (serverDX !== 0 || serverDY !== 0) {
-                        this._sendDirectMouse(serverDX, serverDY, this._mouseButtonMask, 0, 0);
-                    }
-                    // Track cursor position in canvas-relative pixels for clamping,
-                    // then convert to client (viewport) coordinates for cursor.move().
-                    // The VNC canvas is CSS-centered in the window (pillarbox/letterbox),
-                    // so canvas-relative coords differ from client coords by the canvas
-                    // offset.  cursor.move() uses position:fixed and expects client coords.
-                    const max_w = (scale === 1) ? this._fbWidth : (this._fbWidth * scale);
-                    const max_h = (scale === 1) ? this._fbHeight : (this._fbHeight * scale);
-                    const newX = Math.max(0, Math.min(max_w, this._mousePos.x + ev.movementX));
-                    const newY = Math.max(0, Math.min(max_h, this._mousePos.y + ev.movementY));
-                    this._mousePos = { x: newX, y: newY };
-                    const canvasBounds = this._canvas.getBoundingClientRect();
-                    this._cursor.move(newX + canvasBounds.left, newY + canvasBounds.top);
-                } else if (this._isPrimaryDisplay) {
+                ev.preventDefault();
+                if (this._isPrimaryDisplay) {
                     this._handleMouseMove(pos.x, pos.y, (ev.buttons > 0));
                 } else {
                     this._proxyRFBMessage('mousemove', [ pos.x, pos.y, (ev.buttons > 0), this._sendLeftClickonNextMove ]);
@@ -2605,7 +2639,7 @@ export default class RFB extends EventTargetMixin {
             const deltaY = this._viewportDragPos.y - y;
 
             if (this._viewportHasMoved || (Math.abs(deltaX) > dragThreshold ||
-                                           Math.abs(deltaY) > dragThreshold)) {
+                Math.abs(deltaY) > dragThreshold)) {
                 this._viewportHasMoved = true;
 
                 this._viewportDragPos = {'x': x, 'y': y};
@@ -2652,7 +2686,7 @@ export default class RFB extends EventTargetMixin {
     _handleDelayedMouseMove() {
         this._mouseMoveTimer = null;
         this._sendMouse(this._mousePos.x, this._mousePos.y,
-                        this._mouseButtonMask);
+            this._mouseButtonMask);
         this._mouseLastMoveTime = Date.now();
     }
 
@@ -2684,9 +2718,17 @@ export default class RFB extends EventTargetMixin {
         if (this._viewOnly) { return; } // View only, skip mouse events
         if (!this._isPrimaryDisplay) { return; }
 
-        if (this._pointerLock && this._directMouseEnabled) {
-            // Direct drive: button state changes only (movement is sent raw from _handleMouse)
-            this._sendDirectMouse(0, 0, mask, 0, 0);
+        if (this._pointerLock && this._pointerRelativeEnabled) {
+
+            // Use releative cursor position
+            var rel_16_x = toSignedRelative16bit(x - this._pointerLockPos.x);
+            var rel_16_y = toSignedRelative16bit(y - this._pointerLockPos.y);
+
+            RFB.messages.pointerEvent(this._sock, rel_16_x, rel_16_y, mask);
+
+            // reset the cursor position to center
+            this._mousePos = { x: this._pointerLockPos.x , y: this._pointerLockPos.y };
+            this._cursor.move(this._pointerLockPos.x, this._pointerLockPos.y);
         } else {
             RFB.messages.pointerEvent(this._sock, this._display.absX(x), this._display.absY(y), mask);
         }
@@ -2697,20 +2739,11 @@ export default class RFB extends EventTargetMixin {
         if (this._rfbConnectionState !== 'connected') { return; }
         if (this._viewOnly) { return; } // View only, skip mouse events
 
-        if (this._pointerLock && this._directMouseEnabled) {
-            this._sendDirectMouse(0, 0, this._mouseButtonMask, dX, dY);
-        } else if (this._isPrimaryDisplay) {
+        if (this._isPrimaryDisplay) {
             RFB.messages.pointerEvent(this._sock, this._display.absX(x), this._display.absY(y), 0, dX, dY);
         } else {
             this._proxyRFBMessage('scroll', [ x, y, dX, dY ]);
         }
-    }
-
-    _sendDirectMouse(dx, dy, buttonMask, scrollDX, scrollDY) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; }
-        if (!this._isPrimaryDisplay) { return; }
-        RFB.messages.directMouseEvent(this._sock, dx, dy, buttonMask, scrollDX, scrollDY);
     }
 
     _handleWheel(ev) {
@@ -2782,7 +2815,7 @@ export default class RFB extends EventTargetMixin {
 
     _handleTapEvent(ev, bmask) {
         let pos = clientToElement(ev.detail.clientX, ev.detail.clientY,
-                                  this._canvas);
+            this._canvas);
 
         // If the user quickly taps multiple times we assume they meant to
         // hit the same spot, so slightly adjust coordinates
@@ -2796,8 +2829,8 @@ export default class RFB extends EventTargetMixin {
 
             if (distance < DOUBLE_TAP_THRESHOLD) {
                 pos = clientToElement(this._gestureFirstDoubleTapEv.detail.clientX,
-                                      this._gestureFirstDoubleTapEv.detail.clientY,
-                                      this._canvas);
+                    this._gestureFirstDoubleTapEv.detail.clientY,
+                    this._canvas);
             } else {
                 this._gestureFirstDoubleTapEv = ev;
             }
@@ -2827,7 +2860,7 @@ export default class RFB extends EventTargetMixin {
         let magnitude;
 
         let pos = clientToElement(ev.detail.clientX, ev.detail.clientY,
-                                  this._canvas);
+            this._canvas);
         switch (ev.type) {
             case 'gesturestart':
                 switch (ev.detail.type) {
@@ -2857,7 +2890,7 @@ export default class RFB extends EventTargetMixin {
                         break;
                     case 'pinch':
                         this._gestureLastMagnitudeX = Math.hypot(ev.detail.magnitudeX,
-                                                                 ev.detail.magnitudeY);
+                            ev.detail.magnitudeY);
                         this._fakeMouseMove(ev, pos.x, pos.y);
                         break;
                 }
@@ -2990,7 +3023,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         const cversion = "00" + parseInt(this._rfbVersion, 10) +
-                       ".00" + ((this._rfbVersion * 10) % 10);
+            ".00" + ((this._rfbVersion * 10) % 10);
         this._sock.sendString("RFB " + cversion + "\n");
         Log.Debug('Sent ProtocolVersion: ' + cversion);
 
@@ -3064,18 +3097,18 @@ export default class RFB extends EventTargetMixin {
             this.dispatchEvent(new CustomEvent(
                 "securityfailure",
                 { detail: { status: this._securityStatus,
-                            reason: reason } }));
+                        reason: reason } }));
 
             return this._fail("Security negotiation failed on " +
-                              this._securityContext +
-                              " (reason: " + reason + ")");
+                this._securityContext +
+                " (reason: " + reason + ")");
         } else {
             this.dispatchEvent(new CustomEvent(
                 "securityfailure",
                 { detail: { status: this._securityStatus } }));
 
             return this._fail("Security negotiation failed on " +
-                              this._securityContext);
+                this._securityContext);
         }
     }
 
@@ -3091,9 +3124,9 @@ export default class RFB extends EventTargetMixin {
         }
 
         const xvpAuthStr = String.fromCharCode(this._rfbCredentials.username.length) +
-                           String.fromCharCode(this._rfbCredentials.target.length) +
-                           this._rfbCredentials.username +
-                           this._rfbCredentials.target;
+            String.fromCharCode(this._rfbCredentials.target.length) +
+            this._rfbCredentials.username +
+            this._rfbCredentials.target;
         this._sock.sendString(xvpAuthStr);
         this._rfbAuthScheme = 2;
         return this._negotiateAuthentication();
@@ -3257,14 +3290,14 @@ export default class RFB extends EventTargetMixin {
             if (serverSupportedTunnelTypes[0].vendor != clientSupportedTunnelTypes[0].vendor ||
                 serverSupportedTunnelTypes[0].signature != clientSupportedTunnelTypes[0].signature) {
                 return this._fail("Client's tunnel type had the incorrect " +
-                                  "vendor or signature");
+                    "vendor or signature");
             }
             Log.Debug("Selected tunnel type: " + clientSupportedTunnelTypes[0]);
             this._sock.send([0, 0, 0, 0]);  // use NOTUNNEL
             return false; // wait until we receive the sub auth count to continue
         } else {
             return this._fail("Server wanted tunnels, but doesn't support " +
-                              "the notunnel type");
+                "the notunnel type");
         }
     }
 
@@ -3325,7 +3358,7 @@ export default class RFB extends EventTargetMixin {
                         return this._initMsg();
                     default:
                         return this._fail("Unsupported tiny auth scheme " +
-                                          "(scheme: " + authType + ")");
+                            "(scheme: " + authType + ")");
                 }
             }
         }
@@ -3360,7 +3393,7 @@ export default class RFB extends EventTargetMixin {
 
             default:
                 return this._fail("Unsupported auth scheme (scheme: " +
-                                  this._rfbAuthScheme + ")");
+                    this._rfbAuthScheme + ")");
         }
     }
 
@@ -3446,15 +3479,15 @@ export default class RFB extends EventTargetMixin {
         // NB(directxman12): these are down here so that we don't run them multiple times
         //                   if we backtrack
         Log.Info("Screen: " + width + "x" + height +
-                  ", bpp: " + bpp + ", depth: " + depth +
-                  ", bigEndian: " + bigEndian +
-                  ", trueColor: " + trueColor +
-                  ", redMax: " + redMax +
-                  ", greenMax: " + greenMax +
-                  ", blueMax: " + blueMax +
-                  ", redShift: " + redShift +
-                  ", greenShift: " + greenShift +
-                  ", blueShift: " + blueShift);
+            ", bpp: " + bpp + ", depth: " + depth +
+            ", bigEndian: " + bigEndian +
+            ", trueColor: " + trueColor +
+            ", redMax: " + redMax +
+            ", greenMax: " + greenMax +
+            ", blueMax: " + blueMax +
+            ", redShift: " + redShift +
+            ", greenShift: " + greenShift +
+            ", blueShift: " + blueShift);
 
         // we're past the point where we could backtrack, so it's safe to call this
         this._setDesktopName(name);
@@ -3539,7 +3572,6 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingDesktopName);
         encs.push(encodings.pseudoEncodingExtendedClipboard);
         encs.push(encodings.pseudoEncodingKasmDisconnectNotify);
-        encs.push(encodings.pseudoEncodingDirectMouse);
         if (this._hasWebp())
             encs.push(encodings.pseudoEncodingWEBP);
         if (this._enableQOI)
@@ -3564,7 +3596,7 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingStreamingVideoQualityLevel0 + this.videoStreamQuality);
         encs.push(this.streamMode);
 
-	// preferBandwidth choses preset settings. Since we expose all the settings, let's not pass this
+        // preferBandwidth choses preset settings. Since we expose all the settings, let's not pass this
         if (this.preferBandwidth) // must be last - server processes in reverse order
             encs.push(encodings.pseudoEncodingPreferBandwidth);
 
@@ -3612,7 +3644,7 @@ export default class RFB extends EventTargetMixin {
 
             default:
                 return this._fail("Unknown init state (state: " +
-                                  this._rfbInitState + ")");
+                    this._rfbInitState + ")");
         }
     }
 
@@ -3804,7 +3836,7 @@ export default class RFB extends EventTargetMixin {
         let buffByteLen = 2;
         let textdata = '';
         Log.Info(num + ' Clipboard items recieved.');
-	    Log.Debug('Started clipbooard processing with Client sockjs buffer size ' + this._sock.rQlen);
+        Log.Debug('Started clipbooard processing with Client sockjs buffer size ' + this._sock.rQlen);
 
 
 
@@ -3835,23 +3867,23 @@ export default class RFB extends EventTargetMixin {
                 case "text/plain":
                     mimes.push(mime);
 
-                        if (mime == "text/plain") {
-                            textdata = new TextDecoder().decode(data);
+                    if (mime == "text/plain") {
+                        textdata = new TextDecoder().decode(data);
 
-                            if ((textdata.length > 0) && "\0" === textdata.charAt(textdata.length - 1)) {
-                                textdata = textdata.slice(0, -1);
-                            }
-
-                            Log.Debug("Plain text clipboard recieved and placed in text element, size: " + textdata.length);
-                            this.dispatchEvent(new CustomEvent(
-                                "clipboard",
-                                { detail: { text: textdata } })
-                            );
+                        if ((textdata.length > 0) && "\0" === textdata.charAt(textdata.length - 1)) {
+                            textdata = textdata.slice(0, -1);
                         }
+
+                        Log.Debug("Plain text clipboard recieved and placed in text element, size: " + textdata.length);
+                        this.dispatchEvent(new CustomEvent(
+                            "clipboard",
+                            { detail: { text: textdata } })
+                        );
+                    }
 
                     Log.Info("Processed binary clipboard (ID: " + clipid + ")  of MIME " + mime + " of length " + len);
 
-	            if (!this.clipboardBinary) { continue; }
+                    if (!this.clipboardBinary) { continue; }
 
                     clipItemData[mime] = new Blob([data], { type: mime });
                     break;
@@ -4020,7 +4052,7 @@ export default class RFB extends EventTargetMixin {
                 ret = this._framebufferUpdate();
                 if (ret && !this._enabledContinuousUpdates) {
                     RFB.messages.fbUpdateRequest(this._sock, true, 0, 0,
-                                                 this._fbWidth, this._fbHeight);
+                        this._fbWidth, this._fbHeight);
                 }
                 if (this._trackFrameStats) {
                     RFB.messages.sendFrameStats(this._sock, this._display.fps, this._display.renderMs);
@@ -4080,9 +4112,6 @@ export default class RFB extends EventTargetMixin {
             case messages.msgTypeServerDisconnect: // KASM disconnect notice
                 return this._handleDisconnectNotify();
 
-            case messages.msgTypeForceGameMode:
-                return this._handleForceGameMode();
-
             case messages.msgTypeVideoEncoders:
                 return this._handleServerVideoEncoders();
 
@@ -4120,7 +4149,7 @@ export default class RFB extends EventTargetMixin {
             width: (data[4] << 8) + data[5],
             height: (data[6] << 8) + data[7],
             encoding: parseInt((data[8] << 24) + (data[9] << 16) +
-                                            (data[10] << 8) + data[11], 10)
+                (data[10] << 8) + data[11], 10)
         };
 
         switch (frame.encoding) {
@@ -4146,8 +4175,8 @@ export default class RFB extends EventTargetMixin {
                 // buffer; _drainVideoReorder feeds the decoder in frame_id
                 // order so deltas never reach WebCodecs before their IDR.
                 this._handleVideoUdpRect(frame.x, frame.y,
-                                         frame.width, frame.height,
-                                         data, frame_id);
+                    frame.width, frame.height,
+                    data, frame_id);
                 break;
             }
             case encodings.encodingCopyRect: {
@@ -4161,9 +4190,9 @@ export default class RFB extends EventTargetMixin {
                 const srcX = (data[12] << 8) | data[13];
                 const srcY = (data[14] << 8) | data[15];
                 this._display.copyImage(srcX, srcY,
-                                        frame.x, frame.y,
-                                        frame.width, frame.height,
-                                        frame_id);
+                    frame.x, frame.y,
+                    frame.width, frame.height,
+                    frame_id);
                 break;
             }
             default:
@@ -4203,7 +4232,7 @@ export default class RFB extends EventTargetMixin {
             // Still ack the rect-count to the display so the LastRect flip
             // for the original frame doesn't hang waiting on this rect.
             this._display.enqueueDummyRect(screenId, frame_id,
-                                           x, y, width, height);
+                x, y, width, height);
             return;
         }
 
@@ -4241,7 +4270,7 @@ export default class RFB extends EventTargetMixin {
                     const r = state.buffer.get(id);
                     // Keep display rect-counts consistent so frames flip.
                     this._display.enqueueDummyRect(screenId, id,
-                                                  r.x, r.y, r.width, r.height);
+                        r.x, r.y, r.width, r.height);
                     state.buffer.delete(id);
                 } else break;
             }
@@ -4261,13 +4290,13 @@ export default class RFB extends EventTargetMixin {
                 // Skip delta while we wait for a recovery IDR, but keep
                 // the display rect-count consistent.
                 this._display.enqueueDummyRect(screenId, nextId,
-                                              r.x, r.y, r.width, r.height);
+                    r.x, r.y, r.width, r.height);
                 continue;
             }
             if (r.isKey) state.waitingForKey = false;
 
             this._feedKasmVideoUdpRect(r.x, r.y, r.width, r.height,
-                                       r.data, nextId);
+                r.data, nextId);
         }
 
         if (state.buffer.size === 0 && state.timer) {
@@ -4305,15 +4334,15 @@ export default class RFB extends EventTargetMixin {
             if (cooldownExpired && typeof this._requestFullRefresh === 'function') {
                 reorder.lastRefreshTime = now;
                 Log.Warn("Video reorder gap on screen " + screenId +
-                         ": expected " + expected + ", earliest buffered " +
-                         earliest + ", udp_partials=" + udpPartials +
-                         ". Requesting full refresh.");
+                    ": expected " + expected + ", earliest buffered " +
+                    earliest + ", udp_partials=" + udpPartials +
+                    ". Requesting full refresh.");
                 this._requestFullRefresh();
             } else {
                 Log.Warn("Video reorder gap on screen " + screenId +
-                         ": expected " + expected + ", earliest buffered " +
-                         earliest + ", udp_partials=" + udpPartials +
-                         ". Refresh suppressed (cooldown).");
+                    ": expected " + expected + ", earliest buffered " +
+                    earliest + ", udp_partials=" + udpPartials +
+                    ". Refresh suppressed (cooldown).");
             }
 
             this._drainVideoReorder(screenId);
@@ -4352,7 +4381,7 @@ export default class RFB extends EventTargetMixin {
         const videoDecoder = this._decoders[encodings.encodingKasmVideo];
         try {
             videoDecoder.decodeRect(x, y, width, height, sockShim,
-                                    this._display, this._fbDepth, frame_id);
+                this._display, this._fbDepth, frame_id);
         } catch (err) {
             Log.Error("Error decoding KasmVideo rect over UDP: " + err);
         }
@@ -4405,80 +4434,165 @@ export default class RFB extends EventTargetMixin {
     // -------- WebRTC media (libdatachannel migration, Phase 1+) --------
 
     _handleWebRTCSignal() {
-        // Body: [u8 kind][u16 len][bytes payload]
-        if (this._sock.rQwait('WebRTC sig header', 3, 1)) { return false; }
-        const kind = this._sock.rQshift8();
-        const len  = this._sock.rQshift16();
-        if (this._sock.rQwait('WebRTC sig payload', len, 4)) { return false; }
+        // Body: [u8 kind][u8 screenId][u16 len][bytes payload]
+        if (this._sock.rQwait('WebRTC sig header', 4, 1)) { return false; }
+        const kind     = this._sock.rQshift8();
+        const screenId = this._sock.rQshift8();
+        const len      = this._sock.rQshift16();
+        if (this._sock.rQwait('WebRTC sig payload', len, 5)) { return false; }
         const payload = len ? this._sock.rQshiftStr(len) : '';
 
-        // kind=5 (Fallback) is global — server is telling us WebRTC is
-        // unavailable / done. Tear down BOTH the live and the pending
-        // transports; image mode takes over. Route through the live
-        // transport's fallback path (it owns the _sendUdpDowngrade /
-        // _onWebRTCFallback chain). If only a pending transport
-        // exists, deliver to it so its `pending` _fallback branch
-        // abandons cleanly without dragging the (already-gone) live
-        // half along.
-        if (kind === WebRTCSignalKind.Fallback) {
-            if (this._webrtcPending) {
-                try { this._abandonPendingWebRTCMedia('server-fallback:' + payload); } catch (e) {}
-            }
-            if (this._webrtc) {
-                this._webrtc.signaling.deliver(kind, payload);
-                return true;
-            }
-            return true;
-        }
-        // Negotiation signals (kind=1 offer, kind=3 ICE candidate,
-        // kind=4 ICE servers) route to whichever transport is awaiting
-        // them. During a smooth-switch the pending transport owns
-        // them; otherwise the live transport.
-        const target = this._webrtcPending || this._webrtc;
-        if (!target) {
-            // Server sent us a WebRTC signal but we never initiated.
-            // Could be an old client config / replay. Acknowledge with
-            // a fallback so the server tears down its half cleanly.
-            Log.Warn('Got WebRTC signal kind=' + kind + ' but no local transport; ignoring');
-            return true;
-        }
-        target.signaling.deliver(kind, payload);
+        this._dispatchWebRTCSignal(kind, screenId, payload);
         return true;
     }
 
-    _initWebRTCMedia(opts) {
-        // Internal — only called by _applyWebRTCMediaState. Caller has
-        // already verified the toggle is on, the codec preference list
-        // is non-null, and isConnected is true. Re-check the primary-
-        // display guard for safety; secondary monitors run their own
-        // RFB sessions and aren't ganged onto a single PC.
-        const pending = !!(opts && opts.pending);
-        if (!pending && this._webrtc) return;
-        if (pending && this._webrtcPending) return;
-        if (!this._isPrimaryDisplay) return;
-        if (typeof RTCPeerConnection === 'undefined') {
-            Log.Warn('RTCPeerConnection not supported — staying on WebUDP/image mode');
+    _dispatchWebRTCSignal(kind, screenId, payload) {
+        // Session-level ICE servers: stash (parsed for our own PCs, raw
+        // for relaying to secondary windows before their offers).
+        if (kind === WebRTCSignalKind.IceServers) {
+            this._storeWebRTCIceServers(payload);
             return;
         }
-        const codecs = this._webRTCMediaCodecs || ['H264'];
-        const transport = new WebRTCVideoTransport(this, this._sock, { codecs, pending });
-        if (pending) {
-            this._webrtcPending = transport;
-        } else {
-            this._webrtc = transport;
+        // Session-level fallback: tear everything down, image mode wins.
+        if (kind === WebRTCSignalKind.Fallback && screenId === WEBRTC_SESSION_SCREEN) {
+            this._onWebRTCSessionFallback(payload);
+            return;
         }
-        transport.start();
+        // Per-screen signal. Handle locally if this (the primary) window
+        // renders the screen; otherwise relay it to the secondary window
+        // that does.
+        if (this._webrtcScreenIsLocal(screenId)) {
+            this._routeWebRTCSignal(kind, screenId, payload,
+                (sid) => this._makeLocalSignaling(sid));
+        } else {
+            this._relayWebRTCSignalToScreen(screenId, kind, payload);
+        }
+    }
+
+    _storeWebRTCIceServers(payload) {
+        this._webrtcIceServersRaw = payload || '';
+        this._webrtcIceServers = this._webrtcIceServersRaw.split('\n')
+            .map(s => s.trim()).filter(Boolean)
+            .map(url => ({ urls: url }));
+        Log.Debug('WebRTC ICE servers: ' + JSON.stringify(this._webrtcIceServers));
+    }
+
+    // The screenId this window renders over WebRTC. The primary renders
+    // screen 0; a secondary window renders its own screenIndex. (Server
+    // screenId === display screenIndex — see setDesktopSize, which sends
+    // the screen's position index as its RFB id.)
+    _localWebRTCScreenId() {
+        if (this._isPrimaryDisplay) return 0;
+        return (this._display && this._display.screenIndex) || 0;
+    }
+
+    _webrtcScreenIsLocal(screenId) {
+        return screenId === this._localWebRTCScreenId();
+    }
+
+    // Route a per-screen offer/ICE/Close/Fallback to this window's
+    // transport for that screen, creating one reactively on a fresh
+    // offer. A second offer for a live screen builds a `pending` transport
+    // that promotes on its first decoded frame (smooth codec switch).
+    // `makeSignaling(screenId)` produces the outbound channel — socket on
+    // the primary's own screen, relay port on a secondary window.
+    _routeWebRTCSignal(kind, screenId, payload, makeSignaling) {
+        if (typeof RTCPeerConnection === 'undefined') {
+            if (kind === WebRTCSignalKind.SdpOffer) {
+                Log.Warn('RTCPeerConnection unsupported; declining screen ' + screenId);
+                const sig = makeSignaling(screenId);
+                try { sig.send(WebRTCSignalKind.Fallback, 'no-rtcpeerconnection'); } catch (e) {}
+            }
+            return;
+        }
+        let slot = this._webrtcScreens.get(screenId);
+        if (kind === WebRTCSignalKind.SdpOffer) {
+            if (!slot) { slot = { live: null, pending: null }; this._webrtcScreens.set(screenId, slot); }
+            const pending = !!slot.live;
+            Log.Info('[WEBRTC-DIAG] building transport screen ' + screenId +
+                ' pending=' + pending + ' (window ' +
+                (this._isPrimaryDisplay ? 'primary' : 'secondary') + ')');
+            const sig = makeSignaling(screenId);
+            const transport = new WebRTCVideoTransport(this, screenId, sig,
+                { pending, iceServers: this._webrtcIceServers });
+            if (pending) {
+                if (slot.pending) { try { slot.pending.stop(); } catch (e) {} }
+                slot.pending = transport;
+            } else {
+                slot.live = transport;
+            }
+            sig.deliver(kind, payload);   // drive _handleOffer
+            return;
+        }
+        // ICE / Close / Fallback for an existing transport. During a codec
+        // switch route to pending (its offer is the one in flight).
+        if (!slot) return;
+        const target = slot.pending || slot.live;
+        if (target) target.signaling.deliver(kind, payload);
+    }
+
+    // PRIMARY: relay a per-screen signal to the secondary window that
+    // renders this screen, over its encodedFramePort. The secondary builds
+    // its own RTCPeerConnection and answers back through the same port
+    // (see _forwardRelayedWebRTCToServer). On a fresh offer, relay the
+    // session ICE-servers first so the secondary can configure its PC.
+    _relayWebRTCSignalToScreen(screenId, kind, payload) {
+        Log.Info('[WEBRTC-DIAG] primary relaying kind=' + kind +
+            ' to secondary screen ' + screenId);
+        if (!this._display || typeof this._display.relayWebRTCSignal !== 'function') return;
+        if (kind === WebRTCSignalKind.SdpOffer) {
+            this._display.relayWebRTCSignal(screenId, WebRTCSignalKind.IceServers,
+                WEBRTC_SESSION_SCREEN,
+                this._webrtcIceServersRaw || '');
+        }
+        this._display.relayWebRTCSignal(screenId, kind, screenId, payload);
+    }
+
+    // PRIMARY: a secondary window relayed one of its WebRTC signals (SDP
+    // answer / ICE / fallback) back up; forward it to the server.
+    _forwardRelayedWebRTCToServer(kind, screenId, payload) {
+        try { this._sendWebRTCFrame(kind, screenId, payload); } catch (e) {
+            Log.Warn('Forwarding relayed WebRTC signal to server failed: ' + e);
+        }
+    }
+
+    // SECONDARY: a WebRTC signal for this window's screen arrived from the
+    // primary over the encodedFramePort. Build/route this window's own
+    // RTCPeerConnection; outbound answers/ICE go back over the relay port.
+    _onRelayedWebRTCSignal(kind, screenId, payload) {
+        Log.Info('[WEBRTC-DIAG] secondary received relayed kind=' + kind +
+            ' screen=' + screenId);
+        if (kind === WebRTCSignalKind.IceServers) {
+            this._storeWebRTCIceServers(payload);
+            return;
+        }
+        this._routeWebRTCSignal(kind, screenId, payload,
+            (sid) => this._makeRelaySignaling(sid));
+    }
+
+    // Outbound signaling sink for a secondary window: post the answer/ICE
+    // to the primary over the encodedFramePort; the primary forwards it to
+    // the server's WebSocket.
+    _makeRelaySignaling(screenId) {
+        return new WebRTCSignaling(screenId,
+            (k, sid, p) => {
+                if (this._display && typeof this._display.relayWebRTCSignalUp === 'function')
+                    this._display.relayWebRTCSignalUp(k, sid, p);
+            });
     }
 
     _onWebRTCVideoReady(video, transport) {
-        // Overlay the <video> on top of the canvas. The canvas
-        // remains in the DOM so the image-mode fallback path can
-        // take over instantly when WebRTC fails. When this video
-        // belongs to a *pending* transport (smooth codec switch), it
-        // sits on a higher z-index than the live one and only becomes
-        // visible after `playing` fires — at which point we swap it
-        // into the `_webrtc` slot and drop the old transport.
-        const pending = (transport === this._webrtcPending);
+        // Overlay the <video> full-window on top of the canvas. Each
+        // window renders exactly one screen and that screen's PC streams
+        // exactly that screen's content, so the overlay is 100%x100% (no
+        // sub-rect positioning — that was only needed by the rejected
+        // spanning approach). The canvas stays in the DOM so the
+        // WebSocket/image-mode path can take over instantly on failure.
+        // A *pending* (codec-switch) transport sits above the live one
+        // and promotes on `playing`.
+        const screenId = transport.screenId;
+        const slot = this._webrtcScreens.get(screenId);
+        const pending = !!(slot && transport === slot.pending);
         try {
             video.style.position = 'absolute';
             video.style.left   = '0';
@@ -4498,9 +4612,14 @@ export default class RFB extends EventTargetMixin {
             // Otherwise the user sees a black <video> rectangle covering
             // whatever the canvas had during ICE/SDP negotiation.
             video.style.opacity = '0';
+            Log.Info('[WEBRTC-DIAG] mounting <video> screen ' + screenId +
+                ' (window ' + (this._isPrimaryDisplay ? 'primary' : 'secondary') +
+                ', pending=' + pending + ')');
             video.addEventListener('playing', () => {
+                Log.Info('[WEBRTC-DIAG] <video> PLAYING screen ' + screenId +
+                    ' (' + video.videoWidth + 'x' + video.videoHeight + ')');
                 video.style.opacity = '1';
-                if (pending) this._promotePendingWebRTC(transport);
+                if (pending) this._promotePendingWebRTCScreen(screenId, transport);
             }, { once: true });
             // Find the canvas's parent. _screen is the standard mount
             // point; if a project embeds rfb differently, the hook can
@@ -4508,55 +4627,53 @@ export default class RFB extends EventTargetMixin {
             const host = this._screen || this._target;
             if (host && host.appendChild) host.appendChild(video);
         } catch (e) {
-            Log.Warn('Failed to mount WebRTC <video>: ' + e);
+            Log.Warn('Failed to mount WebRTC <video> (screen ' + screenId + '): ' + e);
         }
     }
 
-    // First decoded frame from the pending transport has painted — the
-    // user is now looking at the new codec. Drop the old transport and
-    // its <video> element, promote pending into _webrtc.
-    _promotePendingWebRTC(transport) {
-        if (transport !== this._webrtcPending) return;  // superseded
-        Log.Info('Pending WebRTC media is playing — promoting ' +
-                 (this._webrtcPendingCodec || '?'));
-        const oldWebrtc = this._webrtc;
-        const oldVideo  = oldWebrtc && oldWebrtc.video;
-        if (oldWebrtc) {
-            try { oldWebrtc.stop(); } catch (e) {}
-        }
+    // First decoded frame from a screen's pending transport has painted —
+    // promote it: drop that screen's old live transport + <video>, make
+    // the pending one live.
+    _promotePendingWebRTCScreen(screenId, transport) {
+        const slot = this._webrtcScreens.get(screenId);
+        if (!slot || transport !== slot.pending) return;  // superseded
+        Log.Info('Pending WebRTC media (screen ' + screenId + ') is playing — promoting');
+        const oldLive  = slot.live;
+        const oldVideo = oldLive && oldLive.video;
+        if (oldLive) { try { oldLive.stop(); } catch (e) {} }
         if (oldVideo && oldVideo.parentNode) {
             oldVideo.parentNode.removeChild(oldVideo);
         }
-        this._webrtc = this._webrtcPending;
-        this._webrtcCurrentCodec = this._webrtcPendingCodec;
-        // Drop pending overlay back to z=1 now that it's the live one.
-        try {
-            if (this._webrtc.video) this._webrtc.video.style.zIndex = '1';
-        } catch (e) {}
-        this._webrtcPending = null;
-        this._webrtcPendingCodec = null;
+        slot.live = slot.pending;
+        slot.pending = null;
+        // Drop the now-live overlay back to z=1.
+        try { if (slot.live.video) slot.live.video.style.zIndex = '1'; } catch (e) {}
     }
 
-    _onWebRTCFallback(reason) {
-        Log.Warn('WebRTC media fallback (' + reason + ') — image-mode/WebUDP taking over');
-        // Preserve a freeze-frame on the canvas before we drop the
-        // <video> overlay so the user doesn't see a black flash while
-        // image-mode catches up.
+    // One screen's live transport failed (ICE / codec) — drop just that
+    // screen; the server streams it over the WebSocket and the canvas /
+    // KasmVideo path renders it. Other screens keep streaming. The
+    // transport already sent a per-screen Fallback to the server.
+    _onWebRTCScreenFallback(screenId, reason) {
+        Log.Warn('WebRTC screen ' + screenId + ' fallback (' + reason +
+            ') — this screen now streams over the WebSocket');
+        const slot = this._webrtcScreens.get(screenId);
+        if (!slot) return;
         this._freezeFrameWebRTC();
-        if (this._webrtc && this._webrtc.video && this._webrtc.video.parentNode) {
-            this._webrtc.video.parentNode.removeChild(this._webrtc.video);
-        }
-        this._webrtc = null;
-        this._webrtcCurrentCodec = null;
-        // Also bin any pending — there's no live transport left for
-        // it to swap into and the server has already declined WebRTC.
-        if (this._webrtcPending) {
-            this._abandonPendingWebRTCMedia('fallback-cascade');
-        }
-        // Do NOT auto-retry: if the server doesn't support WebRTC
-        // media, retrying would loop. A subsequent toggle or stream-
-        // mode change will route through _applyWebRTCMediaState and
-        // try again on the user's terms.
+        if (slot.pending) { try { slot.pending.stop(); } catch (e) {} }
+        if (slot.live)    { try { slot.live.stop(); }    catch (e) {} }
+        this._webrtcScreens.delete(screenId);
+    }
+
+    // The server tore down the whole WebRTC session (ICE timeout, no
+    // server codec, etc.). Drop every screen; image mode / WebSocket
+    // video takes over for all of them.
+    _onWebRTCSessionFallback(reason) {
+        Log.Warn('WebRTC session fallback (' + reason + ') — image mode taking over');
+        this._freezeFrameWebRTC();
+        this._teardownAllWebRTCScreens();
+        this._webrtcSessionActive = false;
+        this._webrtcSessionCodec = null;
     }
 
     _handleUdpUpgrade() {
@@ -4668,13 +4785,6 @@ export default class RFB extends EventTargetMixin {
         }));
     }
 
-    _handleForceGameMode() {
-        // No payload — the server is requesting that this client enter game mode.
-        // Fire an event so the UI layer can engage pointer lock on the next user gesture.
-        this.dispatchEvent(new CustomEvent("gamemodeforced"));
-        return true;
-    }
-
     _handleDisconnectNotify() {
         if (this._sock.rQwait("DisconnectNotify header", 8, 1)) { return false; }
         const flags = this._sock.rQshift8();
@@ -4730,7 +4840,7 @@ export default class RFB extends EventTargetMixin {
                 this._FBU.width    = (hdr[4] << 8) + hdr[5];
                 this._FBU.height   = (hdr[6] << 8) + hdr[7];
                 this._FBU.encoding = parseInt((hdr[8] << 24) + (hdr[9] << 16) +
-                                              (hdr[10] << 8) + hdr[11], 10);
+                    (hdr[10] << 8) + hdr[11], 10);
             }
 
             if (!this._handleRect()) {
@@ -4811,7 +4921,7 @@ export default class RFB extends EventTargetMixin {
             rgba = new Array(w * h * bytesPerPixel);
 
             if (this._sock.rQwait("VMware cursor classic encoding",
-                                  (w * h * bytesPerPixel) * 2, 2)) {
+                (w * h * bytesPerPixel) * 2, 2)) {
                 return false;
             }
 
@@ -4839,7 +4949,7 @@ export default class RFB extends EventTargetMixin {
                     rgba[(pixel * bytesPerPixel) + 3 ] = 0xff; //a
 
                 } else if ((andMask[pixel] & PIXEL_MASK) ==
-                           PIXEL_MASK) {
+                    PIXEL_MASK) {
                     //Only screen value matters, no mouse colouring
                     if (xorMask[pixel] == 0) {
                         //Transparent pixel
@@ -4849,7 +4959,7 @@ export default class RFB extends EventTargetMixin {
                         rgba[(pixel * bytesPerPixel) + 3 ] = 0x00;
 
                     } else if ((xorMask[pixel] & PIXEL_MASK) ==
-                               PIXEL_MASK) {
+                        PIXEL_MASK) {
                         //Inverted pixel, not supported in browsers.
                         //Fully opaque instead.
                         rgba[(pixel * bytesPerPixel)     ] = 0x00;
@@ -4874,10 +4984,10 @@ export default class RFB extends EventTargetMixin {
                 }
             }
 
-        //Alpha cursor.
+            //Alpha cursor.
         } else if (cursorType == 1) {
             if (this._sock.rQwait("VMware cursor alpha encoding",
-                                  (w * h * 4), 2)) {
+                (w * h * 4), 2)) {
                 return false;
             }
 
@@ -4894,7 +5004,7 @@ export default class RFB extends EventTargetMixin {
 
         } else {
             Log.Warn("The given cursor type is not supported: "
-                      + cursorType + " given.");
+                + cursorType + " given.");
             return false;
         }
 
@@ -4910,19 +5020,7 @@ export default class RFB extends EventTargetMixin {
         if (this._pointerLock) {
             // Only attempt to match the server's pointer position if we are in
             // pointer lock mode.
-            if (this._directMouseEnabled) {
-                // Direct drive mode: _mousePos must be in canvas-relative CSS
-                // pixels.  x/y from the wire are server framebuffer pixels, so
-                // multiply by the viewport scale to convert.
-                const scale = this._display.scale || 1;
-                this._mousePos = { x: x * scale, y: y * scale };
-                // Also update the visual cursor so it tracks the server position.
-                const canvasBounds = this._canvas.getBoundingClientRect();
-                this._cursor.move(x * scale + canvasBounds.left,
-                                  y * scale + canvasBounds.top);
-            } else {
-                this._mousePos = { x: x, y: y };
-            }
+            this._mousePos = { x: x, y: y };
         }
 
         return true;
@@ -5063,7 +5161,7 @@ export default class RFB extends EventTargetMixin {
                     break;
             }
             Log.Warn("Server did not accept the resize request: "
-                     + msg);
+                + msg);
         } else {
             this._resize(this._FBU.width, this._FBU.height);
         }
@@ -5111,9 +5209,9 @@ export default class RFB extends EventTargetMixin {
                 this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
             }
             return decoder.decodeRect(this._FBU.x, this._FBU.y,
-                                      this._FBU.width, this._FBU.height,
-                                      this._sock, this._display,
-                                      this._fbDepth, this._FBU.frame_id);
+                this._FBU.width, this._FBU.height,
+                this._sock, this._display,
+                this._fbDepth, this._FBU.frame_id);
         } catch (err) {
             this._fail("Error decoding rect: " + err);
             return false;
@@ -5124,7 +5222,7 @@ export default class RFB extends EventTargetMixin {
         if (!this._enabledContinuousUpdates) { return; }
 
         RFB.messages.enableContinuousUpdates(this._sock, true, 0, 0,
-                                             this._fbWidth, this._fbHeight);
+            this._fbWidth, this._fbHeight);
     }
 
     _resize(width, height) {
@@ -5188,8 +5286,8 @@ export default class RFB extends EventTargetMixin {
         }
         const image = this._shouldShowDotCursor() ? RFB.cursors.dot : this._cursorImage;
         this._cursor.change(image.rgbaPixels,
-                            image.hotx, image.hoty,
-                            image.w, image.h
+            image.hotx, image.hoty,
+            image.w, image.h
         );
     }
 
@@ -5280,25 +5378,6 @@ RFB.messages = {
         sock.flush();
     },
 
-    directMouseEvent(sock, dx, dy, buttonMask, scrollDX, scrollDY) {
-        const buff = sock._sQ;
-        const offset = sock._sQlen;
-
-        buff[offset]     = messages.msgTypeDirectMouseEvent;
-        buff[offset + 1] = buttonMask & 0xff;
-        buff[offset + 2] = (dx >> 8) & 0xff;
-        buff[offset + 3] = dx & 0xff;
-        buff[offset + 4] = (dy >> 8) & 0xff;
-        buff[offset + 5] = dy & 0xff;
-        buff[offset + 6] = (scrollDX >> 8) & 0xff;
-        buff[offset + 7] = scrollDX & 0xff;
-        buff[offset + 8] = (scrollDY >> 8) & 0xff;
-        buff[offset + 9] = scrollDY & 0xff;
-
-        sock._sQlen += 10;
-        sock.flush();
-    },
-
     keepAlive(sock) {
         const buff = sock._sQ;
         const offset = sock._sQlen;
@@ -5349,9 +5428,9 @@ RFB.messages = {
             let text = encodeUTF8(inData[i] + "\0");
 
             dataToDeflate.push( (text.length >> 24) & 0xFF,
-                                (text.length >> 16) & 0xFF,
-                                (text.length >>  8) & 0xFF,
-                                (text.length & 0xFF));
+                (text.length >> 16) & 0xFF,
+                (text.length >>  8) & 0xFF,
+                (text.length & 0xFF));
 
             for (let j = 0; j < text.length; j++) {
                 dataToDeflate.push(text.charCodeAt(j));
@@ -5363,7 +5442,7 @@ RFB.messages = {
         // Build data  to send
         let data = new Uint8Array(4 + deflatedData.length);
         data.set(RFB.messages._buildExtendedClipboardFlags([extendedClipboardActionProvide],
-                                                           formats));
+            formats));
         data.set(deflatedData, 4);
 
         RFB.messages.clientCutText(sock, data, true);
@@ -5371,13 +5450,13 @@ RFB.messages = {
 
     extendedClipboardNotify(sock, formats) {
         let flags = RFB.messages._buildExtendedClipboardFlags([extendedClipboardActionNotify],
-                                                              formats);
+            formats);
         RFB.messages.clientCutText(sock, flags, true);
     },
 
     extendedClipboardRequest(sock, formats) {
         let flags = RFB.messages._buildExtendedClipboardFlags([extendedClipboardActionRequest],
-                                                              formats);
+            formats);
         RFB.messages.clientCutText(sock, flags, true);
     },
 
@@ -5858,7 +5937,7 @@ RFB.cursors = {
         /* eslint-disable indent */
         rgbaPixels: new Uint8Array([
             255, 255, 255, 255,   0,   0,   0, 255, 255, 255, 255, 255,
-              0,   0,   0, 255,   0,   0,   0,   0,   0,   0,  0,  255,
+            0,   0,   0, 255,   0,   0,   0,   0,   0,   0,  0,  255,
             255, 255, 255, 255,   0,   0,   0, 255, 255, 255, 255, 255,
         ]),
         /* eslint-enable indent */

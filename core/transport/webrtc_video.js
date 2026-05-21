@@ -1,68 +1,64 @@
 /*
- * KasmVNC WebRTC video transport — browser side.
+ * KasmVNC WebRTC video transport — browser side, one per X screen.
  *
- * Mirrors the legacy `_udpChannel` WebUDP path in rfb.js, but for the
- * libdatachannel-based server transport that ships HW-encoded video
- * over an RTCPeerConnection's video track. The browser is RECV-ONLY
- * for video; the server initiates the SDP offer.
+ * Multi-monitor sessions run one RTCPeerConnection per screen (see
+ * doc/MULTI_MONITOR_WEBRTC_PLAN.md). Each instance owns exactly one
+ * screen's PC + <video>, and is RECV-ONLY (the server initiates the SDP
+ * offer per screen). Instances are created *reactively* by rfb.js when a
+ * per-screen SdpOffer arrives — the client does not send capabilities or
+ * offers from here; rfb.js advertises capability once for the session and
+ * the server replies with one offer per screen.
  *
- * Failure modes that drop the session to image-mode fallback:
+ * Signaling is decoupled from the WebSocket: the WebRTCSignaling passed
+ * in carries a sink that routes outbound answers/ICE either straight to
+ * the socket (when this transport runs in the window that owns the
+ * server's WebSocket — the primary) or over the SharedWorker relay port
+ * (when this transport runs in a secondary window that displays the
+ * screen). Either way the transport code is identical.
+ *
+ * Failure modes that drop *this screen* to image/WebSocket-video:
  *   - iceConnectionState === 'failed' || 'disconnected' for >5 s
- *   - SDP answer has no overlapping codec (m=video missing or
- *     `a=inactive`)
+ *   - SDP answer has no overlapping codec (m=video missing / a=inactive)
  *   - Browser refuses RTCPeerConnection construction
- *
- * In every fallback case we call rfb._sendUdpDowngrade() so the
- * server clears cp.supportsWebRTCMedia and resumes pushing
- * Tight/JPEG/WEBP rects over the WebSocket. The caller is
- * responsible for hiding the <video> element when that happens; the
- * canvas underneath takes over.
  *
  * Licensed under MPL 2.0.
  */
 
 import * as Log from '../util/logging.js';
-import WebRTCSignaling, { WebRTCSignalKind } from './webrtc_signaling.js';
+import { WebRTCSignalKind } from './webrtc_signaling.js';
 
 const FALLBACK_GRACE_MS = 5000;
 
 export default class WebRTCVideoTransport {
-    constructor(rfb, sock, opts) {
+    // signaling: a WebRTCSignaling already bound to `screenId` and an
+    //            outbound sink (socket or relay port).
+    // opts.iceServers: [{urls}] list from the session-level kind=4 signal.
+    // opts.pending:    true when this is a smooth codec-switch transport
+    //                  that replaces an existing live one on `playing`.
+    constructor(rfb, screenId, signaling, opts) {
         this._rfb = rfb;
-        this._signaling = new WebRTCSignaling(sock);
+        this._screenId = screenId;
+        this._signaling = signaling;
         this._signaling.onMessage((kind, payload) => this._onSignal(kind, payload));
 
-        this._opts = Object.assign({
-            codecs: ['H264'],   // browser-preferred order
-        }, opts || {});
+        this._opts = Object.assign({ pending: false, iceServers: [] }, opts || {});
 
         this._pc = null;
         this._video = null;
         this._failureTimer = null;
         this._negotiated = false;
-        this._iceServers = [];
+        this._iceServers = this._opts.iceServers || [];
 
-        // Public state mirrors rfb.js's existing transit-state semantics
-        // so failure counters / UX don't need to learn a second model.
+        // Mirrors rfb.js's transit-state semantics so failure counters /
+        // UX don't need to learn a second model.
         this._state = 'idle';
     }
 
+    get screenId() { return this._screenId; }
     get signaling() { return this._signaling; }
     get video()     { return this._video; }
     get state()     { return this._state; }
-
-    // Called once by rfb.js when it decides to attempt WebRTC media for
-    // this session. Sends kind=6 (capabilities); the server responds
-    // with kind=4 (ICE servers) + kind=1 (SDP offer).
-    start() {
-        try {
-            this._signaling.sendCapabilities(this._opts.codecs);
-            this._state = 'negotiating';
-        } catch (e) {
-            Log.Error('WebRTC capability advertisement failed: ' + e);
-            this._fallback('capabilities-send-failed');
-        }
-    }
+    get pending()   { return !!this._opts.pending; }
 
     stop() {
         if (this._failureTimer) {
@@ -75,31 +71,37 @@ export default class WebRTCVideoTransport {
         }
         if (this._video) {
             this._video.srcObject = null;
+            if (this._video.parentNode) {
+                this._video.parentNode.removeChild(this._video);
+            }
         }
         this._state = 'closed';
     }
 
     _onSignal(kind, payload) {
         switch (kind) {
-            case WebRTCSignalKind.IceServers:
-                this._iceServers = (payload || '').split('\n')
-                    .map(s => s.trim()).filter(Boolean)
-                    .map(url => ({ urls: url }));
-                Log.Debug('WebRTC ICE servers: ' + JSON.stringify(this._iceServers));
-                this._createPeerConnection();
-                break;
             case WebRTCSignalKind.SdpOffer:
                 this._handleOffer(payload);
                 break;
             case WebRTCSignalKind.IceCandidate:
                 this._handleRemoteIce(payload);
                 break;
+            case WebRTCSignalKind.Close:
+                Log.Info('Server closed WebRTC screen ' + this._screenId +
+                         ': ' + payload);
+                // The screen left the layout (or its negotiation was
+                // rejected). Drop the PC; the owning window falls back to
+                // its WebSocket/encoded-frame decode path for this screen.
+                this._fallback('server-close:' + payload, /*silent=*/true);
+                break;
             case WebRTCSignalKind.Fallback:
-                Log.Warn('Server signalled WebRTC fallback: ' + payload);
-                this._fallback('server-' + payload);
+                Log.Warn('Server signalled WebRTC fallback (screen ' +
+                         this._screenId + '): ' + payload);
+                this._fallback('server-' + payload, /*silent=*/true);
                 break;
             default:
-                Log.Warn('Unknown WebRTC signal kind: ' + kind);
+                Log.Warn('Unknown WebRTC signal kind for screen ' +
+                         this._screenId + ': ' + kind);
         }
     }
 
@@ -114,14 +116,14 @@ export default class WebRTCVideoTransport {
                 bundlePolicy: 'max-bundle',
             });
         } catch (e) {
-            Log.Error('RTCPeerConnection construction failed: ' + e);
+            Log.Error('RTCPeerConnection construction failed (screen ' +
+                      this._screenId + '): ' + e);
             this._fallback('pc-construct-failed');
             return;
         }
 
-        // Recv-only transceiver so the SDP offer/answer aligns with the
-        // server's send-only track. Without this, some browsers default
-        // to recvrecv and the m-line direction mismatches.
+        // Recv-only transceiver so the answer aligns with the server's
+        // send-only track.
         try {
             this._pc.addTransceiver('video', { direction: 'recvonly' });
         } catch (e) {
@@ -130,11 +132,13 @@ export default class WebRTCVideoTransport {
         }
 
         this._video = document.createElement('video');
-        this._video.autoplay   = true;
-        this._video.muted      = true;
+        this._video.autoplay    = true;
+        this._video.muted       = true;
         this._video.playsInline = true;
 
         this._pc.ontrack = (e) => {
+            Log.Info('[WEBRTC-DIAG] ontrack screen ' + this._screenId +
+                     ' (streams=' + (e.streams ? e.streams.length : 0) + ')');
             this._video.srcObject = e.streams && e.streams[0]
                 ? e.streams[0]
                 : new MediaStream([e.track]);
@@ -153,17 +157,13 @@ export default class WebRTCVideoTransport {
 
         this._pc.oniceconnectionstatechange = () => {
             const s = this._pc.iceConnectionState;
-            Log.Debug('WebRTC iceConnectionState=' + s);
+            Log.Info('[WEBRTC-DIAG] screen ' + this._screenId +
+                     ' iceConnectionState=' + s);
             if (s === 'failed' || s === 'disconnected') {
                 if (!this._failureTimer) {
                     this._failureTimer = setTimeout(() => {
                         this._failureTimer = null;
-                        // stop() can null _pc between the schedule and
-                        // the fire (e.g. RFB.disconnect() during the
-                        // 5 s grace window). Without this guard, the
-                        // null-deref throws into the browser's event
-                        // loop and shows up as a noisy console error
-                        // during shutdown — masking real bugs.
+                        // stop() can null _pc between schedule and fire.
                         if (!this._pc) return;
                         this._fallback('ice-' + this._pc.iceConnectionState);
                     }, FALLBACK_GRACE_MS);
@@ -178,9 +178,9 @@ export default class WebRTCVideoTransport {
     }
 
     async _handleOffer(sdp) {
+        Log.Info('[WEBRTC-DIAG] offer received screen ' + this._screenId +
+                 ' (' + (sdp ? sdp.length : 0) + ' bytes)');
         if (!this._pc) {
-            // Server sent offer before ICE servers — be lenient and
-            // construct the PC with an empty iceServers list.
             this._createPeerConnection();
             if (!this._pc) return;
         }
@@ -189,20 +189,22 @@ export default class WebRTCVideoTransport {
             const answer = await this._pc.createAnswer();
             await this._pc.setLocalDescription(answer);
 
-            // Codec-mismatch guard. If the answer has no m=video line
-            // or marks it inactive, the browser refused all offered
-            // codecs (e.g. HEVC-only server vs Firefox). Drop loudly
-            // before any <video> renders a black frame.
+            // Codec-mismatch guard: no usable video m-line means the
+            // browser refused every offered codec (e.g. HEVC-only server
+            // vs Firefox). Drop this screen loudly before a black frame.
             const sdpText = answer.sdp || '';
             if (!/^m=video /m.test(sdpText) || /^a=inactive/m.test(sdpText)) {
-                Log.Error('SDP answer has no usable video m-line; falling back');
+                Log.Error('SDP answer for screen ' + this._screenId +
+                          ' has no usable video m-line; falling back');
                 this._fallback('codec-mismatch');
                 return;
             }
             this._negotiated = true;
+            Log.Info('[WEBRTC-DIAG] answer sent screen ' + this._screenId);
             this._signaling.sendAnswer(sdpText);
         } catch (e) {
-            Log.Error('SDP offer handling failed: ' + e);
+            Log.Error('SDP offer handling failed (screen ' +
+                      this._screenId + '): ' + e);
             this._fallback('sdp-failed');
         }
     }
@@ -219,39 +221,33 @@ export default class WebRTCVideoTransport {
         try {
             await this._pc.addIceCandidate({ candidate, sdpMid });
         } catch (e) {
-            Log.Warn('addIceCandidate failed: ' + e);
+            Log.Warn('addIceCandidate failed (screen ' +
+                     this._screenId + '): ' + e);
         }
     }
 
-    _fallback(reason) {
+    // Drop this screen's PC. `silent` suppresses the outbound fallback
+    // signal (used when the server already told us to close, so we don't
+    // echo it back). The owning window resumes its WebSocket/encoded-frame
+    // decode path for this screen; rfb.js handles the bookkeeping.
+    _fallback(reason, silent) {
         this._state = 'fallback';
-        // A *pending* transport failing must not drag the live one
-        // down with it. Tell the server to abandon just the pending
-        // half (kind=5 'renegotiate' is a no-op for the live
-        // transport server-side) and let rfb.js drop its pending slot.
-        // The user stays on the old codec — strictly better than the
-        // pre-smooth-switch behavior where any renegotiation failure
-        // forced a full image-mode fallback.
-        if (this._opts && this._opts.pending) {
-            try { this._signaling.sendFallback('renegotiate'); } catch (e) {}
+        if (this._opts.pending) {
+            // A pending (codec-switch) transport failing must not drag the
+            // live one down. Abandon just the pending half.
+            if (!silent) { try { this._signaling.sendFallback('renegotiate'); } catch (e) {} }
             if (this._rfb &&
-                typeof this._rfb._abandonPendingWebRTCMedia === 'function') {
-                this._rfb._abandonPendingWebRTCMedia('pending-failed:' + reason);
+                typeof this._rfb._abandonPendingWebRTCScreen === 'function') {
+                this._rfb._abandonPendingWebRTCScreen(this._screenId,
+                                                      'pending-failed:' + reason);
             }
             this.stop();
             return;
         }
-        try { this._signaling.sendFallback(reason); } catch (e) {}
-        // Re-use rfb.js's existing legacy fallback path so the server
-        // clears cp.supportsWebRTCMedia exactly the way it clears
-        // cp.supportsUdp today. Cursor / clipboard / input stay on
-        // the WebSocket throughout — no user-visible interruption
-        // beyond the canvas taking over from the (hidden) <video>.
-        if (this._rfb && typeof this._rfb._sendUdpDowngrade === 'function') {
-            this._rfb._sendUdpDowngrade();
-        }
-        if (this._rfb && typeof this._rfb._onWebRTCFallback === 'function') {
-            this._rfb._onWebRTCFallback(reason);
+        if (!silent) { try { this._signaling.sendFallback(reason); } catch (e) {} }
+        if (this._rfb &&
+            typeof this._rfb._onWebRTCScreenFallback === 'function') {
+            this._rfb._onWebRTCScreenFallback(this._screenId, reason);
         }
         this.stop();
     }

@@ -166,10 +166,14 @@ export default class Display {
         this._primaryChannel = null;
         this._portRelayWorker = null;      // SharedWorker instance (primary only)
         this._encodedFramePort = null;     // MessagePort from primary (secondary only)
+        // Per-screenIndex queue of WebRTC signals to relay to a secondary
+        // window whose encodedFramePort isn't established yet (primary only).
+        this._webrtcRelayQueue = new Map();
         this._localDecoder = null;         // VideoDecoder on secondary
         this._localDecoderCodec = null;
         this._localDecoderW = 0;
         this._localDecoderH = 0;
+        this._localDecoderNeedKey = false; // wait for a key frame after (re)configure
         this._localDecoderMeta = new Map(); // timestamp → {x, y, width, height, frameId}
         this._localDecoderTs = 0;
         this._rfb = rfb;
@@ -259,14 +263,14 @@ export default class Display {
             if (
                 (x >= this._screens[i].x && x <= this._screens[i].x + this._screens[i].serverWidth) &&
                 (y >= this._screens[i].y && y <= this._screens[i].y + this._screens[i].serverHeight)
-                )
-                {
-                    return {
-                        "screenIndex": i,
-                        "x": x - this._screens[i].x,
-                        "y": y - this._screens[i].y
-                    }
+            )
+            {
+                return {
+                    "screenIndex": i,
+                    "x": x - this._screens[i].x,
+                    "y": y - this._screens[i].y
                 }
+            }
         }
     }
 
@@ -481,10 +485,29 @@ export default class Display {
                 this._portRelayWorker.port.start();
                 this._portRelayWorker.port.onmessage = (e) => {
                     if (e.data.type === 'port') {
-                        const screen = this._screens[e.data.screenIndex];
+                        const idx = e.data.screenIndex;
+                        const screen = this._screens[idx];
                         if (screen) {
                             screen.encodedFramePort = e.data.port;
-                            Log.Info(`[PRIMARY] encodedFramePort established for screen ${e.data.screenIndex}`);
+                            // Listen for the secondary window's relayed WebRTC
+                            // signals (its SDP answer / ICE) coming back so we
+                            // can forward them up the server WebSocket. Encoded
+                            // frames only flow primary->secondary, so this
+                            // receive path is WebRTC-signal-only.
+                            screen.encodedFramePort.onmessage = (ev) => {
+                                const w = ev.data && ev.data.webrtc;
+                                if (w && this._rfb &&
+                                    typeof this._rfb._forwardRelayedWebRTCToServer === 'function') {
+                                    this._rfb._forwardRelayedWebRTCToServer(w.kind, w.screenId, w.payload);
+                                }
+                            };
+                            screen.encodedFramePort.start();
+                            Log.Info(`[PRIMARY] encodedFramePort established for screen ${idx}`);
+                            // Flush any WebRTC signals queued for this screen
+                            // before its relay port existed (offer can arrive
+                            // from the server before the SharedWorker handshake
+                            // completes — see doc/MULTI_MONITOR_WEBRTC_PLAN.md §10).
+                            this._flushWebRTCRelayQueue(idx);
                         }
                     }
                 };
@@ -741,14 +764,14 @@ export default class Display {
         }
 
         let rect = {
-                'type': 'img',
-                'img': null,
-                'x': x,
-                'y': y,
-                'width': width,
-                'height': height,
-                'frame_id': frame_id,
-                'mime': mime
+            'type': 'img',
+            'img': null,
+            'x': x,
+            'y': y,
+            'width': width,
+            'height': height,
+            'frame_id': frame_id,
+            'mime': mime
         };
 
         this._processRectScreens(rect);
@@ -1059,7 +1082,20 @@ export default class Display {
             case 'registered':
                 if (!this._isPrimaryDisplay) {
                     const screenIndex = event.data.screenIndex;
+                    const prevScreenIndex = this._screens[0].screenIndex;
                     this._screens[0].screenIndex = screenIndex;
+                    // A *change* of index (vs. the initial registration) means a
+                    // non-last monitor closed and the windows re-densified. Any
+                    // WebRTC transport this window still holds was built for its
+                    // old screenId; drop it now so its stale full-window <video>
+                    // overlay doesn't sit frozen over the new screen's WebSocket
+                    // video until the old PC's ICE grace expires.
+                    if (typeof prevScreenIndex === 'number' &&
+                        prevScreenIndex !== screenIndex &&
+                        this._rfb &&
+                        typeof this._rfb._teardownStaleSecondaryWebRTC === 'function') {
+                        this._rfb._teardownStaleSecondaryWebRTC(screenIndex);
+                    }
                     Log.Info(`Screen with index (${screenIndex}) successfully registered with the primary display.`);
                     if (this._screens.length > 0) {
                         this.resize(this._screens[0].serverWidth, this._screens[0].serverHeight);
@@ -1074,6 +1110,13 @@ export default class Display {
                             this._encodedFramePort.start();
                             this._encodedFramePort.onmessage = this._handleEncodedFrame.bind(this);
                             Log.Info(`[SECONDARY] encodedFramePort established`);
+                            // Now that the relay port for this (possibly new)
+                            // screen is up, fire any deferred re-offer request
+                            // queued by a reindex so the survivor recovers RTP.
+                            if (this._rfb &&
+                                typeof this._rfb._maybeRequestPendingWebRTCOffer === 'function') {
+                                this._rfb._maybeRequestPendingWebRTCOffer();
+                            }
                         }
                     };
                     relayWorker.port.postMessage({type: 'secondary_ready', screenIndex});
@@ -1086,52 +1129,52 @@ export default class Display {
     _pushSyncRects() {
         let drawRectCnt = 0;
         whileLoop:
-        while (this._syncFrameQueue.length > 0) {
-            const a = this._syncFrameQueue[0];
-            const pos = a.screenLocations[0];
-            switch (a.type) {
-                case 'copy':
-                    this.copyImage(pos.oldX, pos.oldY, pos.x, pos.y, a.width, a.height, a.frame_id, true);
-                    break;
-                case 'fill':
-                    this.fillRect(pos.x, pos.y, a.width, a.height, a.color, a.frame_id, true);
-                    break;
-                case 'blit':
-                    this.blitImage(pos.x, pos.y, a.width, a.height, a.data, 0, a.frame_id, true);
-                    break;
-                case 'blitQ':
-                    this.blitQoi(pos.x, pos.y, a.width, a.height, a.data, 0, a.frame_id, true);
-                    break;
-                case 'img':
-                    if (a.img.complete) {
-                        this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
-                    } else {
-                        if (this._syncFrameQueue.length > 5000) {
-                            this._syncFrameQueue.shift();
-                            this._droppedRects++;
+            while (this._syncFrameQueue.length > 0) {
+                const a = this._syncFrameQueue[0];
+                const pos = a.screenLocations[0];
+                switch (a.type) {
+                    case 'copy':
+                        this.copyImage(pos.oldX, pos.oldY, pos.x, pos.y, a.width, a.height, a.frame_id, true);
+                        break;
+                    case 'fill':
+                        this.fillRect(pos.x, pos.y, a.width, a.height, a.color, a.frame_id, true);
+                        break;
+                    case 'blit':
+                        this.blitImage(pos.x, pos.y, a.width, a.height, a.data, 0, a.frame_id, true);
+                        break;
+                    case 'blitQ':
+                        this.blitQoi(pos.x, pos.y, a.width, a.height, a.data, 0, a.frame_id, true);
+                        break;
+                    case 'img':
+                        if (a.img.complete) {
+                            this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
                         } else {
-                            break whileLoop;
+                            if (this._syncFrameQueue.length > 5000) {
+                                this._syncFrameQueue.shift();
+                                this._droppedRects++;
+                            } else {
+                                break whileLoop;
+                            }
                         }
-                    }
-                    break;
-                case 'vid':
-                    this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
-                    a.img.close();
-                    break;
-                case 'bitmap':
-                    this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
-                    a.img.close();
-                    break;
-                case 'video_frame':
-                    this.drawVideoFrame(a.frame, pos.x, pos.y, a.width, a.height);
-                    break;
-                default:
-                    this._syncFrameQueue.shift();
-                    continue;
+                        break;
+                    case 'vid':
+                        this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
+                        a.img.close();
+                        break;
+                    case 'bitmap':
+                        this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
+                        a.img.close();
+                        break;
+                    case 'video_frame':
+                        this.drawVideoFrame(a.frame, pos.x, pos.y, a.width, a.height);
+                        break;
+                    default:
+                        this._syncFrameQueue.shift();
+                        continue;
+                }
+                drawRectCnt++;
+                this._syncFrameQueue.shift();
             }
-            drawRectCnt++;
-            this._syncFrameQueue.shift();
-        }
 
         if (this._renderer?.enableCanvasBuffer && drawRectCnt > 0) {
             this._renderer?._writeCtxBuffer();
@@ -1390,14 +1433,14 @@ export default class Display {
                                     this._screens[screenLocation.screenIndex].channel.postMessage({
                                         eventType: 'rect',
                                         rect: {
-                                           'type': 'vid',
-                                           'img': a.img,
-                                           'x': a.x,
-                                           'y': a.y,
-                                           'width': a.width,
-                                           'height': a.height,
-                                           'frame_id': a.frame_id,
-                                           'screenLocations': a.screenLocations
+                                            'type': 'vid',
+                                            'img': a.img,
+                                            'x': a.x,
+                                            'y': a.y,
+                                            'width': a.width,
+                                            'height': a.height,
+                                            'frame_id': a.frame_id,
+                                            'screenLocations': a.screenLocations
                                         },
                                         screenLocationIndex: sI
                                     }, [a.img]);
@@ -1409,14 +1452,14 @@ export default class Display {
                                     this._screens[screenLocation.screenIndex].channel.postMessage({
                                         eventType: 'rect',
                                         rect: {
-                                           'type': 'bitmap',
-                                           'img': a.img,
-                                           'x': a.x,
-                                           'y': a.y,
-                                           'width': a.width,
-                                           'height': a.height,
-                                           'frame_id': a.frame_id,
-                                           'screenLocations': a.screenLocations
+                                            'type': 'bitmap',
+                                            'img': a.img,
+                                            'x': a.x,
+                                            'y': a.y,
+                                            'width': a.width,
+                                            'height': a.height,
+                                            'frame_id': a.frame_id,
+                                            'screenLocations': a.screenLocations
                                         },
                                         screenLocationIndex: sI
                                     }, [a.img]);
@@ -1429,15 +1472,15 @@ export default class Display {
                                     this._screens[screenLocation.screenIndex].channel.postMessage({
                                         eventType: 'rect',
                                         rect: {
-                                           'type': 'blit',
-                                           'img': null,
-                                           'data': buf,
-                                           'x': a.x,
-                                           'y': a.y,
-                                           'width': a.width,
-                                           'height': a.height,
-                                           'frame_id': a.frame_id,
-                                           'screenLocations': a.screenLocations
+                                            'type': 'blit',
+                                            'img': null,
+                                            'data': buf,
+                                            'x': a.x,
+                                            'y': a.y,
+                                            'width': a.width,
+                                            'height': a.height,
+                                            'frame_id': a.frame_id,
+                                            'screenLocations': a.screenLocations
                                         },
                                         screenLocationIndex: sI
                                     }, [buf]);
@@ -1492,15 +1535,15 @@ export default class Display {
                                     this._screens[screenLocation.screenIndex].channel.postMessage({
                                         eventType: 'rect',
                                         rect: {
-                                           'type': 'img',
-                                           'img': null,
-                                           'x': a.x,
-                                           'y': a.y,
-                                           'width': a.width,
-                                           'height': a.height,
-                                           'frame_id': a.frame_id,
-                                           'screenLocations': a.screenLocations,
-                                           'src' : a.src
+                                            'type': 'img',
+                                            'img': null,
+                                            'x': a.x,
+                                            'y': a.y,
+                                            'width': a.width,
+                                            'height': a.height,
+                                            'frame_id': a.frame_id,
+                                            'screenLocations': a.screenLocations,
+                                            'src' : a.src
                                         },
                                         screenLocationIndex: sI
                                     });
@@ -1581,7 +1624,64 @@ export default class Display {
         }
     }
 
+    // Primary -> secondary: relay one WebRTC signal to the secondary
+    // window that renders screen `screenIndex`, over its dedicated
+    // encodedFramePort. Queues until that port is established (the server
+    // can offer a screen before the SharedWorker port handshake finishes).
+    relayWebRTCSignal(screenIndex, kind, screenId, payload) {
+        const screen = this._screens[screenIndex];
+        const msg = { webrtc: { kind, screenId, payload } };
+        if (screen && screen.encodedFramePort) {
+            try { screen.encodedFramePort.postMessage(msg); } catch (e) {
+                Log.Warn('relayWebRTCSignal post failed: ' + e);
+            }
+            return;
+        }
+        let q = this._webrtcRelayQueue.get(screenIndex);
+        if (!q) { q = []; this._webrtcRelayQueue.set(screenIndex, q); }
+        q.push(msg);
+    }
+
+    _flushWebRTCRelayQueue(screenIndex) {
+        const q = this._webrtcRelayQueue.get(screenIndex);
+        const screen = this._screens[screenIndex];
+        if (!q || !screen || !screen.encodedFramePort) return;
+        for (const msg of q) {
+            try { screen.encodedFramePort.postMessage(msg); } catch (e) {
+                Log.Warn('relayWebRTCSignal flush failed: ' + e);
+            }
+        }
+        this._webrtcRelayQueue.delete(screenIndex);
+    }
+
+    // Secondary -> primary: send this window's WebRTC signal (SDP answer /
+    // ICE / fallback) up to the primary, which forwards it to the server.
+    relayWebRTCSignalUp(kind, screenId, payload) {
+        if (!this._encodedFramePort) {
+            Log.Warn('relayWebRTCSignalUp: no encodedFramePort yet (screen ' +
+                screenId + ')');
+            return;
+        }
+        try {
+            this._encodedFramePort.postMessage({ webrtc: { kind, screenId, payload } });
+        } catch (e) {
+            Log.Warn('relayWebRTCSignalUp post failed: ' + e);
+        }
+    }
+
     _handleEncodedFrame(e) {
+        // The encodedFramePort is shared by the encoded-frame fast path and
+        // the per-screen WebRTC signaling relay. WebRTC signals are tagged
+        // with a `webrtc` envelope; hand them to rfb (the secondary builds
+        // its own RTCPeerConnection from relayed offers).
+        if (e.data && e.data.webrtc) {
+            const w = e.data.webrtc;
+            if (this._rfb &&
+                typeof this._rfb._onRelayedWebRTCSignal === 'function') {
+                this._rfb._onRelayedWebRTCSignal(w.kind, w.screenId, w.payload);
+            }
+            return;
+        }
         const { codec, keyFrame, data, x, y, width, height, frameId } = e.data;
 
         // Reconfigure decoder on first use or when codec/dimensions change
@@ -1621,6 +1721,16 @@ export default class Display {
             this._localDecoderCodec = codec;
             this._localDecoderW = width;
             this._localDecoderH = height;
+            // A freshly (re)configured VideoDecoder must be fed a key frame
+            // first; a delta throws and tears the decoder down. After a
+            // transport switch (WebRTC -> WebSocket) the first relayed frame
+            // is usually mid-GOP, so wait for the next key frame.
+            this._localDecoderNeedKey = true;
+        }
+
+        if (this._localDecoderNeedKey) {
+            if (!keyFrame) return;   // drop deltas until the GOP boundary
+            this._localDecoderNeedKey = false;
         }
 
         const ts = ++this._localDecoderTs;

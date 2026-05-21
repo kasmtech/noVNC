@@ -38,7 +38,7 @@ import RREDecoder from "./decoders/rre.js";
 import HextileDecoder from "./decoders/hextile.js";
 import KasmVideoDecoder from "./decoders/kasmvideo.js";
 import WebRTCVideoTransport from "./transport/webrtc_video.js";
-import { WEBRTC_MSG_TYPE, WebRTCSignalKind } from "./transport/webrtc_signaling.js";
+import WebRTCSignaling, { WEBRTC_MSG_TYPE, WEBRTC_SESSION_SCREEN, WebRTCSignalKind, writeWebRTCFrame } from "./transport/webrtc_signaling.js";
 import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
 import UDPDecoder from './decoders/udp.js';

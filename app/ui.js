@@ -912,7 +912,8 @@ const UI = {
     applyStreamMode(mode, configuration) {
         UI.toggleStreamModeGroupVisibility(mode);
 
-        if (mode !== encodings.pseudoEncodingStreamingModeJpegWebp) {
+        const isImageMode = mode === encodings.pseudoEncodingStreamingModeJpegWebp;
+        if (!isImageMode) {
             const config = configuration || UI.rfb?.videoCodecConfigurations[mode];
 
             if (WebUtil.isInsideKasmVDI()) {
@@ -929,7 +930,9 @@ const UI = {
             UI.updateQualitySliderRange(mode, config);
         }
 
-        UI.updateQuality();
+        const framerateSettingName = isImageMode ? 'framerate_image_mode' : 'framerate_streaming_mode';
+        const frameRate = parseInt(UI.getSetting(framerateSettingName));
+        UI.updateQuality(frameRate);
         UI.rfb?._requestFullRefresh();
 
         const streamModeElem = UI.getSettingElement(UI_SETTINGS.STREAM_MODE);

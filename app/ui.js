@@ -1875,6 +1875,7 @@ const UI = {
         UI.rfb.addEventListener("desktopname", UI.updateDesktopName);
         UI.rfb.addEventListener("inputlock", UI.inputLockChanged);
         UI.rfb.addEventListener("inputlockerror", UI.inputLockError);
+        UI.rfb.addEventListener("gamemodeforced", UI.onGameModeForced);
         UI.rfb.addEventListener("screenregistered", UI.screenRegistered);
         UI.rfb.addEventListener("sharedSessionUserJoin", UI.sharedSessionUserJoin);
         UI.rfb.addEventListener("sharedSessionUserLeft", UI.sharedSessionUserLeft);
@@ -3441,6 +3442,17 @@ const UI = {
                 .classList.remove("noVNC_selected");
                 UI.sendMessage('enable_pointer_lock', false);
             }
+        }
+    },
+
+    onGameModeForced() {
+        if (!UI.rfb.pointerRelative) {
+            // Set the mode but do NOT call requestPointerLock() — browsers require a
+            // user gesture for that. Setting pointerRelative=true is enough: rfb.js
+            // will re-request pointer lock on the next click via _setLastActive().
+            UI.rfb.pointerRelative = true;
+            document.getElementById('noVNC_game_mode_button').classList.add("noVNC_selected");
+            UI.showStatus('Game Mode required by this session. Click anywhere to engage.', 'warn', 5000, true);
         }
     },
 

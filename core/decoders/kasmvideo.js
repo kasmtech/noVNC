@@ -211,6 +211,8 @@ export default class KasmVideoDecoder {
 
         if (width !== screen.width || height !== screen.height || codec !== screen.codec) {
             this._updateSize(screen, codec, width, height);
+        } else if (keyFrame) {
+            this._configureDecoder(screen);
         }
 
         const vidChunk = new EncodedVideoChunk({

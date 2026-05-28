@@ -172,6 +172,7 @@ export default class Display {
         this._localDecoderH = 0;
         this._localDecoderMeta = new Map(); // timestamp → {x, y, width, height, frameId}
         this._localDecoderTs = 0;
+        this._preferSoftwareDecode = false;
         this._rfb = rfb;
 
         this._damageBounds = { left: 0, top: 0, right: this._backbuffer.width, bottom: this._backbuffer.height };
@@ -248,6 +249,18 @@ export default class Display {
 
     get fps() { return this._fps; }
     get droppedFps() { return this._droppedFramesRate; }
+
+    get preferSoftwareDecode() { return this._preferSoftwareDecode; }
+    set preferSoftwareDecode(value) {
+        if (this._preferSoftwareDecode !== value) {
+            this._preferSoftwareDecode = value;
+            if (this._localDecoder) {
+                this._localDecoder.close();
+                this._localDecoder = null;
+                this._localDecoderCodec = null;
+            }
+        }
+    }
 
     // ===== PUBLIC METHODS =====
 
@@ -1597,6 +1610,8 @@ export default class Display {
                 displayAspectWidth: width,
                 displayAspectHeight: height,
                 optimizeForLatency: true,
+                // Chrome WebCodecs bug with NVENC h264
+                hardwareAcceleration: this._preferSoftwareDecode ? 'prefer-software' : 'prefer-hardware',
             });
             this._localDecoderCodec = codec;
             this._localDecoderW = width;

@@ -3053,7 +3053,7 @@ const UI = {
             case 0: // static resolution, but same settings as medium
             default:
                 fps = (fps && Number.isFinite(fps)) ? fps : FPS.MIN;
-                forceFramerate((fps) ? fps : FPS.MIN);
+                forceFramerate(fps);
                 UI.forceSetting('jpeg_video_quality', 7);
                 UI.forceSetting('webp_video_quality', 7);
                 UI.forceSetting('dynamic_quality_min', 4);

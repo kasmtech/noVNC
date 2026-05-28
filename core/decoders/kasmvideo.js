@@ -12,6 +12,7 @@
 import * as Log from '../util/logging.js';
 import {perfLogger} from '../util/performance-logger.js';
 import {VIDEO_CODEC_NAMES} from "../codecs";
+import {encodings} from "../encodings.js";
 
 //avc1.4d002a - main
 /// avc1.42001E - baseline
@@ -73,6 +74,7 @@ export default class KasmVideoDecoder {
             displayAspectWidth: screen.width,
             displayAspectHeight: screen.height,
             optimizeForLatency: true,
+            hardwareAcceleration: this._rfb.streamMode === encodings.pseudoEncodingStreamingModeAVCNVENC ? 'prefer-software' : 'prefer-hardware',
         };
 
         Log.Debug('Applying decoder config: ', config);

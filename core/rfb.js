@@ -819,6 +819,9 @@ export default class RFB extends EventTargetMixin {
         if (value !== this._streamMode) {
             this._streamMode = value;
             this._pendingApplyEncodingChanges = true;
+            if (this._display) {
+                this._display.preferSoftwareDecode = value === encodings.pseudoEncodingStreamingModeAVCNVENC;
+            }
         }
     }
 

@@ -1574,6 +1574,17 @@ export default class Display {
         }
     }
 
+    _configureLocalDecoder(codec, width, height) {
+        this._localDecoder.configure({
+            codec,
+            displayAspectWidth: width,
+            displayAspectHeight: height,
+            optimizeForLatency: true,
+            // Chrome WebCodecs bug with NVENC h264
+            hardwareAcceleration: this._preferSoftwareDecode ? 'prefer-software' : 'prefer-hardware',
+        });
+    }
+
     _handleEncodedFrame(e) {
         const { codec, keyFrame, data, x, y, width, height, frameId } = e.data;
 
@@ -1605,17 +1616,12 @@ export default class Display {
                     this._localDecoder = null;
                 }
             });
-            this._localDecoder.configure({
-                codec,
-                displayAspectWidth: width,
-                displayAspectHeight: height,
-                optimizeForLatency: true,
-                // Chrome WebCodecs bug with NVENC h264
-                hardwareAcceleration: this._preferSoftwareDecode ? 'prefer-software' : 'prefer-hardware',
-            });
             this._localDecoderCodec = codec;
             this._localDecoderW = width;
             this._localDecoderH = height;
+            this._configureLocalDecoder(codec, width, height);
+        } else if (keyFrame) {
+            this._configureLocalDecoder(codec, width, height);
         }
 
         const ts = ++this._localDecoderTs;

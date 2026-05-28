@@ -28,21 +28,19 @@ export function clientToElement(x, y, elem) {
     } else {
         pos.y = y - bounds.top;
     }
-    
+
     //multiple KasmVNC screens, Window can still receive mouse events when cursor goes
     //outside of the window if the mouse is down while the moving occurs
-    if (x > window.innerWidth) { 
-        pos.x += (x - window.innerWidth); 
+    if (x > window.innerWidth) {
+        pos.x += (x - window.innerWidth);
+    } else if (x < 0) {
+        pos.x = 0;
     }
-    else if (x < 0) { 
-        pos.x = x + bounds.left; 
+    if (y > window.innerHeight) {
+        pos.y += (y - window.innerHeight);
+    } else if (y < 0) {
+        pos.y = 0;
     }
-    if (y > window.innerHeight) { 
-        pos.y += (y - window.innerHeight); 
-    }
-    else if (y < 0) { 
-        pos.y = y + bounds.top; 
-    }
-    
+
     return pos;
 }

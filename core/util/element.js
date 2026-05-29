@@ -34,12 +34,12 @@ export function clientToElement(x, y, elem) {
     if (x > window.innerWidth) {
         pos.x += (x - window.innerWidth);
     } else if (x < 0) {
-        pos.x = 0;
+        pos.x = x + bounds.left;
     }
     if (y > window.innerHeight) {
         pos.y += (y - window.innerHeight);
     } else if (y < 0) {
-        pos.y = 0;
+        pos.y = y + bounds.top;
     }
 
     return pos;

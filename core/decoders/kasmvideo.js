@@ -162,6 +162,7 @@ export default class KasmVideoDecoder {
                 type: 'encoded_frame',
                 codec: VIDEO_CODEC_NAMES[codec],
                 keyFrame: !!keyFrame,
+                streamMode: this._rfb.streamMode,
                 data: buffer,
                 x: localX, y: localY, width, height, frameId
             }, [buffer]);
@@ -187,6 +188,7 @@ export default class KasmVideoDecoder {
                 id: screenId,
                 width: width,
                 height: height,
+                streamMode: this._rfb.streamMode,
                 decoder: new VideoDecoder({
                     output: (frame) => {
                         try {
@@ -209,10 +211,10 @@ export default class KasmVideoDecoder {
             this._decoders.set(screenId, screen);
         }
 
-        if (width !== screen.width || height !== screen.height || codec !== screen.codec) {
+        if (width !== screen.width || height !== screen.height || codec !== screen.codec ||
+            screen.streamMode !== this._rfb.streamMode) {
             this._updateSize(screen, codec, width, height);
-        } else if (keyFrame) {
-            this._configureDecoder(screen);
+            screen.streamMode = this._rfb.streamMode;
         }
 
         const vidChunk = new EncodedVideoChunk({

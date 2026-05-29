@@ -170,9 +170,9 @@ export default class Display {
         this._localDecoderCodec = null;
         this._localDecoderW = 0;
         this._localDecoderH = 0;
+        this._localDecoderStreamMode = null;
         this._localDecoderMeta = new Map(); // timestamp → {x, y, width, height, frameId}
         this._localDecoderTs = 0;
-        this._preferSoftwareDecode = false;
         this._rfb = rfb;
 
         this._damageBounds = { left: 0, top: 0, right: this._backbuffer.width, bottom: this._backbuffer.height };
@@ -249,18 +249,6 @@ export default class Display {
 
     get fps() { return this._fps; }
     get droppedFps() { return this._droppedFramesRate; }
-
-    get preferSoftwareDecode() { return this._preferSoftwareDecode; }
-    set preferSoftwareDecode(value) {
-        if (this._preferSoftwareDecode !== value) {
-            this._preferSoftwareDecode = value;
-            if (this._localDecoder) {
-                this._localDecoder.close();
-                this._localDecoder = null;
-                this._localDecoderCodec = null;
-            }
-        }
-    }
 
     // ===== PUBLIC METHODS =====
 
@@ -1574,23 +1562,25 @@ export default class Display {
         }
     }
 
-    _configureLocalDecoder(codec, width, height) {
+    _configureLocalDecoder(codec, width, height, streamMode) {
         this._localDecoder.configure({
             codec,
             displayAspectWidth: width,
             displayAspectHeight: height,
             optimizeForLatency: true,
             // Chrome WebCodecs bug with NVENC h264
-            hardwareAcceleration: this._preferSoftwareDecode ? 'prefer-software' : 'prefer-hardware',
+            hardwareAcceleration: streamMode === encodings.pseudoEncodingStreamingModeAVCNVENC
+                ? 'prefer-software' : 'prefer-hardware',
         });
     }
 
     _handleEncodedFrame(e) {
-        const { codec, keyFrame, data, x, y, width, height, frameId } = e.data;
+        const { codec, keyFrame, streamMode, data, x, y, width, height, frameId } = e.data;
 
-        // Reconfigure decoder on first use or when codec/dimensions change
+        // Reconfigure decoder on first use or when codec/dimensions/streaming mode change
         if (!this._localDecoder || this._localDecoderCodec !== codec ||
-            this._localDecoderW !== width || this._localDecoderH !== height) {
+            this._localDecoderW !== width || this._localDecoderH !== height ||
+            this._localDecoderStreamMode !== streamMode) {
             if (this._localDecoder) {
                 this._localDecoder.close();
                 this._localDecoderMeta.clear();
@@ -1619,9 +1609,8 @@ export default class Display {
             this._localDecoderCodec = codec;
             this._localDecoderW = width;
             this._localDecoderH = height;
-            this._configureLocalDecoder(codec, width, height);
-        } else if (keyFrame) {
-            this._configureLocalDecoder(codec, width, height);
+            this._localDecoderStreamMode = streamMode;
+            this._configureLocalDecoder(codec, width, height, streamMode);
         }
 
         const ts = ++this._localDecoderTs;

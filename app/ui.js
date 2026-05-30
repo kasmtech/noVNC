@@ -912,7 +912,8 @@ const UI = {
     applyStreamMode(mode, configuration) {
         UI.toggleStreamModeGroupVisibility(mode);
 
-        if (mode !== encodings.pseudoEncodingStreamingModeJpegWebp) {
+        const isImageMode = mode === encodings.pseudoEncodingStreamingModeJpegWebp;
+        if (!isImageMode) {
             const config = configuration || UI.rfb?.videoCodecConfigurations[mode];
 
             if (WebUtil.isInsideKasmVDI()) {
@@ -929,7 +930,9 @@ const UI = {
             UI.updateQualitySliderRange(mode, config);
         }
 
-        UI.updateQuality();
+        const framerateSettingName = isImageMode ? 'framerate_image_mode' : 'framerate_streaming_mode';
+        const frameRate = parseInt(UI.getSetting(framerateSettingName));
+        UI.updateQuality(frameRate);
         UI.rfb?._requestFullRefresh();
 
         const streamModeElem = UI.getSettingElement(UI_SETTINGS.STREAM_MODE);
@@ -3050,21 +3053,19 @@ const UI = {
             case 2: // medium
             case 0: // static resolution, but same settings as medium
             default:
-                if (imageMode) {
-                    fps = (fps && Number.isFinite(fps)) ? fps : FPS.MIN;
-                    UI.forceSetting('jpeg_video_quality', 7);
-                    UI.forceSetting('webp_video_quality', 7);
-                    UI.forceSetting('dynamic_quality_min', 4);
-                    UI.forceSetting('dynamic_quality_max', 9);
-                    UI.forceSetting('max_video_resolution_x', 960);
-                    UI.forceSetting('max_video_resolution_y', 540);
-                    forceFramerate((fps) ? fps : FPS.MIN);
-                    UI.forceSetting('treat_lossless', 7);
-                    UI.forceSetting('video_time', 5);
-                    UI.forceSetting('video_area', 65);
-                    UI.forceSetting('video_scaling', 0);
-                    UI.forceSetting('video_out_time', 3);
-                }
+                fps = (fps && Number.isFinite(fps)) ? fps : FPS.MIN;
+                forceFramerate(fps);
+                UI.forceSetting('jpeg_video_quality', 7);
+                UI.forceSetting('webp_video_quality', 7);
+                UI.forceSetting('dynamic_quality_min', 4);
+                UI.forceSetting('dynamic_quality_max', 9);
+                UI.forceSetting('max_video_resolution_x', 960);
+                UI.forceSetting('max_video_resolution_y', 540);
+                UI.forceSetting('treat_lossless', 7);
+                UI.forceSetting('video_time', 5);
+                UI.forceSetting('video_area', 65);
+                UI.forceSetting('video_scaling', 0);
+                UI.forceSetting('video_out_time', 3);
                 break;
         }
 

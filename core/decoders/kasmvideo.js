@@ -23,6 +23,7 @@ export default class KasmVideoDecoder {
         this._keyFrame = 0;
         this._screenId = null;
         this._ctl = null;
+        this._codecTypeId = 0;
         this._rfb = rfb;
         this._display = display;
 
@@ -44,7 +45,7 @@ export default class KasmVideoDecoder {
             this._ctl = sock.rQshift8();
 
             // Figure out the filter
-            this._ctl = this._ctl >> 4;
+            this._ctl >>= 4;
         }
 
         let ret;
@@ -66,15 +67,18 @@ export default class KasmVideoDecoder {
     }
 
     // ===== Private Methods =====
-    _configureDecoder(screen) {
-        Log.Debug('Configuring decoder for screen: ', screen.id, ' codec: ', VIDEO_CODEC_NAMES[screen.codec], ' width: ', screen.width, ' height: ', screen.height);
+    _configureDecoder(screen, codec, codecTypeId) {
+        screen.codec = codec;
+        screen.codecTypeId = codecTypeId;
+
+        Log.Debug('Configuring decoder for screen: ', screen.id, ' codec: ', VIDEO_CODEC_NAMES[codec], ' width: ', screen.width, ' height: ', screen.height);
 
         const config = {
-            codec: VIDEO_CODEC_NAMES[screen.codec],
+            codec: VIDEO_CODEC_NAMES[codec],
             displayAspectWidth: screen.width,
             displayAspectHeight: screen.height,
             optimizeForLatency: true,
-            hardwareAcceleration: this._rfb.streamMode === encodings.pseudoEncodingStreamingModeAVCNVENC ? 'prefer-software' : 'prefer-hardware',
+            hardwareAcceleration: codecTypeId === encodings.pseudoEncodingStreamingModeAVCNVENC ? 'prefer-software' : 'prefer-hardware',
         };
 
         Log.Debug('Applying decoder config: ', config);
@@ -87,14 +91,11 @@ export default class KasmVideoDecoder {
         }
     }
 
-    _updateSize(screen, codec, width, height) {
+    _updateSize(screen, width, height) {
         Log.Debug('Updated size: ', {width, height});
 
         screen.width = width;
         screen.height = height;
-        screen.codec = codec;
-
-        this._configureDecoder(screen);
     }
 
     _skipRect(x, y, width, height, _sock, display, _depth, frameId) {
@@ -120,7 +121,7 @@ export default class KasmVideoDecoder {
         this._timestampMap.delete(frame.timestamp);
     }
 
-    _handleDecoderError(decoder) {
+    _handleDecoderError() {
         Log.Error('Decoder error triggered - clearing all decoders and switching to image mode');
         // We need to reset the decoders
         this._decoders.clear();
@@ -128,7 +129,7 @@ export default class KasmVideoDecoder {
     }
 
     _processVideoFrameRect(screenId, codec, x, y, width, height, sock, display, depth, frameId) {
-        let [keyFrame, dataArr] = this._readData(sock);
+        let [keyFrame, codecTypeId, dataArr] = this._readData(sock);
         Log.Debug('Screen: ', screenId, ' key_frame: ', keyFrame);
         if (dataArr === null) {
             return false;
@@ -143,7 +144,6 @@ export default class KasmVideoDecoder {
             // Just switch to image mode
             this._skippedFrames = 0;
             this._decoderRecovery = false;
-
             this._handleDecoderError();
 
             return true;
@@ -151,26 +151,28 @@ export default class KasmVideoDecoder {
 
         // Fast path: secondary screen with a direct MessagePort.
         // Transfer the raw encoded bytes (zero-copy ArrayBuffer) and skip local decode entirely.
-        const targetScreen = this._display._screens[screenId];
-        if (targetScreen?.encodedFramePort) {
-            const buffer = dataArr.buffer.slice(
-                dataArr.byteOffset, dataArr.byteOffset + dataArr.byteLength);
-            // Translate from global VNC framebuffer coordinates to screen-local coordinates.
-            const localX = x - targetScreen.x;
-            const localY = y - targetScreen.y;
-            targetScreen.encodedFramePort.postMessage({
-                type: 'encoded_frame',
-                codec: VIDEO_CODEC_NAMES[codec],
-                keyFrame: !!keyFrame,
-                streamMode: this._rfb.streamMode,
-                data: buffer,
-                x: localX, y: localY, width, height, frameId
-            }, [buffer]);
-            // Push a null-frame placeholder so the primary's async queue rect count
-            // stays correct. Without this the primary frame never reaches its expected
-            // rect count and stalls, showing characters one keystroke late.
-            display.enqueueVideoFrameRect(screenId, frameId, x, y, width, height);
-            return true;
+        if (screenId !== 0) {
+            const targetScreen = this._display._screens[screenId];
+            if (targetScreen?.encodedFramePort) {
+                const buffer = dataArr.buffer.slice(
+                    dataArr.byteOffset, dataArr.byteOffset + dataArr.byteLength);
+                // Translate from global VNC framebuffer coordinates to screen-local coordinates.
+                const localX = x - targetScreen.x;
+                const localY = y - targetScreen.y;
+                targetScreen.encodedFramePort.postMessage({
+                    type: 'encoded_frame',
+                    codec: VIDEO_CODEC_NAMES[codec],
+                    keyFrame: !!keyFrame,
+                    streamMode: this._rfb.streamMode,
+                    data: buffer,
+                    x: localX, y: localY, width, height, frameId
+                }, [buffer]);
+                // Push a null-frame placeholder so the primary's async queue rect count
+                // stays correct. Without this the primary frame never reaches its expected
+                // rect count and stalls, showing characters one keystroke late.
+                display.enqueueVideoFrameRect(screenId, frameId, x, y, width, height);
+                return true;
+            }
         }
 
         let screen;
@@ -188,7 +190,6 @@ export default class KasmVideoDecoder {
                 id: screenId,
                 width: width,
                 height: height,
-                streamMode: this._rfb.streamMode,
                 decoder: new VideoDecoder({
                     output: (frame) => {
                         try {
@@ -211,10 +212,17 @@ export default class KasmVideoDecoder {
             this._decoders.set(screenId, screen);
         }
 
-        if (width !== screen.width || height !== screen.height || codec !== screen.codec ||
-            screen.streamMode !== this._rfb.streamMode) {
-            this._updateSize(screen, codec, width, height);
-            screen.streamMode = this._rfb.streamMode;
+        if (width !== screen.width || height !== screen.height) {
+            this._updateSize(screen, width, height);
+            this._configureDecoder(screen, codec, codecTypeId);
+        }
+
+        // Receiving last frames after the switch
+        if (codec !== screen.codec || codecTypeId !== screen.codecTypeId || screen.codecTypeId !== this._rfb.streamMode) {
+            if (!keyFrame)
+                return true;
+
+            this._configureDecoder(screen, codec, codecTypeId);
         }
 
         const vidChunk = new EncodedVideoChunk({
@@ -256,40 +264,49 @@ export default class KasmVideoDecoder {
         return true;
     }
 
+    _readCompact(sock) {
+        let byte = sock.rQshift8();
+        let length = byte & 0x7f;
+        if (byte & 0x80) {
+            byte = sock.rQshift8();
+            length |= (byte & 0x7f) << 7;
+            if (byte & 0x80) {
+                byte = sock.rQshift8();
+                length |= byte << 14;
+            }
+        }
+        return length;
+    }
+
     _readData(sock) {
         if (this._len === 0) {
             if (sock.rQwait("KasmVideo", 5)) {
-                return [0, null];
+                return [0, 0, null];
             }
             // Start frame read timing
             this._readTime = perfLogger.start('frameRead');
 
+            this._codecTypeId = encodings.pseudoEncodingStreamingModeJpegWebp - sock.rQshift8();
             this._keyFrame = sock.rQshift8();
-            let byte = sock.rQshift8();
-            this._len = byte & 0x7f;
-            if (byte & 0x80) {
-                byte = sock.rQshift8();
-                this._len |= (byte & 0x7f) << 7;
-                if (byte & 0x80) {
-                    byte = sock.rQshift8();
-                    this._len |= byte << 14;
-                }
-            }
+            this._len = this._readCompact(sock);
         }
 
         if (sock.rQwait("KasmVideo", this._len)) {
-            return [0, null];
+            return [0, 0, null];
         }
 
         const data = sock.rQshiftBytes(this._len);
         const keyFrame = this._keyFrame;
+        const codecTypeId = this._codecTypeId;
+
         this._len = 0;
         this._keyFrame = 0;
+        this._codecTypeId = 0;
 
         // End frame read timing
         perfLogger.end('frameRead', this._readTime);
         this._readTime = 0;
-        return [keyFrame, data];
+        return [keyFrame, codecTypeId, data];
     }
 
     dispose() {

@@ -1580,7 +1580,10 @@ export default class Display {
         // Reconfigure decoder on first use or when codec/dimensions/streaming mode change
         if (!this._localDecoder || this._localDecoderCodec !== codec ||
             this._localDecoderW !== width || this._localDecoderH !== height ||
-            this._localDecoderStreamMode !== streamMode) {
+            (keyFrame && this._localDecoderStreamMode !== streamMode)) {
+            if (!keyFrame)
+                return;
+
             if (this._localDecoder) {
                 this._localDecoder.close();
                 this._localDecoderMeta.clear();

@@ -2262,14 +2262,14 @@ export default class RFB extends EventTargetMixin {
                     if (this._mouseButtonMask !== 0 && !event.data.args[2]) {
                         this._mouseButtonMask = 0;
                     }
-                    RFB.messages.pointerEvent(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
+                    RFB.messages.pointerEventClamped(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
 
                     //simulate a left click
                     if (event.data.args[3]) {
                         this._mouseButtonMask |= 0x1;
-                        RFB.messages.pointerEvent(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
+                        RFB.messages.pointerEventClamped(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
                         this._mouseButtonMask &= ~0x1;
-                        RFB.messages.pointerEvent(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
+                        RFB.messages.pointerEventClamped(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
                         Log.Debug('Simulated Left Click on secondary display.');
                     }
 
@@ -2280,7 +2280,7 @@ export default class RFB extends EventTargetMixin {
                     this._mouseLastScreenIndex = event.data.screenIndex;
                     this._mousePos = { 'x': coords[0], 'y': coords[1] };
                     this._mouseButtonMask |= event.data.args[2];
-                    RFB.messages.pointerEvent(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
+                    RFB.messages.pointerEventClamped(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
                     this._setLastActive();
                     break;
                 case 'mouseup':
@@ -2288,14 +2288,14 @@ export default class RFB extends EventTargetMixin {
                     this._mouseLastScreenIndex = event.data.screenIndex;
                     this._mousePos = { 'x': coords[0], 'y': coords[1] };
                     this._mouseButtonMask &= ~event.data.args[2];
-                    RFB.messages.pointerEvent(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
+                    RFB.messages.pointerEventClamped(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
                     this._setLastActive();
                     break;
                 case 'scroll':
                     coords = this._display.getServerRelativeCoordinates(event.data.screenIndex, event.data.args[0], event.data.args[1]);
                     this._mouseLastScreenIndex = event.data.screenIndex;
                     this._mousePos = { 'x': coords[0], 'y': coords[1] };
-                    RFB.messages.pointerEvent(this._sock, this._mousePos.x, this._mousePos.y, 0, event.data.args[2], event.data.args[3]);
+                    RFB.messages.pointerEventClamped(this._sock, this._mousePos.x, this._mousePos.y, 0, event.data.args[2], event.data.args[3]);
                     this._setLastActive();
                     break;
                 case 'keepAlive':
@@ -2730,7 +2730,7 @@ export default class RFB extends EventTargetMixin {
             this._mousePos = { x: this._pointerLockPos.x , y: this._pointerLockPos.y };
             this._cursor.move(this._pointerLockPos.x, this._pointerLockPos.y);
         } else {
-            RFB.messages.pointerEvent(this._sock, this._display.absX(x), this._display.absY(y), mask);
+            RFB.messages.pointerEventClamped(this._sock, this._display.absX(x), this._display.absY(y), mask);
         }
 
     }
@@ -2738,9 +2738,10 @@ export default class RFB extends EventTargetMixin {
     _sendScroll(x, y, dX, dY) {
         if (this._rfbConnectionState !== 'connected') { return; }
         if (this._viewOnly) { return; } // View only, skip mouse events
-
-        if (this._isPrimaryDisplay) {
-            RFB.messages.pointerEvent(this._sock, this._display.absX(x), this._display.absY(y), 0, dX, dY);
+        if (this._pointerLock && this._directMouseEnabled) {
+            this._sendDirectMouse(0, 0, this._mouseButtonMask, dX, dY);
+        } else if (this._isPrimaryDisplay) {
+            RFB.messages.pointerEventClamped(this._sock, this._display.absX(x), this._display.absY(y), 0, dX, dY);
         } else {
             this._proxyRFBMessage('scroll', [ x, y, dX, dY ]);
         }
@@ -5378,6 +5379,28 @@ RFB.messages = {
         sock.flush();
     },
 
+    pointerEventClamped(sock, x, y, mask, dX = 0, dY = 0) {
+        this.pointerEvent(sock, Math.max(0, x), Math.max(0, y), mask, dX, dY);
+    },
+
+    directMouseEvent(sock, dx, dy, buttonMask, scrollDX, scrollDY) {
+        const buff = sock._sQ;
+        const offset = sock._sQlen;
+
+        buff[offset]     = messages.msgTypeDirectMouseEvent;
+        buff[offset + 1] = buttonMask & 0xff;
+        buff[offset + 2] = (dx >> 8) & 0xff;
+        buff[offset + 3] = dx & 0xff;
+        buff[offset + 4] = (dy >> 8) & 0xff;
+        buff[offset + 5] = dy & 0xff;
+        buff[offset + 6] = (scrollDX >> 8) & 0xff;
+        buff[offset + 7] = scrollDX & 0xff;
+        buff[offset + 8] = (scrollDY >> 8) & 0xff;
+        buff[offset + 9] = scrollDY & 0xff;
+
+        sock._sQlen += 10;
+        sock.flush();
+    },
     keepAlive(sock) {
         const buff = sock._sQ;
         const offset = sock._sQlen;

@@ -78,7 +78,7 @@ export default class KasmVideoDecoder {
             displayAspectWidth: screen.width,
             displayAspectHeight: screen.height,
             optimizeForLatency: true,
-            hardwareAcceleration: codecTypeId === encodings.pseudoEncodingStreamingModeAVCNVENC ? 'prefer-software' : 'prefer-hardware',
+            hardwareAcceleration: codecTypeId === encodings.pseudoEncodingStreamingModeAVCNVENC ? 'prefer-software' : 'no-preference',
         };
 
         Log.Debug('Applying decoder config: ', config);
@@ -163,7 +163,7 @@ export default class KasmVideoDecoder {
                     type: 'encoded_frame',
                     codec: VIDEO_CODEC_NAMES[codec],
                     keyFrame: !!keyFrame,
-                    streamMode: this._rfb.streamMode,
+                    streamMode: codecTypeId,
                     data: buffer,
                     x: localX, y: localY, width, height, frameId
                 }, [buffer]);

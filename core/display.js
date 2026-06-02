@@ -1570,7 +1570,7 @@ export default class Display {
             optimizeForLatency: true,
             // Chrome WebCodecs bug with NVENC h264
             hardwareAcceleration: streamMode === encodings.pseudoEncodingStreamingModeAVCNVENC
-                ? 'prefer-software' : 'prefer-hardware',
+                ? 'prefer-software' : 'no-preference',
         });
     }
 

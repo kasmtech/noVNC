@@ -4474,8 +4474,26 @@ export default class RFB extends EventTargetMixin {
         this._webrtcIceServersRaw = payload || '';
         this._webrtcIceServers = this._webrtcIceServersRaw.split('\n')
             .map(s => s.trim()).filter(Boolean)
-            .map(url => ({ urls: url }));
+            .map(raw => RFB._parseIceServer(raw));
         Log.Debug('WebRTC ICE servers: ' + JSON.stringify(this._webrtcIceServers));
+    }
+
+    // Parse one server-sent ICE server URL into an RTCIceServer dict. STUN
+    // URLs pass through unchanged. TURN URLs carry credentials in the URL
+    // userinfo (turn:user:pass@host:port?...) — the W3C RTCIceServer API
+    // rejects userinfo in `urls`, so split it back out into the separate
+    // username/credential fields (percent-decoding, mirroring the
+    // urlEncodeCredential() done server-side in VNCSConnectionST).
+    static _parseIceServer(raw) {
+        const m = /^(turns?):(?:([^@/:]+):([^@/]*)@)(.+)$/i.exec(raw);
+        if (!m) {
+            return { urls: raw };
+        }
+        return {
+            urls: m[1] + ':' + m[4],
+            username: decodeURIComponent(m[2]),
+            credential: decodeURIComponent(m[3]),
+        };
     }
 
     // The screenId this window renders over WebRTC. The primary renders

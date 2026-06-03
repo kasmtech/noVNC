@@ -515,7 +515,11 @@ const UI = {
         {
             connect_btn_el.addEventListener('click', UI.connect);
         }
-
+        var cancel_btn_el = document.getElementById("noVNC_cancel_reconnect_button");
+        if (typeof(cancel_btn_el) != 'undefined' && cancel_btn_el != null) {
+            cancel_btn_el.addEventListener('click', UI.cancelReconnect);
+        }
+        
     },
 
     addTouchSpecificHandlers() {

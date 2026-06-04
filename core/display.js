@@ -170,6 +170,7 @@ export default class Display {
         this._localDecoderCodec = null;
         this._localDecoderW = 0;
         this._localDecoderH = 0;
+        this._localDecoderStreamMode = null;
         this._localDecoderMeta = new Map(); // timestamp → {x, y, width, height, frameId}
         this._localDecoderTs = 0;
         this._rfb = rfb;
@@ -1561,12 +1562,28 @@ export default class Display {
         }
     }
 
-    _handleEncodedFrame(e) {
-        const { codec, keyFrame, data, x, y, width, height, frameId } = e.data;
+    _configureLocalDecoder(codec, width, height, streamMode) {
+        this._localDecoder.configure({
+            codec,
+            displayAspectWidth: width,
+            displayAspectHeight: height,
+            optimizeForLatency: true,
+            // Chrome WebCodecs bug with NVENC h264
+            hardwareAcceleration: streamMode === encodings.pseudoEncodingStreamingModeAVCNVENC
+                ? 'prefer-software' : 'no-preference',
+        });
+    }
 
-        // Reconfigure decoder on first use or when codec/dimensions change
+    _handleEncodedFrame(e) {
+        const { codec, keyFrame, streamMode, data, x, y, width, height, frameId } = e.data;
+
+        // Reconfigure decoder on first use or when codec/dimensions/streaming mode change
         if (!this._localDecoder || this._localDecoderCodec !== codec ||
-            this._localDecoderW !== width || this._localDecoderH !== height) {
+            this._localDecoderW !== width || this._localDecoderH !== height ||
+            (keyFrame && this._localDecoderStreamMode !== streamMode)) {
+            if (!keyFrame)
+                return;
+
             if (this._localDecoder) {
                 this._localDecoder.close();
                 this._localDecoderMeta.clear();
@@ -1592,15 +1609,11 @@ export default class Display {
                     this._localDecoder = null;
                 }
             });
-            this._localDecoder.configure({
-                codec,
-                displayAspectWidth: width,
-                displayAspectHeight: height,
-                optimizeForLatency: true,
-            });
             this._localDecoderCodec = codec;
             this._localDecoderW = width;
             this._localDecoderH = height;
+            this._localDecoderStreamMode = streamMode;
+            this._configureLocalDecoder(codec, width, height, streamMode);
         }
 
         const ts = ++this._localDecoderTs;

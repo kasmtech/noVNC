@@ -17,7 +17,6 @@ import { encodings } from "./encodings.js";
 import {Canvas2DRenderer} from "./renderers/Canvas2DRenderer";
 import {WebGLRenderer} from "./renderers/WebGLRenderer";
 import { perfLogger } from './util/performance-logger.js';
-import {VIDEO_CODEC_HW_ACC} from "./codecs";
 
 export default class Display {
     constructor(target, rfb, isPrimaryDisplay, videoRenderingMode = 'canvas2d') {
@@ -1570,7 +1569,8 @@ export default class Display {
             displayAspectHeight: height,
             optimizeForLatency: true,
             // Chrome WebCodecs bug with NVENC h264
-            hardwareAcceleration: streamMode === encodings.pseudoEncodingStreamingModeAVCNVENC ? 'prefer-software' : VIDEO_CODEC_HW_ACC[codec],
+            hardwareAcceleration: streamMode === encodings.pseudoEncodingStreamingModeAVCNVENC
+                ? 'prefer-software' : 'no-preference',
         });
     }
 

@@ -9,6 +9,8 @@ export const messages = {
     msgTypeForceGameMode: 187,
     msgTypeDirectMouseEvent: 188,
     msgTypeLatencyMeasurement: 189,
+    msgTypeTouchSupported: 189,
+    msgTypeTouchEvent: 190,
     msgTypeUserAddedToSession: 253,
     msgTypeUserRemovedFromSession: 254
 };

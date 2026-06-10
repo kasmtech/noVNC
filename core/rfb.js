@@ -2569,6 +2569,8 @@ export default class RFB extends EventTargetMixin {
 
         ev.preventDefault();
 
+        console.log('Event ' + ev.type);
+
         const changed = ev.changedTouches;
         for (let i = 0; i < changed.length; i++) {
             const touch = changed[i];

@@ -2650,6 +2650,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleGesture(ev) {
+        return; // native touch active — gestures disabled
+
         let magnitude;
 
         let pos = clientToElement(ev.detail.clientX, ev.detail.clientY,
@@ -2667,24 +2669,13 @@ export default class RFB extends EventTargetMixin {
                         this._handleTapEvent(ev, 0x2);
                         break;
                     case 'drag':
-                        if (this._phoneStyleTouch) {
-                            // Phone style: a single-finger drag scrolls the
-                            // view, so start tracking the finger position
-                            // instead of pressing a button.
-                            this._dragScrollLastX = pos.x;
-                            this._dragScrollLastY = pos.y;
-                        } else {
-                            this._fakeMouseMove(ev, pos.x, pos.y);
-                            this._fakeMouseButton(pos.x, pos.y, true, 0x1);
-                        }
+                        this._fakeMouseMove(ev, pos.x, pos.y);
+
+                        this._fakeMouseButton(pos.x, pos.y, true, 0x1);
                         break;
                     case 'longpress':
                         this._fakeMouseMove(ev, pos.x, pos.y);
-                        // Phone style: long-press initiates a left-button drag
-                        // (move windows, select text). Otherwise keep the
-                        // historic right-button hold.
-                        this._fakeMouseButton(pos.x, pos.y, true,
-                                              this._phoneStyleTouch ? 0x1 : 0x4);
+                        this._fakeMouseButton(pos.x, pos.y, true, 0x4);
                         break;
 
                     case 'twodrag':
@@ -2707,20 +2698,6 @@ export default class RFB extends EventTargetMixin {
                     case 'threetap':
                         break;
                     case 'drag':
-                        if (this._phoneStyleTouch) {
-                            // Natural (direct) scrolling: dragging the content
-                            // down reveals what is above it. The scroll delta
-                            // is the negated finger movement, fed through the
-                            // normal wheel path so any app scrolls.
-                            this._sendScroll(pos.x, pos.y,
-                                             this._dragScrollLastX - pos.x,
-                                             this._dragScrollLastY - pos.y);
-                            this._dragScrollLastX = pos.x;
-                            this._dragScrollLastY = pos.y;
-                        } else {
-                            this._fakeMouseMove(ev, pos.x, pos.y);
-                        }
-                        break;
                     case 'longpress':
                         this._fakeMouseMove(ev, pos.x, pos.y);
                         break;
@@ -2783,16 +2760,12 @@ export default class RFB extends EventTargetMixin {
                     case 'twodrag':
                         break;
                     case 'drag':
-                        if (!this._phoneStyleTouch) {
-                            this._fakeMouseMove(ev, pos.x, pos.y);
-                            this._fakeMouseButton(pos.x, pos.y, false, 0x1);
-                        }
-                        // Phone style: scroll drag has no button to release.
+                        this._fakeMouseMove(ev, pos.x, pos.y);
+                        this._fakeMouseButton(pos.x, pos.y, false, 0x1);
                         break;
                     case 'longpress':
                         this._fakeMouseMove(ev, pos.x, pos.y);
-                        this._fakeMouseButton(pos.x, pos.y, false,
-                                              this._phoneStyleTouch ? 0x1 : 0x4);
+                        this._fakeMouseButton(pos.x, pos.y, false, 0x4);
                         break;
                 }
                 break;

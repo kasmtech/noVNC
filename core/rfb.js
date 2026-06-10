@@ -4161,6 +4161,8 @@ export default class RFB extends EventTargetMixin {
                 configurations: codecConfigurations
             }
         }));
+
+        return true;
     }
 
     _handleForceGameMode() {

@@ -1915,6 +1915,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _proxyRFBMessage(messageType, data) {
+        if (!this._controlChannel) { return; }
         let message = {
             eventType: messageType,
             args: data,
@@ -2079,7 +2080,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _unregisterSecondaryDisplay() {
-        if (!this._isPrimaryDisplay) {
+        if (!this._isPrimaryDisplay && this._controlChannel) {
             let message = {
                 eventType: 'unregister',
                 screenID: this._display.screenID
@@ -2089,7 +2090,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _registerSecondaryDisplay(currentScreen = false, details = null) {
-        if (!this._isPrimaryDisplay) {
+        if (!this._isPrimaryDisplay && this._controlChannel) {
             const registerType = (currentScreen) ? 'reattach' : 'register'
 
             let size = this._screenSize();
@@ -2125,6 +2126,10 @@ export default class RFB extends EventTargetMixin {
     }
 
     identify(screens) {
+        // _controlChannel only exists when multi-monitor support is available
+        // (e.g. not on Chrome for Android, which lacks SharedWorker). Guard so
+        // the resize-triggered identify path doesn't throw there.
+        if (!this._controlChannel) { return; }
         let message = {
             eventType: 'identify',
             screens

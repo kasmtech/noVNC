@@ -2470,9 +2470,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendMouse(x, y, mask) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; } // View only, skip mouse events
-        if (!this._isPrimaryDisplay) { return; }
+        if (!this.isConnected || this._viewOnly || !this._isPrimaryDisplay)
+            return;
 
         if (this._pointerLock && this._directMouseEnabled) {
             // Direct drive: button state changes only (movement is sent raw from _handleMouse)
@@ -2484,8 +2483,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendScroll(x, y, dX, dY) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; } // View only, skip mouse events
+        if (!this.isConnected || this._viewOnly)  // View only, skip mouse events
+            return;
 
         if (this._pointerLock && this._directMouseEnabled) {
             this._sendDirectMouse(0, 0, this._mouseButtonMask, dX, dY);
@@ -2497,15 +2496,15 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendDirectMouse(dx, dy, buttonMask, scrollDX, scrollDY) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; }
-        if (!this._isPrimaryDisplay) { return; }
+        if (!this.isConnected || this._viewOnly || !this._isPrimaryDisplay)
+            return;
+
         RFB.messages.directMouseEvent(this._sock, dx, dy, buttonMask, scrollDX, scrollDY);
     }
 
     _handleWheel(ev) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; } // View only, skip mouse events
+        if (!this.isConnected || this._viewOnly)  // View only, skip mouse events
+            return;
 
         ev.stopPropagation();
         ev.preventDefault();
@@ -2560,16 +2559,10 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleNativeTouch(ev) {
-        // Only active once the server has confirmed touch support; otherwise
-        // the (still-attached) gesture handler owns these events.
-        if (!this._nativeTouchActive) { return; }
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; }
-        if (!this._isPrimaryDisplay) { return; }
+        //  ||  !this._nativeTouchActive
+        if (!this.isConnected || this._viewOnly || !this._isPrimaryDisplay)
+            return;
 
-        // We own these touches now: stop the browser from scrolling, zooming
-        // or emulating mouse events. Propagation is left intact so the canvas
-        // can still grab focus for the on-screen keyboard.
         ev.preventDefault();
 
         const changed = ev.changedTouches;
@@ -2599,9 +2592,6 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendTouch(id, state, x, y) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; }
-        if (!this._isPrimaryDisplay) { return; }
         RFB.messages.touchEvent(this._sock, id, state, x, y);
     }
 
@@ -3405,9 +3395,8 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingExtendedClipboard);
         encs.push(encodings.pseudoEncodingKasmDisconnectNotify);
         encs.push(encodings.pseudoEncodingDirectMouse);
-        if (isTouchDevice) {
+        if (isTouchDevice)
             encs.push(encodings.pseudoEncodingTouch);
-        }
         if (this._hasWebp())
             encs.push(encodings.pseudoEncodingWEBP);
         if (this._enableQOI)

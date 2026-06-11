@@ -226,6 +226,22 @@ export default class RFB extends EventTargetMixin {
         this._gestureLastMagnitudeX = 0;
         this._gestureLastMagnitudeY = 0;
 
+        // Native (XInput2) touch state. When the server confirms touch support
+        // we stop synthesising gestures and instead forward raw touch points,
+        // letting touch-aware remote applications handle multitouch directly.
+        this._serverSupportsTouch = false;
+        this._nativeTouchActive = false;
+        this._activeTouchIds = new Set();
+
+        // Phone-style touch gestures. When enabled, a single-finger drag
+        // scrolls the view (via synthesised wheel events, so it works in
+        // every remote app, touch-aware or not) and a long-press starts a
+        // left-button drag. Tracks the previous finger position so each
+        // move can be turned into a relative scroll delta.
+        this._phoneStyleTouch = false;
+        this._dragScrollLastX = 0;
+        this._dragScrollLastY = 0;
+
         // Secondary Displays
         this._supportsMultiMonitor = (typeof BroadcastChannel !== "undefined" && typeof SharedWorker !== "undefined");
         if (this._supportsMultiMonitor) {
@@ -249,6 +265,7 @@ export default class RFB extends EventTargetMixin {
             handlePointerLockError: this._handlePointerLockError.bind(this),
             handleWheel: this._handleWheel.bind(this),
             handleGesture: this._handleGesture.bind(this),
+            handleNativeTouch: this._handleNativeTouch.bind(this),
             handleFocusChange: this._handleFocusChange.bind(this),
             handleMouseOut: this._handleMouseOut.bind(this),
             handleVisibilityChange: this._handleVisibilityChange.bind(this),
@@ -1391,6 +1408,14 @@ export default class RFB extends EventTargetMixin {
         this._canvas.addEventListener("gesturemove", this._eventHandlers.handleGesture);
         this._canvas.addEventListener("gestureend", this._eventHandlers.handleGesture);
 
+        // Native touch forwarding. Registered in the capture phase so that,
+        // once active, we can swallow the raw touch events before the gesture
+        // handler (attached in the bubble phase) ever sees them.
+        this._canvas.addEventListener("touchstart", this._eventHandlers.handleNativeTouch, true);
+        this._canvas.addEventListener("touchmove", this._eventHandlers.handleNativeTouch, true);
+        this._canvas.addEventListener("touchend", this._eventHandlers.handleNativeTouch, true);
+        this._canvas.addEventListener("touchcancel", this._eventHandlers.handleNativeTouch, true);
+
         this._resendClipboardNextUserDrivenEvent = true;
 
         // WebRTC UDP datachannel inits
@@ -1512,6 +1537,10 @@ export default class RFB extends EventTargetMixin {
         this._canvas.removeEventListener("gesturestart", this._eventHandlers.handleGesture);
         this._canvas.removeEventListener("gesturemove", this._eventHandlers.handleGesture);
         this._canvas.removeEventListener("gestureend", this._eventHandlers.handleGesture);
+        this._canvas.removeEventListener("touchstart", this._eventHandlers.handleNativeTouch, true);
+        this._canvas.removeEventListener("touchmove", this._eventHandlers.handleNativeTouch, true);
+        this._canvas.removeEventListener("touchend", this._eventHandlers.handleNativeTouch, true);
+        this._canvas.removeEventListener("touchcancel", this._eventHandlers.handleNativeTouch, true);
         this._canvas.removeEventListener("wheel", this._eventHandlers.handleWheel);
         this._canvas.removeEventListener('mousedown', this._eventHandlers.handleMouse);
         this._canvas.removeEventListener('mouseup', this._eventHandlers.handleMouse);
@@ -2450,9 +2479,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendMouse(x, y, mask) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; } // View only, skip mouse events
-        if (!this._isPrimaryDisplay) { return; }
+        if (!this.isConnected || this._viewOnly || !this._isPrimaryDisplay)
+            return;
 
         if (this._pointerLock && this._directMouseEnabled) {
             // Direct drive: button state changes only (movement is sent raw from _handleMouse)
@@ -2464,8 +2492,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendScroll(x, y, dX, dY) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; } // View only, skip mouse events
+        if (!this.isConnected || this._viewOnly)  // View only, skip mouse events
+            return;
 
         if (this._pointerLock && this._directMouseEnabled) {
             this._sendDirectMouse(0, 0, this._mouseButtonMask, dX, dY);
@@ -2477,15 +2505,15 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendDirectMouse(dx, dy, buttonMask, scrollDX, scrollDY) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; }
-        if (!this._isPrimaryDisplay) { return; }
+        if (!this.isConnected || this._viewOnly || !this._isPrimaryDisplay)
+            return;
+
         RFB.messages.directMouseEvent(this._sock, dx, dy, buttonMask, scrollDX, scrollDY);
     }
 
     _handleWheel(ev) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; } // View only, skip mouse events
+        if (!this.isConnected || this._viewOnly)  // View only, skip mouse events
+            return;
 
         ev.stopPropagation();
         ev.preventDefault();
@@ -2537,6 +2565,45 @@ export default class RFB extends EventTargetMixin {
 
         const pointer = clientToElement(ev.clientX, ev.clientY, this._canvas);
         this._sendScroll(pointer.x, pointer.y, dX, dY);
+    }
+
+    _handleNativeTouch(ev) {
+        //  ||  !this._nativeTouchActive
+        if (!this.isConnected || this._viewOnly || !this._isPrimaryDisplay)
+            return;
+
+        ev.preventDefault();
+
+        console.log('Event ' + ev.type);
+
+        const changed = ev.changedTouches;
+        for (let i = 0; i < changed.length; i++) {
+            const touch = changed[i];
+            const pos = clientToElement(touch.clientX, touch.clientY, this._canvas);
+            const x = this._display.absX(pos.x);
+            const y = this._display.absY(pos.y);
+            // Browser touch identifiers can be large or negative; coerce to an
+            // unsigned 32-bit value to match the wire format.
+            const id = touch.identifier >>> 0;
+
+            let state;
+            if (ev.type === 'touchstart') {
+                state = 0; // begin
+                this._activeTouchIds.add(id);
+            } else if (ev.type === 'touchmove') {
+                state = 1; // update
+            } else {
+                // touchend / touchcancel
+                state = 2; // end
+                this._activeTouchIds.delete(id);
+            }
+
+            this._sendTouch(id, state, x, y);
+        }
+    }
+
+    _sendTouch(id, state, x, y) {
+        RFB.messages.touchEvent(this._sock, id, state, x, y);
     }
 
     _fakeMouseMove(ev, elementX, elementY) {
@@ -2611,13 +2678,24 @@ export default class RFB extends EventTargetMixin {
                         this._handleTapEvent(ev, 0x2);
                         break;
                     case 'drag':
-                        this._fakeMouseMove(ev, pos.x, pos.y);
-
-                        this._fakeMouseButton(pos.x, pos.y, true, 0x1);
+                        if (this._phoneStyleTouch) {
+                            // Phone style: a single-finger drag scrolls the
+                            // view, so start tracking the finger position
+                            // instead of pressing a button.
+                            this._dragScrollLastX = pos.x;
+                            this._dragScrollLastY = pos.y;
+                        } else {
+                            this._fakeMouseMove(ev, pos.x, pos.y);
+                            this._fakeMouseButton(pos.x, pos.y, true, 0x1);
+                        }
                         break;
                     case 'longpress':
                         this._fakeMouseMove(ev, pos.x, pos.y);
-                        this._fakeMouseButton(pos.x, pos.y, true, 0x4);
+                        // Phone style: long-press initiates a left-button drag
+                        // (move windows, select text). Otherwise keep the
+                        // historic right-button hold.
+                        this._fakeMouseButton(pos.x, pos.y, true,
+                                              this._phoneStyleTouch ? 0x1 : 0x4);
                         break;
 
                     case 'twodrag':
@@ -2640,6 +2718,20 @@ export default class RFB extends EventTargetMixin {
                     case 'threetap':
                         break;
                     case 'drag':
+                        if (this._phoneStyleTouch) {
+                            // Natural (direct) scrolling: dragging the content
+                            // down reveals what is above it. The scroll delta
+                            // is the negated finger movement, fed through the
+                            // normal wheel path so any app scrolls.
+                            this._sendScroll(pos.x, pos.y,
+                                             this._dragScrollLastX - pos.x,
+                                             this._dragScrollLastY - pos.y);
+                            this._dragScrollLastX = pos.x;
+                            this._dragScrollLastY = pos.y;
+                        } else {
+                            this._fakeMouseMove(ev, pos.x, pos.y);
+                        }
+                        break;
                     case 'longpress':
                         this._fakeMouseMove(ev, pos.x, pos.y);
                         break;
@@ -2702,12 +2794,16 @@ export default class RFB extends EventTargetMixin {
                     case 'twodrag':
                         break;
                     case 'drag':
-                        this._fakeMouseMove(ev, pos.x, pos.y);
-                        this._fakeMouseButton(pos.x, pos.y, false, 0x1);
+                        if (!this._phoneStyleTouch) {
+                            this._fakeMouseMove(ev, pos.x, pos.y);
+                            this._fakeMouseButton(pos.x, pos.y, false, 0x1);
+                        }
+                        // Phone style: scroll drag has no button to release.
                         break;
                     case 'longpress':
                         this._fakeMouseMove(ev, pos.x, pos.y);
-                        this._fakeMouseButton(pos.x, pos.y, false, 0x4);
+                        this._fakeMouseButton(pos.x, pos.y, false,
+                                              this._phoneStyleTouch ? 0x1 : 0x4);
                         break;
                 }
                 break;
@@ -3310,6 +3406,8 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingExtendedClipboard);
         encs.push(encodings.pseudoEncodingKasmDisconnectNotify);
         encs.push(encodings.pseudoEncodingDirectMouse);
+        if (isTouchDevice)
+            encs.push(encodings.pseudoEncodingTouch);
         if (this._hasWebp())
             encs.push(encodings.pseudoEncodingWEBP);
         if (this._enableQOI)
@@ -3850,6 +3948,9 @@ export default class RFB extends EventTargetMixin {
             case messages.msgTypeForceGameMode:
                 return this._handleForceGameMode();
 
+            case messages.msgTypeTouchSupported:
+                return this._handleTouchSupported();
+
             case messages.msgTypeVideoEncoders:
                 return this._handleServerVideoEncoders();
 
@@ -4067,12 +4168,28 @@ export default class RFB extends EventTargetMixin {
                 configurations: codecConfigurations
             }
         }));
+
+        return true;
     }
 
     _handleForceGameMode() {
         // No payload — the server is requesting that this client enter game mode.
         // Fire an event so the UI layer can engage pointer lock on the next user gesture.
         this.dispatchEvent(new CustomEvent("gamemodeforced"));
+        return true;
+    }
+
+    _handleTouchSupported() {
+        // No payload — the server confirms touch support. We keep the gesture
+        // handler attached but switch it into a phone-style model: one finger
+        // scrolls, long-press drags. Scrolling is delivered as ordinary wheel
+        // events, so it works in every remote app, including ones that don't
+        // understand touch.
+        this._serverSupportsTouch = true;
+        if (isTouchDevice) {
+            this._phoneStyleTouch = true;
+            Log.Info("Server supports touch; using phone-style touch gestures.");
+        }
         return true;
     }
 
@@ -4699,6 +4816,26 @@ RFB.messages = {
         buff[offset + 7] = scrollDX & 0xff;
         buff[offset + 8] = (scrollDY >> 8) & 0xff;
         buff[offset + 9] = scrollDY & 0xff;
+
+        sock._sQlen += 10;
+        sock.flush();
+    },
+
+    touchEvent(sock, id, type, x, y) {
+        const buff = sock._sQ;
+        const offset = sock._sQlen;
+
+        // Wire format: type(1) + id(4, BE) + x(2, BE) + y(2, BE)
+        buff[offset]     = messages.msgTypeTouchEvent;
+        buff[offset + 1] = type & 0xff;
+        buff[offset + 2] = (id >>> 24) & 0xff;
+        buff[offset + 3] = (id >>> 16) & 0xff;
+        buff[offset + 4] = (id >>> 8) & 0xff;
+        buff[offset + 5] = id & 0xff;
+        buff[offset + 6] = (x >> 8) & 0xff;
+        buff[offset + 7] = x & 0xff;
+        buff[offset + 8] = (y >> 8) & 0xff;
+        buff[offset + 9] = y & 0xff;
 
         sock._sQlen += 10;
         sock.flush();

@@ -1957,6 +1957,9 @@ const UI = {
                     }
 
                     if (timeSinceLastActivityInS > idleDisconnectInS) {
+                        UI.inhibitReconnect = true;
+                        clearInterval(UI._sessionTimeoutInterval);
+                        UI._sessionTimeoutInterval = null;
                         Log.Warn("Idle Disconnect reached, disconnecting rfb session...");
                         parent.postMessage({ action: 'idle_session_timeout', value: 'Idle session timeout exceeded'}, '*' );
 

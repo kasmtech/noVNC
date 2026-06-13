@@ -56,6 +56,11 @@ import { perfLogger } from '../core/util/performance-logger.js';
 // perfLogger.enable(5000);
 
 const PAGE_TITLE = "KasmVNC";
+const SETTING_RANGES = {
+    video_area: { min: 1, max: 100 },
+    video_time: { min: 0, max: 60 },
+    video_out_time: { min: 1, max: 100 },
+};
 
 var currentEventCount = -1;
 var idleCounter = 0;
@@ -302,7 +307,7 @@ const UI = {
         UI.initSetting('video_quality', 2);
         UI.initSetting('anti_aliasing', 0);
         UI.initSetting('video_rendering_mode', 'canvas2d');
-        UI.initSetting('video_area', 65);
+        UI.initSetting('video_area', 45);
         UI.initSetting('video_time', 5);
         UI.initSetting('video_out_time', 3);
         UI.initSetting('video_scaling', 2);
@@ -1405,6 +1410,7 @@ const UI = {
         if (val === null) {
             val = WebUtil.readSetting(name, defVal);
         }
+        val = UI.clampSetting(name, val);
         WebUtil.setSetting(name, val);
         UI.updateSetting(name);
         return val;
@@ -1412,6 +1418,7 @@ const UI = {
 
     // Set the new value, update and disable form control setting
     forceSetting(name, val, disable=true) {
+        val = UI.clampSetting(name, val);
         WebUtil.setSetting(name, val);
         UI.updateSetting(name);
         if (disable) {
@@ -1426,7 +1433,8 @@ const UI = {
     // updates from control to current cookie setting.
     updateSetting(name) {
         // Update the settings control
-        let value = UI.getSetting(name);
+        let value = UI.clampSetting(name, UI.getSetting(name));
+        WebUtil.setSetting(name, value);
 
         const ctrl = document.getElementById('noVNC_setting_' + name);
         if (!ctrl) return;
@@ -1463,6 +1471,7 @@ const UI = {
         } else {
             val = ctrl.value;
         }
+        val = UI.clampSetting(name, val);
         WebUtil.writeSetting(name, val);
         Log.Debug("Setting saved '" + name + "=" + val + "'");
         return val;
@@ -1484,6 +1493,20 @@ const UI = {
         }
 
         return val;
+    },
+
+    clampSetting(name, value) {
+        const range = SETTING_RANGES[name];
+        if (range === undefined || value === null || typeof value === 'undefined') {
+            return value;
+        }
+
+        let numberValue = parseInt(value);
+        if (!Number.isInteger(numberValue)) {
+            numberValue = range.min;
+        }
+
+        return Math.min(Math.max(numberValue, range.min), range.max);
     },
 
     getSettingElement(name) {
@@ -1548,7 +1571,7 @@ const UI = {
         UI.updateSetting('jpeg_video_quality', 5);
         UI.updateSetting('webp_video_quality', 5);
         UI.updateSetting('video_quality', 2);
-        UI.updateSetting('video_area', 65);
+        UI.updateSetting('video_area', 45);
         UI.updateSetting('video_time', 5);
         UI.updateSetting('video_out_time', 3);
         UI.updateSetting('video_scaling', 2);
@@ -3031,7 +3054,7 @@ const UI = {
                 forceFramerate(fps);
                 UI.forceSetting('treat_lossless', 8);
                 UI.forceSetting('video_time', 5);
-                UI.forceSetting('video_area', 65);
+                UI.forceSetting('video_area', 45);
                 UI.forceSetting('video_scaling', 0);
                 UI.forceSetting('video_out_time', 3);
                 break;
@@ -3046,7 +3069,7 @@ const UI = {
                 forceFramerate(fps);
                 UI.forceSetting('treat_lossless', 7);
                 UI.forceSetting('video_time', 5);
-                UI.forceSetting('video_area', 65);
+                UI.forceSetting('video_area', 45);
                 UI.forceSetting('video_scaling', 0);
                 UI.forceSetting('video_out_time', 3);
                 break;
@@ -3063,7 +3086,7 @@ const UI = {
                 UI.forceSetting('max_video_resolution_y', 540);
                 UI.forceSetting('treat_lossless', 7);
                 UI.forceSetting('video_time', 5);
-                UI.forceSetting('video_area', 65);
+                UI.forceSetting('video_area', 45);
                 UI.forceSetting('video_scaling', 0);
                 UI.forceSetting('video_out_time', 3);
                 break;

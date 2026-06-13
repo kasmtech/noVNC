@@ -189,6 +189,7 @@ const UI = {
             UI.connect();
         } else {
             autoconnect = false;
+            UI.updateVisualState('disconnected');
         }
 
         window.parent.postMessage({

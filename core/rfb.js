@@ -139,7 +139,7 @@ export default class RFB extends EventTargetMixin {
         this._preferBandwidth = true;
         this._dynamicQualityMin = 3;
         this._dynamicQualityMax = 9;
-        this._videoArea = 65;
+        this._videoArea = 45;
         this._pendingVideoQualityRefresh = false;
         this._videoTime = 5;
         this._videoOutTime = 3;

@@ -307,7 +307,7 @@ const UI = {
         UI.initSetting('video_quality', 2);
         UI.initSetting('anti_aliasing', 0);
         UI.initSetting('video_rendering_mode', 'canvas2d');
-        UI.initSetting('video_area', 65);
+        UI.initSetting('video_area', 45);
         UI.initSetting('video_time', 5);
         UI.initSetting('video_out_time', 3);
         UI.initSetting('video_scaling', 2);
@@ -1571,7 +1571,7 @@ const UI = {
         UI.updateSetting('jpeg_video_quality', 5);
         UI.updateSetting('webp_video_quality', 5);
         UI.updateSetting('video_quality', 2);
-        UI.updateSetting('video_area', 65);
+        UI.updateSetting('video_area', 45);
         UI.updateSetting('video_time', 5);
         UI.updateSetting('video_out_time', 3);
         UI.updateSetting('video_scaling', 2);
@@ -3054,7 +3054,7 @@ const UI = {
                 forceFramerate(fps);
                 UI.forceSetting('treat_lossless', 8);
                 UI.forceSetting('video_time', 5);
-                UI.forceSetting('video_area', 65);
+                UI.forceSetting('video_area', 45);
                 UI.forceSetting('video_scaling', 0);
                 UI.forceSetting('video_out_time', 3);
                 break;
@@ -3069,7 +3069,7 @@ const UI = {
                 forceFramerate(fps);
                 UI.forceSetting('treat_lossless', 7);
                 UI.forceSetting('video_time', 5);
-                UI.forceSetting('video_area', 65);
+                UI.forceSetting('video_area', 45);
                 UI.forceSetting('video_scaling', 0);
                 UI.forceSetting('video_out_time', 3);
                 break;
@@ -3086,7 +3086,7 @@ const UI = {
                 UI.forceSetting('max_video_resolution_y', 540);
                 UI.forceSetting('treat_lossless', 7);
                 UI.forceSetting('video_time', 5);
-                UI.forceSetting('video_area', 65);
+                UI.forceSetting('video_area', 45);
                 UI.forceSetting('video_scaling', 0);
                 UI.forceSetting('video_out_time', 3);
                 break;

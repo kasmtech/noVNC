@@ -564,8 +564,8 @@ export default class RFB extends EventTargetMixin {
         return this._videoArea;
     }
     set videoArea(area) {
-        if (!Number.isInteger(area) || area < 0 || area > 100) {
-            Log.Error("video area must be an integer between 0 and 100");
+        if (!Number.isInteger(area) || area < 1 || area > 100) {
+            Log.Error("video area must be an integer between 1 and 100");
             return;
         }
 
@@ -581,8 +581,8 @@ export default class RFB extends EventTargetMixin {
         return this._videoTime;
     }
     set videoTime(value) {
-        if (!Number.isInteger(value) || value < 0 || value > 100) {
-            Log.Error("video time must be an integer between 0 and 100");
+        if (!Number.isInteger(value) || value < 0 || value > 60) {
+            Log.Error("video time must be an integer between 0 and 60");
             return;
         }
 
@@ -598,8 +598,8 @@ export default class RFB extends EventTargetMixin {
         return this._videoOutTime;
     }
     set videoOutTime(value) {
-        if (!Number.isInteger(value) || value < 0 || value > 100) {
-            Log.Error("video out time must be an integer between 0 and 100");
+        if (!Number.isInteger(value) || value < 1 || value > 100) {
+            Log.Error("video out time must be an integer between 1 and 100");
             return;
         }
 

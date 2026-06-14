@@ -873,7 +873,18 @@ export default class RFB extends EventTargetMixin {
                 for (let i = 0; i < screenPlan.screens.length; i++) {
                     for (let z = 1; z < fullPlan.screens.length; z++) {
                         if (screenPlan.screens[i].screenID === fullPlan.screens[z].screenID) {
-                            this._proxyRFBMessage('applyScreenPlan', [ fullPlan.screens[z].screenID, fullPlan.screens[z].screenIndex, screenPlan.screens[i].width, screenPlan.screens[i].height, screenPlan.screens[i].x, screenPlan.screens[i].y ]);
+                            this._proxyRFBMessage('applyScreenPlan', [
+                                fullPlan.screens[z].screenID,
+                                fullPlan.screens[z].screenIndex,
+                                screenPlan.screens[i].width,
+                                screenPlan.screens[i].height,
+                                screenPlan.screens[i].x,
+                                screenPlan.screens[i].y,
+                                screenPlan.screens[i].serverWidth,
+                                screenPlan.screens[i].serverHeight,
+                                screenPlan.screens[i].scale,
+                                screenPlan.screens[i].resolutionScale,
+                            ]);
                         }
                     }
                 }
@@ -901,9 +912,15 @@ export default class RFB extends EventTargetMixin {
                     screenID: fullPlan.screens[i].screenID,
                     serverWidth: fullPlan.screens[i].serverWidth,
                     serverHeight: fullPlan.screens[i].serverHeight,
+                    containerWidth: fullPlan.screens[i].containerWidth,
+                    containerHeight: fullPlan.screens[i].containerHeight,
+                    width: fullPlan.screens[i].width,
+                    height: fullPlan.screens[i].height,
+                    scale: fullPlan.screens[i].scale,
                     x: fullPlan.screens[i].x,
                     y: fullPlan.screens[i].y,
-                    pixelRatio: fullPlan.screens[i].pixelRatio
+                    pixelRatio: fullPlan.screens[i].pixelRatio,
+                    resolutionScale: fullPlan.screens[i].resolutionScale
                 }
             )
         }
@@ -1936,7 +1953,7 @@ export default class RFB extends EventTargetMixin {
                         ...event.data.details,
                         screenID: event.data.screenID
                     }
-                    let screenIndex = this._display.addScreen(event.data.screenID, event.data.width, event.data.height, event.data.pixelRatio, event.data.containerHeight, event.data.containerWidth, event.data.scale, event.data.serverWidth, event.data.serverHeight, event.data.x, event.data.y, event.data.windowId);
+                    let screenIndex = this._display.addScreen(event.data.screenID, event.data.width, event.data.height, event.data.pixelRatio, event.data.containerHeight, event.data.containerWidth, event.data.scale, event.data.serverWidth, event.data.serverHeight, event.data.x, event.data.y, event.data.windowId, event.data.resolutionScale);
                     this._proxyRFBMessage('screenRegistrationConfirmed', [ this._display.screens[screenIndex].screenID, screenIndex ]);
                     this._sendEncodings();
                     clearTimeout(this._resizeTimeout);
@@ -1945,7 +1962,7 @@ export default class RFB extends EventTargetMixin {
                     Log.Info(`Secondary monitor (${event.data.screenID}) has been registered.`);
                     break;
                 case 'reattach':
-                    let changes = this._display.addScreen(event.data.screenID, event.data.width, event.data.height, event.data.pixelRatio, event.data.containerHeight, event.data.containerWidth, event.data.scale, event.data.serverWidth, event.data.serverHeight, event.data.x, event.data.y, event.data.windowId);
+                    let changes = this._display.addScreen(event.data.screenID, event.data.width, event.data.height, event.data.pixelRatio, event.data.containerHeight, event.data.containerWidth, event.data.scale, event.data.serverWidth, event.data.serverHeight, event.data.x, event.data.y, event.data.windowId, event.data.resolutionScale);
 
                     clearTimeout(this._resizeTimeout);
                     this._resizeTimeout = setTimeout(this._requestRemoteResize.bind(this), 500);
@@ -2065,6 +2082,19 @@ export default class RFB extends EventTargetMixin {
                         this._display.screens[0].height = event.data.args[3];
                         this._display.screens[0].x = event.data.args[4];
                         this._display.screens[0].y = event.data.args[5];
+                        if (typeof event.data.args[6] !== 'undefined') {
+                            this._display.screens[0].serverWidth = event.data.args[6];
+                        }
+                        if (typeof event.data.args[7] !== 'undefined') {
+                            this._display.screens[0].serverHeight = event.data.args[7];
+                        }
+                        if (typeof event.data.args[8] !== 'undefined') {
+                            this._display.screens[0].scale = event.data.args[8];
+                        }
+                        if (typeof event.data.args[9] !== 'undefined') {
+                            this._display.screens[0].resolutionScale = event.data.args[9];
+                            this._display.screens[0].resolutionScaleCustom = true;
+                        }
 
                         this.updateConnectionSettings();
                     }
@@ -2109,6 +2139,7 @@ export default class RFB extends EventTargetMixin {
                 y: currentScreen.y || 0,
                 pixelRatio: screen.pixelRatio,
                 scale: screen.scale,
+                resolutionScale: screen.resolutionScale,
                 serverWidth: screen.serverWidth,
                 serverHeight: screen.serverHeight,
                 containerWidth: screen.containerWidth,

@@ -1396,17 +1396,30 @@ a:visited {
   border: 1px solid #e5e5e5;
   line-height: 1;
 }
-#noVNC_setting_enable_hidpi_option {
-  display: none!important;
-}
-#noVNC_setting_enable_hidpi_option.show {
-  display: flex!important;
-}
 #noVNC_auto_placement_option {
   display: none!important;
 }
 #noVNC_auto_placement_option.show {
   display: flex!important;
+}
+.monitor-resolution-scales {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.monitor-resolution-scales label {
+  align-items: center;
+  background-color: #f1f1f1;
+  border: 1px solid #e5e5e5;
+  border-radius: 5px;
+  display: flex;
+  font-size: 13px;
+  gap: 6px;
+  line-height: 1;
+  padding: 4px 7px;
+}
+.monitor-resolution-scales select {
+  font-size: 13px;
 }
 #noVNC_refreshMonitors {
   position: absolute;

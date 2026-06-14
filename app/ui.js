@@ -56,6 +56,9 @@ import { perfLogger } from '../core/util/performance-logger.js';
 // perfLogger.enable(5000);
 
 const PAGE_TITLE = "KasmVNC";
+const RESOLUTION_SCALE_MIN = 25;
+const RESOLUTION_SCALE_MAX = 200;
+const RESOLUTION_SCALE_STEP = 25;
 
 var currentEventCount = -1;
 var idleCounter = 0;
@@ -86,6 +89,10 @@ const UI = {
     displayWindows: new Map([['primary', 'primary']]),
     registeredWindows: new Map([['primary', 'primary']]),
     fpsChartTicks: [],
+    resolutionScaleOptions: Array.from(
+        { length: ((RESOLUTION_SCALE_MAX - RESOLUTION_SCALE_MIN) / RESOLUTION_SCALE_STEP) + 1 },
+        (_, i) => RESOLUTION_SCALE_MIN + (i * RESOLUTION_SCALE_STEP)
+    ),
 
     monitorDragOk: false,
     monitorStartX: 0,
@@ -603,6 +610,7 @@ const UI = {
     // unless the optional parameter changeFunc is used instead.
     addSettingChangeHandler(name, changeFunc) {
         const settingElem = document.getElementById("noVNC_setting_" + name);
+        if (!settingElem) return;
         if (changeFunc === undefined) {
             changeFunc = () => UI.saveSetting(name);
         }
@@ -2441,6 +2449,11 @@ const UI = {
     },
 
     closeDisplays() {
+        UI.syncMonitorResolutionScaleControls();
+        if (UI.rfb && UI.monitors.length > 0) {
+            UI.setScreenPlan();
+            UI.draw();
+        }
         document.getElementById('noVNC_displays').classList.remove("noVNC_open");
     },
 
@@ -2513,19 +2526,25 @@ const UI = {
     initMonitors(screenPlan) {
         const { scale } = UI.multiMonitorSettings()
         let monitors = []
-        let showNativeResolution = false
         let num = 1;
         screenPlan.screens.forEach(screen => {
-            if (parseFloat(screen.pixelRatio) != 1) {
-                showNativeResolution = true
-            }
+            const resolutionScale = UI.normalizeResolutionScale(
+                screen.resolutionScale || UI.defaultResolutionScale(screen.pixelRatio));
+            const localWidth = screen.containerWidth ||
+                Math.round(screen.serverWidth / UI.resolutionScaleRatio(resolutionScale, screen.pixelRatio));
+            const localHeight = screen.containerHeight ||
+                Math.round(screen.serverHeight / UI.resolutionScaleRatio(resolutionScale, screen.pixelRatio));
+            const scaleRatio = UI.resolutionScaleRatio(resolutionScale, screen.pixelRatio);
             monitors.push({
                 id: screen.screenID,
                 x: screen.x / scale,
                 y: screen.y / scale,
-                w: screen.serverWidth / scale,
-                h: screen.serverHeight / scale,
+                w: (localWidth * scaleRatio) / scale,
+                h: (localHeight * scaleRatio) / scale,
+                localWidth,
+                localHeight,
                 pixelRatio: screen.pixelRatio,
+                resolutionScale,
                 scale: 1,
                 fill: '#eeeeeecc',
                 isDragging: false,
@@ -2533,11 +2552,6 @@ const UI = {
             })
             num++
         })
-        if (showNativeResolution) {
-            document.getElementById('noVNC_setting_enable_hidpi_option').classList.add("show");
-        } else {
-            document.getElementById('noVNC_setting_enable_hidpi_option').classList.remove("show");
-        }
         UI.monitors = monitors
         let deepCopyMonitors = JSON.parse(JSON.stringify(monitors))
         UI.sortedMonitors = deepCopyMonitors.sort((a, b) => {
@@ -2546,7 +2560,80 @@ const UI = {
             }
             return  a.x - b.x
         })
+        UI.renderResolutionScaleControls()
 
+    },
+
+    normalizeResolutionScale(value) {
+        value = parseInt(value);
+        if (!Number.isFinite(value)) {
+            return 100;
+        }
+        value = Math.round(value / RESOLUTION_SCALE_STEP) * RESOLUTION_SCALE_STEP;
+        return Math.min(RESOLUTION_SCALE_MAX, Math.max(RESOLUTION_SCALE_MIN, value));
+    },
+
+    defaultResolutionScale(pixelRatio) {
+        return UI.normalizeResolutionScale((parseFloat(pixelRatio) || 1) * 100);
+    },
+
+    resolutionScaleRatio(resolutionScale, pixelRatio) {
+        return (parseFloat(pixelRatio) || 1) / (UI.normalizeResolutionScale(resolutionScale) / 100);
+    },
+
+    renderResolutionScaleControls() {
+        const container = document.getElementById('noVNC_monitor_resolution_scales');
+        if (!container) return;
+
+        container.replaceChildren();
+        UI.sortedMonitors.forEach(monitor => {
+            const label = document.createElement('label');
+            label.textContent = `Display ${monitor.num}`;
+
+            const select = document.createElement('select');
+            select.dataset.screenId = monitor.id;
+            UI.resolutionScaleOptions.forEach(value => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = `${value}%`;
+                select.appendChild(option);
+            });
+            select.value = String(UI.normalizeResolutionScale(monitor.resolutionScale));
+            select.addEventListener('change', UI.updateMonitorResolutionScale);
+
+            label.appendChild(select);
+            container.appendChild(label);
+        });
+    },
+
+    updateMonitorResolutionScale(event) {
+        const screenID = event.target.dataset.screenId;
+        const resolutionScale = UI.normalizeResolutionScale(event.target.value);
+        UI.updateMonitorResolutionScaleValue(screenID, resolutionScale);
+        UI.recenter();
+        UI.draw();
+    },
+
+    updateMonitorResolutionScaleValue(screenID, resolutionScale) {
+        const updateMonitor = monitor => {
+            if (String(monitor.id) !== String(screenID)) return;
+
+            monitor.resolutionScale = resolutionScale;
+            const scaleRatio = UI.resolutionScaleRatio(monitor.resolutionScale, monitor.pixelRatio);
+            monitor.w = (monitor.localWidth * scaleRatio) / UI.multiMonitorSettings().scale;
+            monitor.h = (monitor.localHeight * scaleRatio) / UI.multiMonitorSettings().scale;
+        };
+
+        UI.monitors.forEach(updateMonitor);
+        UI.sortedMonitors.forEach(updateMonitor);
+    },
+
+    syncMonitorResolutionScaleControls() {
+        document.querySelectorAll('#noVNC_monitor_resolution_scales select').forEach(select => {
+            UI.updateMonitorResolutionScaleValue(
+                select.dataset.screenId,
+                UI.normalizeResolutionScale(select.value));
+        });
     },
 
     updateMonitors(screenPlan) {
@@ -2782,10 +2869,17 @@ const UI = {
         for (var i = 0; i < monitors.length; i++) {
             var monitor = monitors[i];
             var a = sortedMonitors.find(el => el.id === monitor.id)
+            const serverWidth = Math.round(a.w * scale);
+            const serverHeight = Math.round(a.h * scale);
+            const displayScale = 1 / UI.resolutionScaleRatio(a.resolutionScale, a.pixelRatio);
             screens.push({
                 screenID: a.id,
-                serverHeight: Math.round(a.h * scale),
-                serverWidth: Math.round(a.w * scale),
+                width: Math.round(a.localWidth),
+                height: Math.round(a.localHeight),
+                serverHeight,
+                serverWidth,
+                scale: displayScale,
+                resolutionScale: a.resolutionScale,
                 x: Math.round((a.x - left) * scale),
                 y: Math.round((a.y - top) * scale)
             })
@@ -2797,6 +2891,7 @@ const UI = {
         }
         if (UI.rfb) {
             UI.rfb.applyScreenPlan(screenPlan);
+            window.setTimeout(() => UI.rfb.updateConnectionSettings(), 0);
         }
     },
 

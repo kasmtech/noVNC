@@ -226,13 +226,6 @@ export default class RFB extends EventTargetMixin {
         this._gestureLastMagnitudeX = 0;
         this._gestureLastMagnitudeY = 0;
 
-        // Native (XInput2) touch state. When the server confirms touch support
-        // we stop synthesising gestures and instead forward raw touch points,
-        // letting touch-aware remote applications handle multitouch directly.
-        this._serverSupportsTouch = false;
-        this._nativeTouchActive = false;
-        this._activeTouchIds = new Set();
-
         // Secondary Displays
         this._supportsMultiMonitor = (typeof BroadcastChannel !== "undefined" && typeof SharedWorker !== "undefined");
         if (this._supportsMultiMonitor) {
@@ -1399,9 +1392,6 @@ export default class RFB extends EventTargetMixin {
         this._canvas.addEventListener("gesturemove", this._eventHandlers.handleGesture);
         this._canvas.addEventListener("gestureend", this._eventHandlers.handleGesture);
 
-        // Native touch forwarding. Registered in the capture phase so that,
-        // once active, we can swallow the raw touch events before the gesture
-        // handler (attached in the bubble phase) ever sees them.
         this._canvas.addEventListener("touchstart", this._eventHandlers.handleNativeTouch, true);
         this._canvas.addEventListener("touchmove", this._eventHandlers.handleNativeTouch, true);
         this._canvas.addEventListener("touchend", this._eventHandlers.handleNativeTouch, true);
@@ -2559,7 +2549,6 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleNativeTouch(ev) {
-        //  ||  !this._nativeTouchActive
         if (!this.isConnected || this._viewOnly || !this._isPrimaryDisplay)
             return;
 
@@ -2578,13 +2567,11 @@ export default class RFB extends EventTargetMixin {
             let state;
             if (ev.type === 'touchstart') {
                 state = 0; // begin
-                this._activeTouchIds.add(id);
             } else if (ev.type === 'touchmove') {
                 state = 1; // update
             } else {
                 // touchend / touchcancel
                 state = 2; // end
-                this._activeTouchIds.delete(id);
             }
 
             this._sendTouch(id, state, x, y);
@@ -4142,16 +4129,11 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleTouchSupported() {
-        // No payload — the server confirms touch support. We keep the gesture
-        // handler attached but switch it into a phone-style model: one finger
-        // scrolls, long-press drags. Scrolling is delivered as ordinary wheel
-        // events, so it works in every remote app, including ones that don't
-        // understand touch.
-        this._serverSupportsTouch = true;
-        if (isTouchDevice) {
+        const result = isTouchDevice;
+        if (result)
             Log.Info("Server supports touch; using phone-style touch gestures.");
-        }
-        return true;
+
+        return result;
     }
 
     _handleDisconnectNotify() {

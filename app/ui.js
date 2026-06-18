@@ -326,6 +326,7 @@ const UI = {
         UI.initSetting('enable_threading', true);
         UI.initSetting('virtual_keyboard_visible', false);
         UI.initSetting('enable_ime', false);
+        UI.initSetting('touch_mode', 'native');
         UI.initSetting('enable_webrtc', false);
         UI.initSetting('enable_hidpi', false);
         UI.initSetting('fallback_image_mode', false);
@@ -693,6 +694,8 @@ const UI = {
         UI.addSettingChangeHandler('virtual_keyboard_visible', UI.toggleKeyboardControls);
         UI.addSettingChangeHandler('enable_ime');
         UI.addSettingChangeHandler('enable_ime', UI.toggleIMEMode);
+        UI.addSettingChangeHandler('touch_mode');
+        UI.addSettingChangeHandler('touch_mode', UI.updateTouchMode);
         UI.addSettingChangeHandler('enable_webrtc');
         UI.addSettingChangeHandler('enable_webrtc', UI.toggleWebRTC);
         UI.addSettingChangeHandler('enable_hidpi');
@@ -3129,6 +3132,12 @@ const UI = {
             } else {
                 UI.rfb.keyboard.enableIME = false;
             }
+        }
+    },
+
+    updateTouchMode() {
+        if (UI.rfb) {
+            UI.rfb.touchMode = UI.getSetting('touch_mode');
         }
     },
 

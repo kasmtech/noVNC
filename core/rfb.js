@@ -185,6 +185,7 @@ export default class RFB extends EventTargetMixin {
         this._clipboardServerCapabilitiesFormats = {};
 
         this._threading = true;
+        this._touchMode = 'native';
 
         // Internal objects
         this._sock = null;              // Websock object
@@ -776,6 +777,13 @@ export default class RFB extends EventTargetMixin {
         if (value !== this._threading) {
             this._threading = value;
             this._display.threading = value;
+        }
+    }
+
+    get touchMode() { return this._touchMode; }
+    set touchMode(value) {
+        if (value !== this._touchMode) {
+            this._touchMode = value;
         }
     }
 
@@ -2687,6 +2695,10 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleNativeTouch(ev) {
+        if (this._touchMode !== 'native') {
+            return;
+        }
+
         if (!this.isConnected || this._viewOnly || !this._isPrimaryDisplay)
             return;
 
@@ -2775,7 +2787,9 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleGesture(ev) {
-        return; // native touch active — gestures disabled
+        if (this._touchMode === 'native') {
+            return;
+        }
 
         let magnitude;
 

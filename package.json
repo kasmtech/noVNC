@@ -40,7 +40,6 @@
   "devDependencies": {
     "@babel/cli": "*",
     "@babel/core": "*",
-    "@babel/plugin-syntax-dynamic-import": "*",
     "@babel/plugin-transform-modules-commonjs": "*",
     "@babel/preset-env": "*",
     "@chiragrupani/karma-chromium-edge-launcher": "*",

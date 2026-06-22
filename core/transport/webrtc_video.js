@@ -49,6 +49,14 @@ export default class WebRTCVideoTransport {
         this._negotiated = false;
         this._iceServers = this._opts.iceServers || [];
 
+        // Remote ICE candidates can arrive (trickled by the server) before this
+        // side has finished setRemoteDescription — addIceCandidate() throws in
+        // that window and the candidate is lost, slowing or stalling ICE. Buffer
+        // them here and flush once the remote description is applied. See
+        // remediation plan P4.2.
+        this._remoteDescriptionSet = false;
+        this._pendingRemoteCandidates = [];
+
         // Mirrors rfb.js's transit-state semantics so failure counters /
         // UX don't need to learn a second model.
         this._state = 'idle';
@@ -136,6 +144,25 @@ export default class WebRTCVideoTransport {
         this._video.muted       = true;
         this._video.playsInline = true;
 
+        const logVideoEvent = (name) => {
+            const err = this._video.error ? this._video.error.code : 0;
+            // Debug, not Info: these <video> media events (resize/waiting/
+            // stalled/suspend/...) fire repeatedly, especially on a stalling or
+            // low-motion stream, and spam the console at Info in production. The
+            // one-shot milestones (PLAYING / ontrack) stay at Info. See P4.1.
+            Log.Debug('[WEBRTC-DIAG] <video> ' + name + ' screen ' +
+                     this._screenId + ' (readyState=' + this._video.readyState +
+                     ', networkState=' + this._video.networkState +
+                     ', currentTime=' + this._video.currentTime.toFixed(3) +
+                     ', size=' + this._video.videoWidth + 'x' +
+                     this._video.videoHeight + ', paused=' + this._video.paused +
+                     ', error=' + err + ')');
+        };
+        ['loadedmetadata', 'canplay', 'playing', 'waiting', 'stalled',
+         'suspend', 'pause', 'error', 'resize'].forEach((name) => {
+            this._video.addEventListener(name, () => logVideoEvent(name));
+        });
+
         this._pc.ontrack = (e) => {
             Log.Info('[WEBRTC-DIAG] ontrack screen ' + this._screenId +
                      ' (streams=' + (e.streams ? e.streams.length : 0) + ')');
@@ -186,6 +213,13 @@ export default class WebRTCVideoTransport {
         }
         try {
             await this._pc.setRemoteDescription({ type: 'offer', sdp });
+            // Remote description is applied — any candidates that arrived during
+            // the await are now safe to add. Flush the buffer (P4.2).
+            this._remoteDescriptionSet = true;
+            const buffered = this._pendingRemoteCandidates;
+            this._pendingRemoteCandidates = [];
+            for (const c of buffered) this._addRemoteCandidate(c.candidate, c.sdpMid);
+
             const answer = await this._pc.createAnswer();
             await this._pc.setLocalDescription(answer);
 
@@ -209,8 +243,7 @@ export default class WebRTCVideoTransport {
         }
     }
 
-    async _handleRemoteIce(payload) {
-        if (!this._pc) return;
+    _handleRemoteIce(payload) {
         const pipe = payload.indexOf('|');
         if (pipe < 0) {
             Log.Warn('Malformed ICE candidate from server: ' + payload);
@@ -218,6 +251,20 @@ export default class WebRTCVideoTransport {
         }
         const candidate = payload.substring(0, pipe);
         const sdpMid    = payload.substring(pipe + 1);
+        // If the offer hasn't been applied yet (no PC, or setRemoteDescription
+        // still in flight), buffer the candidate instead of dropping it —
+        // addIceCandidate() before the remote description throws and the
+        // candidate is lost, which slows or stalls ICE. _handleOffer flushes
+        // the buffer once setRemoteDescription resolves. See plan P4.2.
+        if (!this._pc || !this._remoteDescriptionSet) {
+            this._pendingRemoteCandidates.push({ candidate, sdpMid });
+            return;
+        }
+        this._addRemoteCandidate(candidate, sdpMid);
+    }
+
+    async _addRemoteCandidate(candidate, sdpMid) {
+        if (!this._pc) return;
         try {
             await this._pc.addIceCandidate({ candidate, sdpMid });
         } catch (e) {

@@ -187,6 +187,11 @@ export default class RFB extends EventTargetMixin {
         this._hiDpi = 'hiDpi' in options ? !!options.hiDpi : false;
         this._enableQOI = false;
         this._videoQuality = 2;
+        // Opt-in: drive WebRTC media bitrate via the server's congestion
+        // controller. Off by default — full-quality CQP until the user enables
+        // it. Only has effect while WebRTC is active. Sent to the server as the
+        // pseudoEncodingWebRTCCongestionControl pseudo-encoding.
+        this._webRTCCongestionControl = false;
         this._enableWebP = false;
         this.TransitConnectionStates = {
             Tcp: Symbol("tcp"),
@@ -445,6 +450,16 @@ export default class RFB extends EventTargetMixin {
     get preferBandwidth() { return this._preferBandwidth; }
     set preferBandwidth(val) {
         this._preferBandwidth = val;
+        this._pendingApplyEncodingChanges = true;
+    }
+
+    get webRTCCongestionControl() { return this._webRTCCongestionControl; }
+    set webRTCCongestionControl(val) {
+        val = !!val;
+        if (this._webRTCCongestionControl === val) {
+            return;
+        }
+        this._webRTCCongestionControl = val;
         this._pendingApplyEncodingChanges = true;
     }
 
@@ -3595,6 +3610,13 @@ export default class RFB extends EventTargetMixin {
         // encs.push(encodings.pseudoEncodingHardwareProfile0 + this.hwEncoderProfile);
         encs.push(encodings.pseudoEncodingGOP1 + this.gop);
         encs.push(encodings.pseudoEncodingStreamingVideoQualityLevel0 + this.videoStreamQuality);
+
+        // Opt-in WebRTC congestion control (presence = enabled). Only relevant
+        // while WebRTC media is active; harmless otherwise (the server ignores
+        // it unless a WebRTC transport exists).
+        if (this._webRTCCongestionControl)
+            encs.push(encodings.pseudoEncodingWebRTCCongestionControl);
+
         encs.push(this.streamMode);
 
 	// preferBandwidth choses preset settings. Since we expose all the settings, let's not pass this

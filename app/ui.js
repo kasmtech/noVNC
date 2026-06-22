@@ -327,6 +327,7 @@ const UI = {
         UI.initSetting('virtual_keyboard_visible', false);
         UI.initSetting('enable_ime', false);
         UI.initSetting('enable_webrtc', false);
+        UI.initSetting('webrtc_congestion_control', false);
         UI.initSetting('enable_hidpi', false);
         UI.initSetting('fallback_image_mode', false);
 
@@ -695,6 +696,8 @@ const UI = {
         UI.addSettingChangeHandler('enable_ime', UI.toggleIMEMode);
         UI.addSettingChangeHandler('enable_webrtc');
         UI.addSettingChangeHandler('enable_webrtc', UI.toggleWebRTC);
+        UI.addSettingChangeHandler('webrtc_congestion_control');
+        UI.addSettingChangeHandler('webrtc_congestion_control', UI.updateWebRTCCongestionControl);
         UI.addSettingChangeHandler('enable_hidpi');
         UI.addSettingChangeHandler('enable_hidpi', UI.enableHiDpi);
         UI.addSettingChangeHandler('enable_threading');
@@ -1905,6 +1908,8 @@ const UI = {
         UI.rfb.keyboard.enableIME = UI.getSetting('enable_ime');
         UI.rfb.clipboardBinary = supportsBinaryClipboard() && UI.rfb.clipboardSeamless;
         UI.rfb.enableWebRTC = UI.getSetting('enable_webrtc');
+        UI.rfb.webRTCCongestionControl = UI.getSetting('webrtc_congestion_control');
+        UI.updateWebRTCCongestionControlAvailability();
         UI.rfb.mouseButtonMapper = UI.initMouseButtonMapper();
         // UI.rfb.qualityPreset = UI.getSetting(UI_SETTINGS.PRESET);
         if (UI.rfb.videoQuality === 5) {
@@ -3144,7 +3149,26 @@ const UI = {
             } else {
                 UI.rfb.enableWebRTC = false;
             }
+            UI.updateWebRTCCongestionControlAvailability();
             UI.updateQuality();
+        }
+    },
+
+    // The congestion-control toggle only does anything while WebRTC media is
+    // active, so grey it out (disable the checkbox) whenever WebRTC is off.
+    // The stored preference is preserved across the disable so re-enabling
+    // WebRTC restores the user's choice.
+    updateWebRTCCongestionControlAvailability() {
+        const enabled = UI.getSetting('enable_webrtc');
+        const el = document.getElementById('noVNC_setting_webrtc_congestion_control');
+        if (el) {
+            el.disabled = !enabled;
+        }
+    },
+
+    updateWebRTCCongestionControl() {
+        if (UI.rfb) {
+            UI.rfb.webRTCCongestionControl = UI.getSetting('webrtc_congestion_control');
         }
     },
 

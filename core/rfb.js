@@ -153,22 +153,6 @@ export default class RFB extends EventTargetMixin {
         this._clipboardBinary = true;
         this._resendClipboardNextUserDrivenEvent = true;
         this._useUdp = true;
-        // WebRTC media transport (libdatachannel migration, Phase 1+).
-        // Driven by the UI toggle ("Enable WebRTC Media") via
-        // `set enableWebRTC` below — that setter calls
-        // _applyWebRTCMediaState() which starts/stops the new transport.
-        // Codec preference is derived from streamMode (set via
-        // set streamMode); JpegWebp streamMode disables it.
-        // Per-screen WebRTC media transports for screens THIS window
-        // renders. Multi-monitor sessions run one RTCPeerConnection per X
-        // screen (see doc/MULTI_MONITOR_WEBRTC_PLAN.md). Map keyed by
-        // screenId (the server's ScreenEncoderManager index):
-        //   screenId -> { live: WebRTCVideoTransport|null,
-        //                 pending: WebRTCVideoTransport|null }
-        // `pending` is a smooth codec-switch transport that replaces
-        // `live` on its first decoded frame (see _onWebRTCVideoReady /
-        // _promotePendingWebRTCScreen). A single-screen session is just a
-        // map of size 1 keyed by screenId 0.
         this._webrtcScreens = new Map();
         // Secondary-only: screenId this window must request a fresh offer for
         // after a reindex, deferred until its relay port is up. null = none.
@@ -229,8 +213,8 @@ export default class RFB extends EventTargetMixin {
         this._mouseButtonMask = 0;
         this._mouseLastMoveTime = 0;
         this._pointerLock = false;
-        this._pointerLockPos = { x: 0, y: 0 };
-        this._pointerRelativeEnabled = false;
+        this._directMouseEnabled = false;
+        this._directMouseRemainder = { x: 0, y: 0 };
         this._mouseLastPinchAndZoomTime = 0;
         this._viewportDragging = false;
         this._viewportDragPos = {};
@@ -398,20 +382,11 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    get pointerRelative() { return this._pointerRelativeEnabled; }
+    get pointerRelative() { return this._directMouseEnabled; }
     set pointerRelative(value)
     {
-        this._pointerRelativeEnabled = value;
-        if (value) {
-            let max_w = ((this._display.scale === 1) ? this._fbWidth : (this._fbWidth * this._display.scale));
-            let max_h = ((this._display.scale === 1) ? this._fbHeight : (this._fbHeight * this._display.scale));
-            this._pointerLockPos.x = Math.floor(max_w / 2);
-            this._pointerLockPos.y = Math.floor(max_h / 2);
-
-            // reset the cursor position to center
-            this._mousePos = { x: this._pointerLockPos.x , y: this._pointerLockPos.y };
-            this._cursor.move(this._pointerLockPos.x, this._pointerLockPos.y);
-        }
+        this._directMouseEnabled = value;
+        this._directMouseRemainder = { x: 0, y: 0 };
     }
 
     get keyboard() { return this._keyboard; }
@@ -844,18 +819,13 @@ export default class RFB extends EventTargetMixin {
         if (value !== this._streamMode) {
             this._streamMode = value;
             this._pendingApplyEncodingChanges = true;
-            // Codec change -> tear down and renegotiate WebRTC media
-            // with the new codec preference. If we just switched to
-            // image mode (JpegWebp), the helper tears down without
-            // restarting.
+            if (this._display) {
+                this._display.preferSoftwareDecode = value === encodings.pseudoEncodingStreamingModeAVCNVENC;
+            }
             this._applyWebRTCMediaState('streamMode');
         }
     }
 
-    // Map the pseudoEncodingStreamingMode* family on the wire into a
-    // codec preference list for the WebRTC media transport. Returns
-    // null when the stream mode is image-mode (JpegWebp) — in which
-    // case WebRTC media is *not* used regardless of the toggle.
     _streamModeToWebRTCCodecs(mode) {
         const E = encodings;
         switch (mode) {
@@ -882,21 +852,6 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    // Single source-of-truth that reconciles _useUdp + _streamMode
-    // against the live WebRTC transport state. Called from the
-    // enableWebRTC and streamMode setters, and from the initial
-    // post-connect kickoff. Safe to call repeatedly.
-    //
-    // Smooth-switch design: when the user changes streamMode while a
-    // transport is live, we do NOT tear it down immediately. Instead
-    // we build a parallel `_webrtcPending` that negotiates the new
-    // codec. The old transport keeps decoding onto its <video>
-    // element so the user sees motion-continuous video through the
-    // entire ICE/SDP/encoder-warmup window. When the pending
-    // transport's <video> fires `playing`, the swap completes (see
-    // _onWebRTCVideoReady). If the user is fully disabling WebRTC
-    // (wantOn=false), we still freeze-frame the old <video> until the
-    // canvas underneath catches up — see _freezeFrameWebRTC.
     _applyWebRTCMediaState(reason) {
         // Only the primary window advertises session capability; the
         // server then sends one offer per screen. Screens that this
@@ -968,14 +923,6 @@ export default class RFB extends EventTargetMixin {
         this._webrtcScreens.clear();
     }
 
-    // SECONDARY: this window was reassigned a new screenIndex because a
-    // non-last monitor closed and the windows re-densified (display.js
-    // removeScreen). Any per-screen WebRTC transport this window still holds
-    // was negotiated for its PREVIOUS screenId; its <video> overlay is
-    // mounted full-window (100%x100%) and would sit frozen on top of the
-    // canvas — where the new screen's WebSocket video now lands — until the
-    // stale PC's ICE-disconnect grace (~5s) finally tears it down. Drop those
-    // stale transports immediately so the new screen renders right away.
     _teardownStaleSecondaryWebRTC(keepScreenId) {
         let toreDown = false;
         for (const [sid, slot] of Array.from(this._webrtcScreens)) {
@@ -1734,7 +1681,7 @@ export default class RFB extends EventTargetMixin {
 
         // Re-enable pointerLock if relative cursor is enabled
         // pointerLock must come from user initiated event
-        if (!this._pointerLock && this._pointerRelativeEnabled) {
+        if (!this._pointerLock && this._directMouseEnabled) {
             this.pointerLock = true;
         }
 
@@ -2035,6 +1982,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _proxyRFBMessage(messageType, data) {
+        if (!this._controlChannel) { return; }
         let message = {
             eventType: messageType,
             args: data,
@@ -2199,7 +2147,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _unregisterSecondaryDisplay() {
-        if (!this._isPrimaryDisplay) {
+        if (!this._isPrimaryDisplay && this._controlChannel) {
             let message = {
                 eventType: 'unregister',
                 screenID: this._display.screenID
@@ -2209,7 +2157,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _registerSecondaryDisplay(currentScreen = false, details = null) {
-        if (!this._isPrimaryDisplay) {
+        if (!this._isPrimaryDisplay && this._controlChannel) {
             const registerType = (currentScreen) ? 'reattach' : 'register'
 
             let size = this._screenSize();
@@ -2245,6 +2193,10 @@ export default class RFB extends EventTargetMixin {
     }
 
     identify(screens) {
+        // _controlChannel only exists when multi-monitor support is available
+        // (e.g. not on Chrome for Android, which lacks SharedWorker). Guard so
+        // the resize-triggered identify path doesn't throw there.
+        if (!this._controlChannel) { return; }
         let message = {
             eventType: 'identify',
             screens
@@ -2334,7 +2286,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         let pos;
-        if (this._pointerLock && !this._pointerRelativeEnabled) {
+        if (this._pointerLock) {
             let max_w = ((this._display.scale === 1) ? this._fbWidth : (this._fbWidth * this._display.scale));
             let max_h = ((this._display.scale === 1) ? this._fbHeight : (this._fbHeight * this._display.scale));
             pos = {
@@ -2352,11 +2304,6 @@ export default class RFB extends EventTargetMixin {
                 pos.y = max_h;
             }
             this._cursor.move(pos.x, pos.y);
-        } else if (this._pointerLock && this._pointerRelativeEnabled) {
-            pos = {
-                x: this._mousePos.x + ev.movementX,
-                y: this._mousePos.y + ev.movementY,
-            };
         } else {
             pos = clientToElement(ev.clientX, ev.clientY,
                                   this._canvas);
@@ -2406,7 +2353,33 @@ export default class RFB extends EventTargetMixin {
                 break;
             case 'mousemove':
             	ev.preventDefault();
-                if (this._isPrimaryDisplay) {
+                if (this._isPrimaryDisplay && this._pointerLock && this._directMouseEnabled) {
+                    // Direct drive: convert display-pixel deltas to server-pixel
+                    // deltas by dividing by the viewport scale factor.  Accumulate
+                    // the sub-pixel remainder so there is no drift at non-1x scales.
+                    const scale = this._display.scale || 1;
+                    this._directMouseRemainder.x += ev.movementX / scale;
+                    this._directMouseRemainder.y += ev.movementY / scale;
+                    const serverDX = Math.trunc(this._directMouseRemainder.x);
+                    const serverDY = Math.trunc(this._directMouseRemainder.y);
+                    this._directMouseRemainder.x -= serverDX;
+                    this._directMouseRemainder.y -= serverDY;
+                    if (serverDX !== 0 || serverDY !== 0) {
+                        this._sendDirectMouse(serverDX, serverDY, this._mouseButtonMask, 0, 0);
+                    }
+                    // Track cursor position in canvas-relative pixels for clamping,
+                    // then convert to client (viewport) coordinates for cursor.move().
+                    // The VNC canvas is CSS-centered in the window (pillarbox/letterbox),
+                    // so canvas-relative coords differ from client coords by the canvas
+                    // offset.  cursor.move() uses position:fixed and expects client coords.
+                    const max_w = (scale === 1) ? this._fbWidth : (this._fbWidth * scale);
+                    const max_h = (scale === 1) ? this._fbHeight : (this._fbHeight * scale);
+                    const newX = Math.max(0, Math.min(max_w, this._mousePos.x + ev.movementX));
+                    const newY = Math.max(0, Math.min(max_h, this._mousePos.y + ev.movementY));
+                    this._mousePos = { x: newX, y: newY };
+                    const canvasBounds = this._canvas.getBoundingClientRect();
+                    this._cursor.move(newX + canvasBounds.left, newY + canvasBounds.top);
+                } else if (this._isPrimaryDisplay) {
                     this._handleMouseMove(pos.x, pos.y, (ev.buttons > 0));
                 } else {
                     this._proxyRFBMessage('mousemove', [ pos.x, pos.y, (ev.buttons > 0), this._sendLeftClickonNextMove ]);
@@ -2548,17 +2521,9 @@ export default class RFB extends EventTargetMixin {
         if (this._viewOnly) { return; } // View only, skip mouse events
         if (!this._isPrimaryDisplay) { return; }
 
-        if (this._pointerLock && this._pointerRelativeEnabled) {
-
-            // Use releative cursor position
-            var rel_16_x = toSignedRelative16bit(x - this._pointerLockPos.x);
-            var rel_16_y = toSignedRelative16bit(y - this._pointerLockPos.y);
-
-            RFB.messages.pointerEvent(this._sock, rel_16_x, rel_16_y, mask);
-
-            // reset the cursor position to center
-            this._mousePos = { x: this._pointerLockPos.x , y: this._pointerLockPos.y };
-            this._cursor.move(this._pointerLockPos.x, this._pointerLockPos.y);
+        if (this._pointerLock && this._directMouseEnabled) {
+            // Direct drive: button state changes only (movement is sent raw from _handleMouse)
+            this._sendDirectMouse(0, 0, mask, 0, 0);
         } else {
             RFB.messages.pointerEventClamped(this._sock, this._display.absX(x), this._display.absY(y), mask);
         }
@@ -2568,6 +2533,7 @@ export default class RFB extends EventTargetMixin {
     _sendScroll(x, y, dX, dY) {
         if (this._rfbConnectionState !== 'connected') { return; }
         if (this._viewOnly) { return; } // View only, skip mouse events
+
         if (this._pointerLock && this._directMouseEnabled) {
             this._sendDirectMouse(0, 0, this._mouseButtonMask, dX, dY);
         } else if (this._isPrimaryDisplay) {
@@ -2575,6 +2541,13 @@ export default class RFB extends EventTargetMixin {
         } else {
             this._proxyRFBMessage('scroll', [ x, y, dX, dY ]);
         }
+    }
+
+    _sendDirectMouse(dx, dy, buttonMask, scrollDX, scrollDY) {
+        if (this._rfbConnectionState !== 'connected') { return; }
+        if (this._viewOnly) { return; }
+        if (!this._isPrimaryDisplay) { return; }
+        RFB.messages.directMouseEvent(this._sock, dx, dy, buttonMask, scrollDX, scrollDY);
     }
 
     _handleWheel(ev) {
@@ -3403,6 +3376,7 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingDesktopName);
         encs.push(encodings.pseudoEncodingExtendedClipboard);
         encs.push(encodings.pseudoEncodingKasmDisconnectNotify);
+        encs.push(encodings.pseudoEncodingDirectMouse);
         if (this._hasWebp())
             encs.push(encodings.pseudoEncodingWEBP);
         if (this._enableQOI)
@@ -3426,9 +3400,6 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingGOP1 + this.gop);
         encs.push(encodings.pseudoEncodingStreamingVideoQualityLevel0 + this.videoStreamQuality);
 
-        // Opt-in WebRTC congestion control (presence = enabled). Only relevant
-        // while WebRTC media is active; harmless otherwise (the server ignores
-        // it unless a WebRTC transport exists).
         if (this._webRTCCongestionControl)
             encs.push(encodings.pseudoEncodingWebRTCCongestionControl);
 
@@ -3947,6 +3918,9 @@ export default class RFB extends EventTargetMixin {
             case messages.msgTypeServerDisconnect: // KASM disconnect notice
                 return this._handleDisconnectNotify();
 
+            case messages.msgTypeForceGameMode:
+                return this._handleForceGameMode();
+
             case messages.msgTypeVideoEncoders:
                 return this._handleServerVideoEncoders();
 
@@ -4322,6 +4296,13 @@ export default class RFB extends EventTargetMixin {
         }));
     }
 
+    _handleForceGameMode() {
+        // No payload — the server is requesting that this client enter game mode.
+        // Fire an event so the UI layer can engage pointer lock on the next user gesture.
+        this.dispatchEvent(new CustomEvent("gamemodeforced"));
+        return true;
+    }
+
     _handleDisconnectNotify() {
         if (this._sock.rQwait("DisconnectNotify header", 8, 1)) { return false; }
         const flags = this._sock.rQshift8();
@@ -4557,7 +4538,19 @@ export default class RFB extends EventTargetMixin {
         if (this._pointerLock) {
             // Only attempt to match the server's pointer position if we are in
             // pointer lock mode.
-            this._mousePos = { x: x, y: y };
+            if (this._directMouseEnabled) {
+                // Direct drive mode: _mousePos must be in canvas-relative CSS
+                // pixels.  x/y from the wire are server framebuffer pixels, so
+                // multiply by the viewport scale to convert.
+                const scale = this._display.scale || 1;
+                this._mousePos = { x: x * scale, y: y * scale };
+                // Also update the visual cursor so it tracks the server position.
+                const canvasBounds = this._canvas.getBoundingClientRect();
+                this._cursor.move(x * scale + canvasBounds.left,
+                                  y * scale + canvasBounds.top);
+            } else {
+                this._mousePos = { x: x, y: y };
+            }
         }
 
         return true;
@@ -4916,6 +4909,7 @@ RFB.messages = {
         sock._sQlen += 10;
         sock.flush();
     },
+
     keepAlive(sock) {
         const buff = sock._sQ;
         const offset = sock._sQlen;

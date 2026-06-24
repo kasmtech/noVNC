@@ -173,6 +173,7 @@ export default class Display {
         this._localDecoderCodec = null;
         this._localDecoderW = 0;
         this._localDecoderH = 0;
+        this._localDecoderStreamMode = null;
         this._localDecoderNeedKey = false; // wait for a key frame after (re)configure
         this._localDecoderMeta = new Map(); // timestamp → {x, y, width, height, frameId}
         this._localDecoderTs = 0;
@@ -263,14 +264,14 @@ export default class Display {
             if (
                 (x >= this._screens[i].x && x <= this._screens[i].x + this._screens[i].serverWidth) &&
                 (y >= this._screens[i].y && y <= this._screens[i].y + this._screens[i].serverHeight)
-            )
-            {
-                return {
-                    "screenIndex": i,
-                    "x": x - this._screens[i].x,
-                    "y": y - this._screens[i].y
+                )
+                {
+                    return {
+                        "screenIndex": i,
+                        "x": x - this._screens[i].x,
+                        "y": y - this._screens[i].y
+                    }
                 }
-            }
         }
     }
 
@@ -764,14 +765,14 @@ export default class Display {
         }
 
         let rect = {
-            'type': 'img',
-            'img': null,
-            'x': x,
-            'y': y,
-            'width': width,
-            'height': height,
-            'frame_id': frame_id,
-            'mime': mime
+                'type': 'img',
+                'img': null,
+                'x': x,
+                'y': y,
+                'width': width,
+                'height': height,
+                'frame_id': frame_id,
+                'mime': mime
         };
 
         this._processRectScreens(rect);
@@ -1129,52 +1130,52 @@ export default class Display {
     _pushSyncRects() {
         let drawRectCnt = 0;
         whileLoop:
-            while (this._syncFrameQueue.length > 0) {
-                const a = this._syncFrameQueue[0];
-                const pos = a.screenLocations[0];
-                switch (a.type) {
-                    case 'copy':
-                        this.copyImage(pos.oldX, pos.oldY, pos.x, pos.y, a.width, a.height, a.frame_id, true);
-                        break;
-                    case 'fill':
-                        this.fillRect(pos.x, pos.y, a.width, a.height, a.color, a.frame_id, true);
-                        break;
-                    case 'blit':
-                        this.blitImage(pos.x, pos.y, a.width, a.height, a.data, 0, a.frame_id, true);
-                        break;
-                    case 'blitQ':
-                        this.blitQoi(pos.x, pos.y, a.width, a.height, a.data, 0, a.frame_id, true);
-                        break;
-                    case 'img':
-                        if (a.img.complete) {
-                            this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
+        while (this._syncFrameQueue.length > 0) {
+            const a = this._syncFrameQueue[0];
+            const pos = a.screenLocations[0];
+            switch (a.type) {
+                case 'copy':
+                    this.copyImage(pos.oldX, pos.oldY, pos.x, pos.y, a.width, a.height, a.frame_id, true);
+                    break;
+                case 'fill':
+                    this.fillRect(pos.x, pos.y, a.width, a.height, a.color, a.frame_id, true);
+                    break;
+                case 'blit':
+                    this.blitImage(pos.x, pos.y, a.width, a.height, a.data, 0, a.frame_id, true);
+                    break;
+                case 'blitQ':
+                    this.blitQoi(pos.x, pos.y, a.width, a.height, a.data, 0, a.frame_id, true);
+                    break;
+                case 'img':
+                    if (a.img.complete) {
+                        this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
+                    } else {
+                        if (this._syncFrameQueue.length > 5000) {
+                            this._syncFrameQueue.shift();
+                            this._droppedRects++;
                         } else {
-                            if (this._syncFrameQueue.length > 5000) {
-                                this._syncFrameQueue.shift();
-                                this._droppedRects++;
-                            } else {
-                                break whileLoop;
-                            }
+                            break whileLoop;
                         }
-                        break;
-                    case 'vid':
-                        this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
-                        a.img.close();
-                        break;
-                    case 'bitmap':
-                        this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
-                        a.img.close();
-                        break;
-                    case 'video_frame':
-                        this.drawVideoFrame(a.frame, pos.x, pos.y, a.width, a.height);
-                        break;
-                    default:
-                        this._syncFrameQueue.shift();
-                        continue;
-                }
-                drawRectCnt++;
-                this._syncFrameQueue.shift();
+                    }
+                    break;
+                case 'vid':
+                    this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
+                    a.img.close();
+                    break;
+                case 'bitmap':
+                    this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
+                    a.img.close();
+                    break;
+                case 'video_frame':
+                    this.drawVideoFrame(a.frame, pos.x, pos.y, a.width, a.height);
+                    break;
+                default:
+                    this._syncFrameQueue.shift();
+                    continue;
             }
+            drawRectCnt++;
+            this._syncFrameQueue.shift();
+        }
 
         if (this._renderer?.enableCanvasBuffer && drawRectCnt > 0) {
             this._renderer?._writeCtxBuffer();
@@ -1433,14 +1434,14 @@ export default class Display {
                                     this._screens[screenLocation.screenIndex].channel.postMessage({
                                         eventType: 'rect',
                                         rect: {
-                                            'type': 'vid',
-                                            'img': a.img,
-                                            'x': a.x,
-                                            'y': a.y,
-                                            'width': a.width,
-                                            'height': a.height,
-                                            'frame_id': a.frame_id,
-                                            'screenLocations': a.screenLocations
+                                           'type': 'vid',
+                                           'img': a.img,
+                                           'x': a.x,
+                                           'y': a.y,
+                                           'width': a.width,
+                                           'height': a.height,
+                                           'frame_id': a.frame_id,
+                                           'screenLocations': a.screenLocations
                                         },
                                         screenLocationIndex: sI
                                     }, [a.img]);
@@ -1452,14 +1453,14 @@ export default class Display {
                                     this._screens[screenLocation.screenIndex].channel.postMessage({
                                         eventType: 'rect',
                                         rect: {
-                                            'type': 'bitmap',
-                                            'img': a.img,
-                                            'x': a.x,
-                                            'y': a.y,
-                                            'width': a.width,
-                                            'height': a.height,
-                                            'frame_id': a.frame_id,
-                                            'screenLocations': a.screenLocations
+                                           'type': 'bitmap',
+                                           'img': a.img,
+                                           'x': a.x,
+                                           'y': a.y,
+                                           'width': a.width,
+                                           'height': a.height,
+                                           'frame_id': a.frame_id,
+                                           'screenLocations': a.screenLocations
                                         },
                                         screenLocationIndex: sI
                                     }, [a.img]);
@@ -1472,15 +1473,15 @@ export default class Display {
                                     this._screens[screenLocation.screenIndex].channel.postMessage({
                                         eventType: 'rect',
                                         rect: {
-                                            'type': 'blit',
-                                            'img': null,
-                                            'data': buf,
-                                            'x': a.x,
-                                            'y': a.y,
-                                            'width': a.width,
-                                            'height': a.height,
-                                            'frame_id': a.frame_id,
-                                            'screenLocations': a.screenLocations
+                                           'type': 'blit',
+                                           'img': null,
+                                           'data': buf,
+                                           'x': a.x,
+                                           'y': a.y,
+                                           'width': a.width,
+                                           'height': a.height,
+                                           'frame_id': a.frame_id,
+                                           'screenLocations': a.screenLocations
                                         },
                                         screenLocationIndex: sI
                                     }, [buf]);
@@ -1535,15 +1536,15 @@ export default class Display {
                                     this._screens[screenLocation.screenIndex].channel.postMessage({
                                         eventType: 'rect',
                                         rect: {
-                                            'type': 'img',
-                                            'img': null,
-                                            'x': a.x,
-                                            'y': a.y,
-                                            'width': a.width,
-                                            'height': a.height,
-                                            'frame_id': a.frame_id,
-                                            'screenLocations': a.screenLocations,
-                                            'src' : a.src
+                                           'type': 'img',
+                                           'img': null,
+                                           'x': a.x,
+                                           'y': a.y,
+                                           'width': a.width,
+                                           'height': a.height,
+                                           'frame_id': a.frame_id,
+                                           'screenLocations': a.screenLocations,
+                                           'src' : a.src
                                         },
                                         screenLocationIndex: sI
                                     });
@@ -1624,6 +1625,18 @@ export default class Display {
         }
     }
 
+    _configureLocalDecoder(codec, width, height, streamMode) {
+        this._localDecoder.configure({
+            codec,
+            displayAspectWidth: width,
+            displayAspectHeight: height,
+            optimizeForLatency: true,
+            // Chrome WebCodecs bug with NVENC h264
+            hardwareAcceleration: streamMode === encodings.pseudoEncodingStreamingModeAVCNVENC
+                ? 'prefer-software' : 'no-preference',
+        });
+    }
+
     // Primary -> secondary: relay one WebRTC signal to the secondary
     // window that renders screen `screenIndex`, over its dedicated
     // encodedFramePort. Queues until that port is established (the server
@@ -1682,11 +1695,15 @@ export default class Display {
             }
             return;
         }
-        const { codec, keyFrame, data, x, y, width, height, frameId } = e.data;
+        const { codec, keyFrame, streamMode, data, x, y, width, height, frameId } = e.data;
 
-        // Reconfigure decoder on first use or when codec/dimensions change
+        // Reconfigure decoder on first use or when codec/dimensions/streaming mode change
         if (!this._localDecoder || this._localDecoderCodec !== codec ||
-            this._localDecoderW !== width || this._localDecoderH !== height) {
+            this._localDecoderW !== width || this._localDecoderH !== height ||
+            (keyFrame && this._localDecoderStreamMode !== streamMode)) {
+            if (!keyFrame)
+                return;
+
             if (this._localDecoder) {
                 this._localDecoder.close();
                 this._localDecoderMeta.clear();
@@ -1712,15 +1729,11 @@ export default class Display {
                     this._localDecoder = null;
                 }
             });
-            this._localDecoder.configure({
-                codec,
-                displayAspectWidth: width,
-                displayAspectHeight: height,
-                optimizeForLatency: true,
-            });
             this._localDecoderCodec = codec;
             this._localDecoderW = width;
             this._localDecoderH = height;
+            this._localDecoderStreamMode = streamMode;
+            this._configureLocalDecoder(codec, width, height, streamMode);
             // A freshly (re)configured VideoDecoder must be fed a key frame
             // first; a delta throws and tears the decoder down. After a
             // transport switch (WebRTC -> WebSocket) the first relayed frame

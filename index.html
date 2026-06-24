@@ -367,8 +367,11 @@
                                                 </select>
                                             <li>
                                         </ul>
-                                        <hr />
-                                        <ul>
+                                        <!-- WebRTC Congestion Control: hidden while the feature is still in
+                                             development. Remove the display:none (and the force-off in app/ui.js)
+                                             to re-expose it. -->
+                                        <hr style="display: none;" />
+                                        <ul style="display: none;">
                                             <li>
                                                 <label class="switch"><input id="noVNC_setting_webrtc_congestion_control" type="checkbox" disabled />
                                                     <span class="slider round"></span>

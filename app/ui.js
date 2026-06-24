@@ -1908,7 +1908,9 @@ const UI = {
         UI.rfb.keyboard.enableIME = UI.getSetting('enable_ime');
         UI.rfb.clipboardBinary = supportsBinaryClipboard() && UI.rfb.clipboardSeamless;
         UI.rfb.enableWebRTC = UI.getSetting('enable_webrtc');
-        UI.rfb.webRTCCongestionControl = UI.getSetting('webrtc_congestion_control');
+        // WebRTC congestion control is still in development and hidden from the
+        // UI; force it off so a stale localStorage value can never activate it.
+        UI.rfb.webRTCCongestionControl = false;
         UI.updateWebRTCCongestionControlAvailability();
         UI.rfb.mouseButtonMapper = UI.initMouseButtonMapper();
         // UI.rfb.qualityPreset = UI.getSetting(UI_SETTINGS.PRESET);
@@ -3159,16 +3161,19 @@ const UI = {
     // The stored preference is preserved across the disable so re-enabling
     // WebRTC restores the user's choice.
     updateWebRTCCongestionControlAvailability() {
-        const enabled = UI.getSetting('enable_webrtc');
+        // Feature still in development: keep the toggle permanently disabled
+        // (it is also hidden in index.html) so it cannot be activated.
         const el = document.getElementById('noVNC_setting_webrtc_congestion_control');
         if (el) {
-            el.disabled = !enabled;
+            el.disabled = true;
+            el.checked = false;
         }
     },
 
     updateWebRTCCongestionControl() {
+        // Force off while the feature is hidden; ignore any stored preference.
         if (UI.rfb) {
-            UI.rfb.webRTCCongestionControl = UI.getSetting('webrtc_congestion_control');
+            UI.rfb.webRTCCongestionControl = false;
         }
     },
 

@@ -977,6 +977,7 @@ body {
   right: 5%;
   z-index: 100000;
   cursor: pointer;
+  pointer-events: none;
 }
 
 .keyboard-controls .buttons {
@@ -1053,6 +1054,7 @@ body {
 .keyboard-controls.is-visible {
   display: flex;
   flex-direction: column;
+  pointer-events: auto;
 }
 
 .keyboard-controls.is-open .button.handle {

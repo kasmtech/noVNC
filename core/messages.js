@@ -4,6 +4,8 @@ export const messages = {
     msgTypeServerDisconnect: 186,
     msgTypeForceGameMode: 187,
     msgTypeDirectMouseEvent: 188,
+    msgTypeTouchSupported: 189,
+    msgTypeTouchEvent: 190,
     msgTypeUserAddedToSession: 253,
     msgTypeUserRemovedFromSession: 254
 };

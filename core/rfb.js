@@ -41,7 +41,6 @@ import WebRTCVideoTransport from "./transport/webrtc_video.js";
 import WebRTCSignaling, { WEBRTC_MSG_TYPE, WEBRTC_SESSION_SCREEN, WebRTCSignalKind, writeWebRTCFrame } from "./transport/webrtc_signaling.js";
 import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
-import UDPDecoder from './decoders/udp.js';
 import {FPS, UI_SETTING_PROFILE_OPTIONS} from '../app/constants.js';
 
 // How many seconds to wait for a disconnect to finish
@@ -155,15 +154,11 @@ export default class RFB extends EventTargetMixin {
         this._resendClipboardNextUserDrivenEvent = true;
         this._useUdp = true;
         // WebRTC media transport (libdatachannel migration, Phase 1+).
-        // Driven by the same UI toggle that controls WebUDP ("Enable
-        // WebRTC UDP Transit") via `set enableWebRTC` below — that
-        // setter calls _applyWebRTCMediaState() which starts/stops the
-        // new transport. Codec preference is derived from streamMode
-        // (set via set streamMode); JpegWebp streamMode disables it.
-        // The legacy WebUDP DataChannel path stays alive in parallel
-        // as fallback when the server doesn't have enableWebRTCMedia
-        // turned on (kind=6 just gets bounced and the server keeps
-        // using WebUDP / image mode).
+        // Driven by the UI toggle ("Enable WebRTC Media") via
+        // `set enableWebRTC` below — that setter calls
+        // _applyWebRTCMediaState() which starts/stops the new transport.
+        // Codec preference is derived from streamMode (set via
+        // set streamMode); JpegWebp streamMode disables it.
         // Per-screen WebRTC media transports for screens THIS window
         // renders. Multi-monitor sessions run one RTCPeerConnection per X
         // screen (see doc/MULTI_MONITOR_WEBRTC_PLAN.md). Map keyed by
@@ -193,17 +188,6 @@ export default class RFB extends EventTargetMixin {
         // pseudoEncodingWebRTCCongestionControl pseudo-encoding.
         this._webRTCCongestionControl = false;
         this._enableWebP = false;
-        this.TransitConnectionStates = {
-            Tcp: Symbol("tcp"),
-            Udp: Symbol("udp"),
-            Upgrading: Symbol("upgrading"),
-            Downgrading: Symbol("downgrading"),
-            Failure: Symbol("failure")
-        }
-        this._transitConnectionState = this.TransitConnectionStates.Tcp;
-        this._lastTransition = null;
-        this._udpConnectFailures = 0; //Failures in upgrading connection to udp
-        this._udpTransitFailures = 0; //Failures in transit after successful upgrade
 
         this._trackFrameStats = false;
 
@@ -344,7 +328,6 @@ export default class RFB extends EventTargetMixin {
         this._decoders[encodings.encodingKasmVideo] = new KasmVideoDecoder(this, this._display);
         this._decoders[encodings.encodingTight] = new TightDecoder(this._display);
         this._decoders[encodings.encodingTightPNG] = new TightPNGDecoder();
-        this._decoders[encodings.encodingUDP] = new UDPDecoder();
 
         this._keyboard = new Keyboard(this._canvas, touchInput, navigator.keyboard);
         this._keyboard.onkeyevent = this._handleKeyEvent.bind(this);
@@ -796,20 +779,10 @@ export default class RFB extends EventTargetMixin {
     get enableWebRTC() { return this._useUdp; }
     set enableWebRTC(value) {
         this._useUdp = value;
-        if (!value) {
-            if (this.isConnected && (this._transitConnectionState !== this.TransitConnectionStates.Tcp)) {
-                this._sendUdpDowngrade();
-            }
-        } else {
-            if (this.isConnected && (this._transitConnectionState !== this.TransitConnectionStates.Udp)) {
-                this._sendUdpUpgrade();
-            }
-        }
-        // Same toggle also drives the new WebRTC media path. If the
-        // server didn't build with ENABLE_WEBRTC_MEDIA, the kind=6
-        // capability message gets bounced with a fallback signal and
-        // _webrtc tears itself down — no harm done, and WebUDP above
-        // remains the active path.
+        // Drives the WebRTC media path. If the server didn't build with
+        // ENABLE_WEBRTC_MEDIA, the kind=6 capability message gets bounced
+        // with a fallback signal and _webrtc tears itself down — no harm
+        // done.
         this._applyWebRTCMediaState('toggle');
     }
 
@@ -1481,11 +1454,6 @@ export default class RFB extends EventTargetMixin {
         this.lastActiveAt = Date.now();
     }
 
-    _changeTransitConnectionState(value) {
-        Log.Info("Transit state change from " + this._transitConnectionState.toString() + ' to ' + value.toString());
-        this._transitConnectionState = value;
-    }
-
     _setupWebSocket() {
         this._sock = new Websock();
         this._sock.on('message', () => {
@@ -1648,164 +1616,11 @@ export default class RFB extends EventTargetMixin {
 
         this._resendClipboardNextUserDrivenEvent = true;
 
-        // WebRTC UDP datachannel inits
-        if (typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
-            this._udpBuffer = new Map();
-
-            // Per-screen reorder buffer for HW-encoded video chunks.
-            // WebRTC unordered+unreliable delivery means small delta rects
-            // can complete reassembly before larger keyframe rects, which
-            // would feed the WebCodecs decoder a delta before its IDR and
-            // trigger EncodingError -> imagemode fallback. We hold rects
-            // here keyed by frame_id, drain contiguously, and skip gaps
-            // after a short timeout (asking the server for a fresh IDR).
-            this._videoReorder = {
-                screens: new Map(),     // screenId -> { buffer, lastFedFrameId, waitingForKey, timer }
-                timeoutMs: 100,          // wait this long for a missing frame before skipping
-                refreshCooldownMs: 500,  // minimum interval between gap-driven _requestFullRefresh calls
-                lastRefreshTime: 0       // ms timestamp of last gap-driven refresh request
-            };
-
-            this._udpPeer = new RTCPeerConnection({
-                iceServers: [{
-                    urls: ["stun:stun.l.google.com:19302"]
-                }]
-            });
-            let peer = this._udpPeer;
-
-            peer.onicecandidate = function(e) {
-                if (e.candidate)
-                    Log.Debug("received ice candidate", e.candidate);
-                else
-                    Log.Debug("all candidates received");
-            }
-
-            peer.ondatachannel = function(e) {
-                Log.Debug("peer connection on data channel", e);
-            }
-
-            this._udpChannel = peer.createDataChannel("webudp", {
-                ordered: false,
-                maxRetransmits: 0
-            });
-            this._udpChannel.binaryType = "arraybuffer";
-
-            this._udpChannel.onerror = function(e) {
-                Log.Error("data channel error " + e.message);
-                this._udpTransitFailures+=1;
-                this._sendUdpDowngrade();
-            }
-
-            let sock = this._sock;
-            let udpBuffer = this._udpBuffer;
-            let me = this;
-            this._udpChannel.onmessage = function(e) {
-                //Log.Info("got udp msg", e.data);
-                const u8 = new Uint8Array(e.data);
-                // Got an UDP packet. Do we need reassembly?
-                const id = parseInt(u8[0] +
-                                    (u8[1] << 8) +
-                                    (u8[2] << 16) +
-                                    (u8[3] << 24), 10);
-                const i = parseInt(u8[4] +
-                                   (u8[5] << 8) +
-                                   (u8[6] << 16) +
-                                   (u8[7] << 24), 10);
-                const pieces = parseInt(u8[8] +
-                                        (u8[9] << 8) +
-                                        (u8[10] << 16) +
-                                        (u8[11] << 24), 10);
-                const hash = parseInt(u8[12] +
-                                        (u8[13] << 8) +
-                                        (u8[14] << 16) +
-                                        (u8[15] << 24), 10);
-                // TODO: check the hash. It's the low 32 bits of XXH64, seed 0
-                // Wire is uint32_t little-endian (see common/network/Udp.cxx udpsend()).
-                // Use bitwise OR + unsigned >>> 0 so the high bit doesn't sign-flip the
-                // result; with this the comparison domain is [0, 2^32) and the only
-                // wrap is the server-side uint32_t wrap (~828 days @ 60 fps).
-                const frame_id = (u8[16] | (u8[17] << 8) | (u8[18] << 16) | (u8[19] << 24)) >>> 0;
-
-                if (me._transitConnectionState !== me.TransitConnectionStates.Udp) {
-                    me._display.clear();
-                    me._changeTransitConnectionState(me.TransitConnectionStates.Udp);
-                }
-
-                if (pieces == 1) { // Handle it immediately
-                    me._handleUdpRect(u8.slice(20), frame_id);
-                } else { // Use buffer
-                    const now = Date.now();
-
-                    // Hard cap on piece count to refuse poisoned packets.
-                    if (pieces > 65536 || i >= pieces) {
-                        Log.Warn("Discarding malformed UDP piece (id=" + id +
-                            ", i=" + i + ", pieces=" + pieces + ")");
-                        return;
-                    }
-
-                    if (udpBuffer.has(id)) {
-                        let item = udpBuffer.get(id);
-                        // Dup-piece / out-of-bounds guard. WebRTC unordered/
-                        // unreliable shouldn't duplicate, but if it ever does
-                        // we must not double-count or we'll fire completion
-                        // with `undefined` slots and throw on finaldata.set().
-                        if (i >= item.total_pieces || item.data[i] !== undefined) {
-                            return;
-                        }
-                        item.data[i] = u8.slice(20);
-                        item.recieved_pieces += 1;
-                        item.total_bytes += item.data[i].length;
-
-                        if (item.total_pieces == item.recieved_pieces) {
-                            // Message is complete, combile data into a single array
-                            var finaldata = new Uint8Array(item.total_bytes);
-                            let z = 0;
-                            for (let x = 0; x < item.data.length; x++) {
-                                finaldata.set(item.data[x], z);
-                                z += item.data[x].length;
-                            }
-                            udpBuffer.delete(id);
-                            me._handleUdpRect(finaldata, frame_id);
-                        }
-                    } else {
-                        // Periodic eviction of stale partial reassemblies.
-                        // If any piece of an old frame was dropped on the
-                        // wire, the entry would otherwise live forever and
-                        // leak memory. 500 ms is well past any reasonable
-                        // intra-frame jitter.
-                        if (udpBuffer.size > 16) {
-                            const cutoff = now - 500;
-                            for (const [k, v] of udpBuffer) {
-                                if (v.arrival < cutoff)
-                                    udpBuffer.delete(k);
-                            }
-                        }
-
-                        let item = {
-                            total_pieces: pieces,   // number of pieces expected
-                            arrival: now,           //time first piece was recieved
-                            recieved_pieces: 1,     // current number of pieces in data
-                            total_bytes: 0,         // total size of all data pieces combined
-                            data: new Array(pieces)
-                        }
-                        item.data[i] = u8.slice(20);
-                        item.total_bytes = item.data[i].length;
-                        udpBuffer.set(id, item);
-                    }
-                }
-            }
-        }
-
-	    if (this._useUdp && typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
-            setTimeout(function() { this._sendUdpUpgrade() }.bind(this), 3000);
-        }
-
-        // WebRTC media (libdatachannel) — parallel kickoff after the
-        // WebUDP setTimeout above. The reconciler reads _useUdp and
-        // _streamMode and starts the transport iff both are in a
-        // WebRTC-eligible state (toggle on, codec is not image-mode).
+        // WebRTC media (libdatachannel) kickoff. The reconciler reads
+        // _useUdp and _streamMode and starts the transport iff both are
+        // in a WebRTC-eligible state (toggle on, codec is not image-mode).
         // Server-side: enableWebRTCMedia off -> kind=6 gets bounced
-        // and _webrtc tears itself down, leaving WebUDP active.
+        // and _webrtc tears itself down.
         setTimeout(function() { this._applyWebRTCMediaState('connect') }.bind(this), 3000);
 
         Log.Debug("<< RFB.connect");
@@ -4121,9 +3936,6 @@ export default class RFB extends EventTargetMixin {
             case 180: // KASM binary clipboard
                 return this._handleBinaryClipboard();
 
-            case 181: // KASM UDP upgrade
-                return this._handleUdpUpgrade();
-
             case 182: // KASM unix relay subscription
                 return this._handleSubscribeUnixRelay();
 
@@ -4163,295 +3975,6 @@ export default class RFB extends EventTargetMixin {
         if (this._sock.rQlen > 0) {
             this._handleMessage();
         }
-    }
-
-    _handleUdpRect(data, frame_id) {
-        let frame = {
-            x: (data[0] << 8) + data[1],
-            y: (data[2] << 8) + data[3],
-            width: (data[4] << 8) + data[5],
-            height: (data[6] << 8) + data[7],
-            encoding: parseInt((data[8] << 24) + (data[9] << 16) +
-                                            (data[10] << 8) + data[11], 10)
-        };
-
-        switch (frame.encoding) {
-            case encodings.pseudoEncodingLastRect:
-                this._display.flip(frame_id, frame.x + 1); //Last Rect message, first 16 bytes contain rect count
-                if (this._display.pending())
-                    this._display.flush(false);
-                break;
-            case encodings.encodingTight:
-                let decoder = this._decoders[encodings.encodingUDP];
-                try {
-                    decoder.decodeRect(frame.x, frame.y,
-                        frame.width, frame.height,
-                        data, this._display,
-                        this._fbDepth, frame_id);
-                } catch (err) {
-                    this._fail("Error decoding rect: " + err);
-                    return false;
-                }
-                break;
-            case encodings.encodingKasmVideo: {
-                // HW-encoded video rect. Stage it in the per-screen reorder
-                // buffer; _drainVideoReorder feeds the decoder in frame_id
-                // order so deltas never reach WebCodecs before their IDR.
-                this._handleVideoUdpRect(frame.x, frame.y,
-                    frame.width, frame.height,
-                    data, frame_id);
-                break;
-            }
-            case encodings.encodingCopyRect: {
-                // Server sends CopyRect over UDP too (SMsgWriter::writeCopyRect
-                // when supportsUdp). 4-byte payload after the 12-byte rect
-                // header: srcX (U16 BE), srcY (U16 BE).
-                if (data.length < 16) {
-                    Log.Error("CopyRect UDP rect too short (" + data.length + " bytes)");
-                    return false;
-                }
-                const srcX = (data[12] << 8) | data[13];
-                const srcY = (data[14] << 8) | data[15];
-                this._display.copyImage(srcX, srcY,
-                    frame.x, frame.y,
-                    frame.width, frame.height,
-                    frame_id);
-                break;
-            }
-            default:
-                Log.Error("Invalid rect encoding via UDP: " + frame.encoding);
-                return false;
-        }
-
-        return true;
-    }
-
-    // Stage a HW-video rect into the per-screen reorder buffer and try
-    // to drain. Wire layout inside `data` (already past the 12-byte rect
-    // header): [12]=screenId, [13]=codec_id, [14]=keyframe flag, [15..]=
-    // compact-int length + NAL bytes.
-    _handleVideoUdpRect(x, y, width, height, data, frame_id) {
-        if (data.length < 15) {
-            Log.Warn("KasmVideo UDP rect too short (" + data.length + " bytes)");
-            return;
-        }
-        const reorder = this._videoReorder;
-        const screenId = data[12];
-        const isKey = data[14] === 1;
-
-        let state = reorder.screens.get(screenId);
-        if (!state) {
-            state = {
-                buffer: new Map(),    // frame_id -> {x, y, width, height, data, isKey}
-                lastFedFrameId: -1,   // -1 means we haven't fed any frame yet
-                waitingForKey: true,  // true until we see a usable IDR
-                timer: null
-            };
-            reorder.screens.set(screenId, state);
-        }
-
-        // Drop late arrivals for frames we've already passed.
-        if (state.lastFedFrameId !== -1 && frame_id <= state.lastFedFrameId) {
-            // Still ack the rect-count to the display so the LastRect flip
-            // for the original frame doesn't hang waiting on this rect.
-            this._display.enqueueDummyRect(screenId, frame_id,
-                x, y, width, height);
-            return;
-        }
-
-        state.buffer.set(frame_id, {x, y, width, height, data, isKey});
-        this._drainVideoReorder(screenId);
-
-        if (state.buffer.size > 0 && !state.timer) {
-            state.timer = setTimeout(() => {
-                state.timer = null;
-                this._handleVideoReorderTimeout(screenId);
-            }, reorder.timeoutMs);
-        }
-    }
-
-    _drainVideoReorder(screenId) {
-        const state = this._videoReorder.screens.get(screenId);
-        if (!state) return;
-
-        // Cold start: we need to begin with a keyframe. Walk the buffer
-        // in ascending frame_id order looking for one; drop anything
-        // earlier (we can't decode those deltas anyway).
-        if (state.lastFedFrameId === -1) {
-            const ids = [...state.buffer.keys()].sort((a, b) => a - b);
-            let keyId = -1;
-            for (const id of ids) {
-                if (state.buffer.get(id).isKey) {
-                    keyId = id;
-                    break;
-                }
-            }
-            if (keyId === -1) return; // still waiting for an IDR
-
-            for (const id of ids) {
-                if (id < keyId) {
-                    const r = state.buffer.get(id);
-                    // Keep display rect-counts consistent so frames flip.
-                    this._display.enqueueDummyRect(screenId, id,
-                        r.x, r.y, r.width, r.height);
-                    state.buffer.delete(id);
-                } else break;
-            }
-            state.lastFedFrameId = keyId - 1;
-            state.waitingForKey = false;
-        }
-
-        // Drain frames whose frame_id is exactly the next expected one.
-        // A gap stops the drain; the timeout handler will skip past it.
-        while (state.buffer.has(state.lastFedFrameId + 1)) {
-            const nextId = state.lastFedFrameId + 1;
-            const r = state.buffer.get(nextId);
-            state.buffer.delete(nextId);
-            state.lastFedFrameId = nextId;
-
-            if (state.waitingForKey && !r.isKey) {
-                // Skip delta while we wait for a recovery IDR, but keep
-                // the display rect-count consistent.
-                this._display.enqueueDummyRect(screenId, nextId,
-                    r.x, r.y, r.width, r.height);
-                continue;
-            }
-            if (r.isKey) state.waitingForKey = false;
-
-            this._feedKasmVideoUdpRect(r.x, r.y, r.width, r.height,
-                r.data, nextId);
-        }
-
-        if (state.buffer.size === 0 && state.timer) {
-            clearTimeout(state.timer);
-            state.timer = null;
-        }
-    }
-
-    _handleVideoReorderTimeout(screenId) {
-        const state = this._videoReorder.screens.get(screenId);
-        if (!state || state.buffer.size === 0) return;
-
-        const ids = [...state.buffer.keys()].sort((a, b) => a - b);
-        const earliest = ids[0];
-        const expected = state.lastFedFrameId + 1;
-
-        if (state.lastFedFrameId === -1 || earliest > expected) {
-            // Skip past the gap. Subsequent deltas are useless until we
-            // see a new IDR, so flip the screen into waitingForKey.
-            state.lastFedFrameId = earliest - 1;
-            state.waitingForKey = true;
-
-            // Rate-limit refresh requests. A lost IDR is the worst case
-            // because the resulting refresh-IDR is itself large and just
-            // as likely to drop pieces, which would re-trigger a refresh
-            // and create an IDR storm. The natural GOP cycle (default 24
-            // frames) keeps us from being stuck forever even if every
-            // requested refresh fails to land.
-            const now = Date.now();
-            const reorder = this._videoReorder;
-            const cooldownExpired =
-                (now - reorder.lastRefreshTime) > reorder.refreshCooldownMs;
-            const udpPartials = this._udpBuffer ? this._udpBuffer.size : 0;
-
-            if (cooldownExpired && typeof this._requestFullRefresh === 'function') {
-                reorder.lastRefreshTime = now;
-                Log.Warn("Video reorder gap on screen " + screenId +
-                    ": expected " + expected + ", earliest buffered " +
-                    earliest + ", udp_partials=" + udpPartials +
-                    ". Requesting full refresh.");
-                this._requestFullRefresh();
-            } else {
-                Log.Warn("Video reorder gap on screen " + screenId +
-                    ": expected " + expected + ", earliest buffered " +
-                    earliest + ", udp_partials=" + udpPartials +
-                    ". Refresh suppressed (cooldown).");
-            }
-
-            this._drainVideoReorder(screenId);
-
-            // Re-arm the timer if we still have buffered frames after the
-            // drain (e.g., all deltas, still no IDR available).
-            if (state.buffer.size > 0 && !state.timer) {
-                state.timer = setTimeout(() => {
-                    state.timer = null;
-                    this._handleVideoReorderTimeout(screenId);
-                }, this._videoReorder.timeoutMs);
-            }
-        }
-    }
-
-    _feedKasmVideoUdpRect(x, y, width, height, data, frame_id) {
-        // Reassembled UDP buffer is complete by the time we get here, so
-        // build a one-shot sock-shim that throws on underrun.
-        const payload = data.subarray(12);
-        let off = 0;
-        const sockShim = {
-            rQwait: function () { return false; },
-            rQshift8: function () {
-                if (off >= payload.length)
-                    throw new Error("KasmVideo UDP rect underrun (u8)");
-                return payload[off++];
-            },
-            rQshiftBytes: function (n) {
-                if (off + n > payload.length)
-                    throw new Error("KasmVideo UDP rect underrun (bytes)");
-                const s = payload.subarray(off, off + n);
-                off += n;
-                return s;
-            }
-        };
-        const videoDecoder = this._decoders[encodings.encodingKasmVideo];
-        try {
-            videoDecoder.decodeRect(x, y, width, height, sockShim,
-                this._display, this._fbDepth, frame_id);
-        } catch (err) {
-            Log.Error("Error decoding KasmVideo rect over UDP: " + err);
-        }
-    }
-
-    _sendUdpUpgrade() {
-        if (this._transitConnectionState == this.TransitConnectionStates.Upgrading) {
-            return;
-        }
-        this._changeTransitConnectionState(this.TransitConnectionStates.Upgrading);
-
-        let peer = this._udpPeer;
-        let sock = this._sock;
-
-        peer.createOffer().then(function(offer) {
-            return peer.setLocalDescription(offer);
-        }).then(function() {
-            const buff = sock._sQ;
-            const offset = sock._sQlen;
-            const str = Uint8Array.from(Array.from(peer.localDescription.sdp).map(letter => letter.charCodeAt(0)));
-
-            buff[offset] = 181; // msg-type
-            buff[offset + 1] = str.length >> 8; // u16 len
-            buff[offset + 2] = str.length;
-
-            buff.set(str, offset + 3);
-
-            sock._sQlen += 3 + str.length;
-            sock.flush();
-        }).catch(function(reason) {
-            Log.Error("Failed to create offer " + reason);
-            this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
-            this._udpConnectFailures++;
-        });
-    }
-
-    _sendUdpDowngrade() {
-        this._changeTransitConnectionState(this.TransitConnectionStates.Downgrading);
-        const buff = this._sock._sQ;
-        const offset = this._sock._sQlen;
-
-        buff[offset] = 181; // msg-type
-        buff[offset + 1] = 0; // u16 len
-        buff[offset + 2] = 0;
-
-        this._sock._sQlen += 3;
-        this._sock.flush();
     }
 
     // -------- WebRTC media (libdatachannel migration, Phase 1+) --------
@@ -4715,33 +4238,6 @@ export default class RFB extends EventTargetMixin {
         this._teardownAllWebRTCScreens();
         this._webrtcSessionActive = false;
         this._webrtcSessionCodec = null;
-    }
-
-    _handleUdpUpgrade() {
-        if (this._sock.rQwait("UdpUgrade header", 2, 1)) { return false; }
-        let len = this._sock.rQshift16();
-        if (this._sock.rQwait("UdpUpgrade payload", len, 3)) { return false; }
-
-        const payload = this._sock.rQshiftStr(len);
-
-        let peer = this._udpPeer;
-
-        var response = JSON.parse(payload);
-        Log.Debug("UDP Upgrade recieved from server: " + payload);
-        peer.setRemoteDescription(new RTCSessionDescription(response.answer)).then(function() {
-            var candidate = new RTCIceCandidate(response.candidate);
-            peer.addIceCandidate(candidate).then(function() {
-                Log.Debug("success in addicecandidate");
-            }.bind(this)).catch(function(err) {
-                Log.Error("Failure in addIceCandidate", err);
-                this._changeTransitConnectionState(this.TransitConnectionStates.Failure)
-                this._udpConnectFailures++;
-            }.bind(this));
-        }.bind(this)).catch(function(e) {
-            Log.Error("Failure in setRemoteDescription", e);
-            this._changeTransitConnectionState(this.TransitConnectionStates.Failure)
-            this._udpConnectFailures++;
-        }.bind(this));
     }
 
     _handleSubscribeUnixRelay() {
@@ -5228,27 +4724,6 @@ export default class RFB extends EventTargetMixin {
         }
 
         try {
-            if (this._transitConnectionState == this.TransitConnectionStates.Udp || this._transitConnectionState == this.TransitConnectionStates.Failure) {
-                if (this._transitConnectionState == this.TransitConnectionStates.Udp) {
-                    Log.Warn("Implicit UDP Transit Failure, TCP rects recieved while in UDP mode.")
-                    this._udpTransitFailures++;
-                }
-                this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
-                this._display.clear();
-                if (this._useUdp) {
-                    if (this._udpConnectFailures < 3 && this._udpTransitFailures < 3) {
-                        setTimeout(function() {
-                            Log.Warn("Attempting to connect via UDP again after failure.")
-                            this.enableWebRTC = true;
-                        }.bind(this), 3000);
-                    } else {
-                        Log.Warn("UDP connection failures exceeded limit, remaining on TCP transit.")
-                    }
-                }
-            } else if (this._transitConnectionState == this.TransitConnectionStates.Downgrading) {
-                this._display.clear();
-                this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
-            }
             return decoder.decodeRect(this._FBU.x, this._FBU.y,
                                       this._FBU.width, this._FBU.height,
                                       this._sock, this._display,

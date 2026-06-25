@@ -1,3 +1,5 @@
+import { isIOS, isAndroid } from "../util/browser.js";
+
 const PACKETS = {
     DOCUMENT_START: 0,
     DOCUMENT_CHUNK: 1,
@@ -5,19 +7,25 @@ const PACKETS = {
 };
 
 const printDocument = async (data) => {
-    const iframe = document.createElement("iframe");
-    iframe.style.display = "none";
-    document.body.appendChild(iframe);
+    if (!(isIOS() || isAndroid())) {
+        const iframe = document.createElement("iframe");
+        iframe.style.display = "none";
+        document.body.appendChild(iframe);
 
-    iframe.onload = () => {
-        setTimeout(() => {
-            iframe.focus();
-            iframe.contentWindow.print();
-        }, 1);
-    };
+        iframe.onload = () => {
+	    setTimeout(() => {
+	        iframe.focus();
+	        iframe.contentWindow.print();
+	    }, 1);
+        };
 
-    const blob = new Blob([new Uint8Array(data)], { type: "application/pdf" });
-    iframe.src = URL.createObjectURL(blob);
+        const blob = new Blob([new Uint8Array(data)], { type: "application/pdf" });
+        iframe.src = URL.createObjectURL(blob);
+    } else {
+        const blob = new Blob([new Uint8Array(data)], { type: "application/pdf" });
+        const blobUrl = URL.createObjectURL(blob);
+        window.open(blobUrl, '_blank');
+    }
 }
 
 export default (rfb) => {

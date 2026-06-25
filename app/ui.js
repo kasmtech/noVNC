@@ -189,6 +189,7 @@ const UI = {
             UI.connect();
         } else {
             autoconnect = false;
+            UI.updateVisualState('disconnected');
         }
 
         window.parent.postMessage({
@@ -509,6 +510,7 @@ const UI = {
 
     addConnectionControlHandlers() {
         UI.addClickHandle('noVNC_disconnect_button', UI.disconnect);
+        UI.addClickHandle('noVNC_cancel_reconnect_button', UI.cancelReconnect);
 
         var connect_btn_el = document.getElementById("noVNC_connect_button_2");
         if (typeof(connect_btn_el) != 'undefined' && connect_btn_el != null)
@@ -1956,6 +1958,9 @@ const UI = {
                     }
 
                     if (timeSinceLastActivityInS > idleDisconnectInS) {
+                        UI.inhibitReconnect = true;
+                        clearInterval(UI._sessionTimeoutInterval);
+                        UI._sessionTimeoutInterval = null;
                         Log.Warn("Idle Disconnect reached, disconnecting rfb session...");
                         parent.postMessage({ action: 'idle_session_timeout', value: 'Idle session timeout exceeded'}, '*' );
 
@@ -2060,7 +2065,19 @@ const UI = {
         UI.monitors = [];
         UI.sortedMonitors = [];
 
-        if (!e.detail.clean) {
+        const gracefulServerDisconnect = e.detail.serverNotice?.graceful === true;
+        const shouldReconnect = wasConnected &&
+                                UI.getSetting('reconnect', false) === true &&
+                                !UI.inhibitReconnect &&
+                                !gracefulServerDisconnect;
+
+        if (shouldReconnect) {
+            UI.updateVisualState('reconnecting');
+
+            const delay = parseInt(UI.getSetting('reconnect_delay'));
+            UI.reconnectCallback = setTimeout(UI.reconnect, delay);
+            return;
+        } else if (!e.detail.clean) {
             UI.updateVisualState('disconnected');
             if (wasConnected) {
                 UI.showStatus(_("Something went wrong, connection is closed"),
@@ -2068,12 +2085,6 @@ const UI = {
             } else {
                 UI.showStatus(_("Failed to connect to server"), 'error');
             }
-        } else if (UI.getSetting('reconnect', false) === true && !UI.inhibitReconnect) {
-            UI.updateVisualState('reconnecting');
-
-            const delay = parseInt(UI.getSetting('reconnect_delay'));
-            UI.reconnectCallback = setTimeout(UI.reconnect, delay);
-            return;
         } else {
             UI.updateVisualState('disconnected');
             UI.showStatus(_("Disconnected"), 'normal');

@@ -37,9 +37,10 @@ import CopyRectDecoder from "./decoders/copyrect.js";
 import RREDecoder from "./decoders/rre.js";
 import HextileDecoder from "./decoders/hextile.js";
 import KasmVideoDecoder from "./decoders/kasmvideo.js";
+import WebRTCVideoTransport from "./transport/webrtc_video.js";
+import WebRTCSignaling, { WEBRTC_MSG_TYPE, WEBRTC_SESSION_SCREEN, WebRTCSignalKind, writeWebRTCFrame } from "./transport/webrtc_signaling.js";
 import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
-import UDPDecoder from './decoders/udp.js';
 import {FPS, UI_SETTING_PROFILE_OPTIONS} from '../app/constants.js';
 
 // How many seconds to wait for a disconnect to finish
@@ -152,21 +153,25 @@ export default class RFB extends EventTargetMixin {
         this._clipboardBinary = true;
         this._resendClipboardNextUserDrivenEvent = true;
         this._useUdp = true;
+        this._webrtcScreens = new Map();
+        // Secondary-only: screenId this window must request a fresh offer for
+        // after a reindex, deferred until its relay port is up. null = none.
+        this._pendingWebRTCOfferRequest = null;
+        // Session-level negotiation state (the codec is session-wide).
+        this._webrtcSessionActive = false;  // capability advertised to server
+        this._webrtcSessionCodec = null;    // codecKey currently advertised
+        this._webrtcIceServers = [];        // [{urls}] from the kind=4 signal
+        this._webrtcIceServersRaw = '';     // raw newline list, for relaying
+
         this._hiDpi = 'hiDpi' in options ? !!options.hiDpi : false;
         this._enableQOI = false;
         this._videoQuality = 2;
+        // Opt-in: drive WebRTC media bitrate via the server's congestion
+        // controller. Off by default — full-quality CQP until the user enables
+        // it. Only has effect while WebRTC is active. Sent to the server as the
+        // pseudoEncodingWebRTCCongestionControl pseudo-encoding.
+        this._webRTCCongestionControl = false;
         this._enableWebP = false;
-        this.TransitConnectionStates = {
-            Tcp: Symbol("tcp"),
-            Udp: Symbol("udp"),
-            Upgrading: Symbol("upgrading"),
-            Downgrading: Symbol("downgrading"),
-            Failure: Symbol("failure")
-        }
-        this._transitConnectionState = this.TransitConnectionStates.Tcp;
-        this._lastTransition = null;
-        this._udpConnectFailures = 0; //Failures in upgrading connection to udp
-        this._udpTransitFailures = 0; //Failures in transit after successful upgrade
 
         this._trackFrameStats = false;
 
@@ -307,7 +312,6 @@ export default class RFB extends EventTargetMixin {
         this._decoders[encodings.encodingKasmVideo] = new KasmVideoDecoder(this, this._display);
         this._decoders[encodings.encodingTight] = new TightDecoder(this._display);
         this._decoders[encodings.encodingTightPNG] = new TightPNGDecoder();
-        this._decoders[encodings.encodingUDP] = new UDPDecoder();
 
         this._keyboard = new Keyboard(this._canvas, touchInput, navigator.keyboard);
         this._keyboard.onkeyevent = this._handleKeyEvent.bind(this);
@@ -404,6 +408,16 @@ export default class RFB extends EventTargetMixin {
     get preferBandwidth() { return this._preferBandwidth; }
     set preferBandwidth(val) {
         this._preferBandwidth = val;
+        this._pendingApplyEncodingChanges = true;
+    }
+
+    get webRTCCongestionControl() { return this._webRTCCongestionControl; }
+    set webRTCCongestionControl(val) {
+        val = !!val;
+        if (this._webRTCCongestionControl === val) {
+            return;
+        }
+        this._webRTCCongestionControl = val;
         this._pendingApplyEncodingChanges = true;
     }
 
@@ -740,15 +754,11 @@ export default class RFB extends EventTargetMixin {
     get enableWebRTC() { return this._useUdp; }
     set enableWebRTC(value) {
         this._useUdp = value;
-        if (!value) {
-            if (this.isConnected && (this._transitConnectionState !== this.TransitConnectionStates.Tcp)) {
-                this._sendUdpDowngrade();
-            }
-        } else {
-            if (this.isConnected && (this._transitConnectionState !== this.TransitConnectionStates.Udp)) {
-                this._sendUdpUpgrade();
-            }
-        }
+        // Drives the WebRTC media path. If the server didn't build with
+        // ENABLE_WEBRTC_MEDIA, the kind=6 capability message gets bounced
+        // with a fallback signal and _webrtc tears itself down — no harm
+        // done.
+        this._applyWebRTCMediaState('toggle');
     }
 
     get enableHiDpi() { return this._hiDpi; }
@@ -812,7 +822,172 @@ export default class RFB extends EventTargetMixin {
             if (this._display) {
                 this._display.preferSoftwareDecode = value === encodings.pseudoEncodingStreamingModeAVCNVENC;
             }
+            this._applyWebRTCMediaState('streamMode');
         }
+    }
+
+    _streamModeToWebRTCCodecs(mode) {
+        const E = encodings;
+        switch (mode) {
+            case E.pseudoEncodingStreamingModeAVC:
+            case E.pseudoEncodingStreamingModeAVCSW:
+            case E.pseudoEncodingStreamingModeAVCVAAPI:
+            case E.pseudoEncodingStreamingModeAVCNVENC:
+            case E.pseudoEncodingStreamingModeAVCQSV:
+                return ['H264'];
+            case E.pseudoEncodingStreamingModeHEVC:
+            case E.pseudoEncodingStreamingModeHEVCSW:
+            case E.pseudoEncodingStreamingModeHEVCVAAPI:
+            case E.pseudoEncodingStreamingModeHEVCNVENC:
+            case E.pseudoEncodingStreamingModeHEVCQSV:
+                return ['H265', 'H264'];   // fall back to H264 if browser refuses H265
+            case E.pseudoEncodingStreamingModeAV1:
+            case E.pseudoEncodingStreamingModeAV1SW:
+            case E.pseudoEncodingStreamingModeAV1VAAPI:
+            case E.pseudoEncodingStreamingModeAV1NVENC:
+            case E.pseudoEncodingStreamingModeAV1QSV:
+                return ['AV1', 'H264'];
+            default:
+                return null;   // image mode
+        }
+    }
+
+    _applyWebRTCMediaState(reason) {
+        // Only the primary window advertises session capability; the
+        // server then sends one offer per screen. Screens that this
+        // window doesn't render are relayed to their secondary window
+        // (see _dispatchWebRTCSignal). Secondary windows never call this —
+        // they are purely reactive to relayed offers.
+        if (!this._isPrimaryDisplay) return;
+        if (typeof RTCPeerConnection === 'undefined') return;
+
+        const wantCodecs = this._useUdp
+            ? this._streamModeToWebRTCCodecs(this._streamMode)
+            : null;
+        const wantOn  = !!wantCodecs;
+        const codecKey = wantCodecs ? wantCodecs.join(',') : '';
+
+        if (wantOn && this.isConnected) {
+            // Advertise (or re-advertise on a codec change). The server
+            // replies with the ICE-servers list + one offer per active
+            // screen; a re-advertisement while screens are live triggers a
+            // server-side smooth codec switch (pending transports).
+            if (!this._webrtcSessionActive || this._webrtcSessionCodec !== codecKey) {
+                Log.Info('Advertising WebRTC capability (codecs=' + codecKey +
+                    ', reason=' + reason + ')');
+                this._webRTCMediaCodecs = wantCodecs;
+                this._webrtcSessionActive = true;
+                this._webrtcSessionCodec = codecKey;
+                try {
+                    this._sendWebRTCFrame(WebRTCSignalKind.ClientCapabilities,
+                        WEBRTC_SESSION_SCREEN, codecKey);
+                } catch (e) {
+                    Log.Error('WebRTC capability advertisement failed: ' + e);
+                }
+            }
+            return;
+        }
+
+        // Image-mode requested while WebRTC is active: freeze-frame the
+        // canvas, tell the server to drop the whole session, and tear
+        // down every screen's transport. Image mode shows through.
+        if (!wantOn && this._webrtcSessionActive) {
+            Log.Info('Disabling WebRTC media (reason=' + reason + ')');
+            this._freezeFrameWebRTC();
+            try {
+                this._sendWebRTCFrame(WebRTCSignalKind.Fallback,
+                    WEBRTC_SESSION_SCREEN, 'unsubscribe');
+            } catch (e) {}
+            this._teardownAllWebRTCScreens();
+            this._webrtcSessionActive = false;
+            this._webrtcSessionCodec = null;
+        }
+    }
+
+    // Write one WebRTC signal frame to the server's WebSocket. The sink
+    // every local per-screen WebRTCSignaling uses.
+    _sendWebRTCFrame(kind, screenId, payload) {
+        writeWebRTCFrame(this._sock, kind, screenId, payload);
+    }
+
+    _makeLocalSignaling(screenId) {
+        return new WebRTCSignaling(screenId,
+            (k, sid, p) => this._sendWebRTCFrame(k, sid, p));
+    }
+
+    _teardownAllWebRTCScreens() {
+        for (const slot of this._webrtcScreens.values()) {
+            if (slot.pending) { try { slot.pending.stop(); } catch (e) {} }
+            if (slot.live)    { try { slot.live.stop(); }    catch (e) {} }
+        }
+        this._webrtcScreens.clear();
+    }
+
+    _teardownStaleSecondaryWebRTC(keepScreenId) {
+        let toreDown = false;
+        for (const [sid, slot] of Array.from(this._webrtcScreens)) {
+            if (sid === keepScreenId) continue;
+            Log.Info('[WEBRTC-DIAG] secondary dropping stale transport screen ' +
+                sid + ' after reindex to ' + keepScreenId);
+            if (slot.pending) { try { slot.pending.stop(); } catch (e) {} }
+            if (slot.live)    { try { slot.live.stop(); }    catch (e) {} }
+            this._webrtcScreens.delete(sid);
+            toreDown = true;
+        }
+        // If this window was streaming over WebRTC for its previous screenId,
+        // it now needs a fresh offer for the screen it took over. The server
+        // can't detect the window swap (the slot's RandR id is unchanged), so
+        // request it explicitly — deferred until our relay port for the new
+        // screen is established (_maybeRequestPendingWebRTCOffer).
+        if (toreDown && !this._webrtcScreens.has(keepScreenId)) {
+            this._pendingWebRTCOfferRequest = keepScreenId;
+        }
+    }
+
+    // SECONDARY: our relay port for the new screen is up; if a reindex left
+    // us without a transport for it, ask the server to (re)offer it so the
+    // monitor recovers RTP instead of staying on WebSocket video.
+    _maybeRequestPendingWebRTCOffer() {
+        const sid = this._pendingWebRTCOfferRequest;
+        if (sid == null) return;
+        this._pendingWebRTCOfferRequest = null;
+        if (this._webrtcScreens.has(sid)) return;   // already (re)building
+        Log.Info('[WEBRTC-DIAG] secondary requesting fresh offer for screen ' + sid);
+        if (this._display && typeof this._display.relayWebRTCSignalUp === 'function') {
+            this._display.relayWebRTCSignalUp(WebRTCSignalKind.RequestOffer, sid, '');
+        }
+    }
+
+    // Capture the last decoded frame from any live WebRTC <video> onto
+    // the canvas so the user sees a still image during the gap before the
+    // next mode's first paint, instead of an empty/black region.
+    _freezeFrameWebRTC() {
+        try {
+            let video = null;
+            for (const slot of this._webrtcScreens.values()) {
+                if (slot.live && slot.live.video && slot.live.video.videoWidth) {
+                    video = slot.live.video; break;
+                }
+            }
+            if (!video || !video.videoHeight) return;
+            const canvas = this._display && this._display._target;
+            if (!canvas || !canvas.getContext) return;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        } catch (e) {
+            Log.Warn('Freeze-frame capture failed: ' + e);
+        }
+    }
+
+    // Pending (codec-switch) transport for one screen failed before it
+    // could promote — drop just it, keep the live transport streaming.
+    _abandonPendingWebRTCScreen(screenId, reason) {
+        const slot = this._webrtcScreens.get(screenId);
+        if (!slot || !slot.pending) return;
+        Log.Info('Abandoning pending WebRTC (screen ' + screenId + '): ' + reason);
+        try { slot.pending.stop(); } catch (e) {}
+        slot.pending = null;
     }
 
     // ===== PUBLIC METHODS =====
@@ -1226,11 +1401,6 @@ export default class RFB extends EventTargetMixin {
         this.lastActiveAt = Date.now();
     }
 
-    _changeTransitConnectionState(value) {
-        Log.Info("Transit state change from " + this._transitConnectionState.toString() + ' to ' + value.toString());
-        this._transitConnectionState = value;
-    }
-
     _setupWebSocket() {
         this._sock = new Websock();
         this._sock.on('message', () => {
@@ -1393,115 +1563,12 @@ export default class RFB extends EventTargetMixin {
 
         this._resendClipboardNextUserDrivenEvent = true;
 
-        // WebRTC UDP datachannel inits
-        if (typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
-            this._udpBuffer = new Map();
-
-            this._udpPeer = new RTCPeerConnection({
-                iceServers: [{
-                    urls: ["stun:stun.l.google.com:19302"]
-                }]
-            });
-            let peer = this._udpPeer;
-
-            peer.onicecandidate = function(e) {
-                if (e.candidate)
-                    Log.Debug("received ice candidate", e.candidate);
-                else
-                    Log.Debug("all candidates received");
-            }
-
-            peer.ondatachannel = function(e) {
-                Log.Debug("peer connection on data channel", e);
-            }
-
-            this._udpChannel = peer.createDataChannel("webudp", {
-                ordered: false,
-                maxRetransmits: 0
-            });
-            this._udpChannel.binaryType = "arraybuffer";
-
-            this._udpChannel.onerror = function(e) {
-                Log.Error("data channel error " + e.message);
-                this._udpTransitFailures+=1;
-                this._sendUdpDowngrade();
-            }
-
-            let sock = this._sock;
-            let udpBuffer = this._udpBuffer;
-            let me = this;
-            this._udpChannel.onmessage = function(e) {
-                //Log.Info("got udp msg", e.data);
-                const u8 = new Uint8Array(e.data);
-                // Got an UDP packet. Do we need reassembly?
-                const id = parseInt(u8[0] +
-                                    (u8[1] << 8) +
-                                    (u8[2] << 16) +
-                                    (u8[3] << 24), 10);
-                const i = parseInt(u8[4] +
-                                   (u8[5] << 8) +
-                                   (u8[6] << 16) +
-                                   (u8[7] << 24), 10);
-                const pieces = parseInt(u8[8] +
-                                        (u8[9] << 8) +
-                                        (u8[10] << 16) +
-                                        (u8[11] << 24), 10);
-                const hash = parseInt(u8[12] +
-                                        (u8[13] << 8) +
-                                        (u8[14] << 16) +
-                                        (u8[15] << 24), 10);
-                // TODO: check the hash. It's the low 32 bits of XXH64, seed 0
-                const frame_id = parseInt(u8[16] +
-                                        (u8[17] << 8) +
-                                        (u8[18] << 16) +
-                                        (u8[19] << 24), 10);
-
-                if (me._transitConnectionState !== me.TransitConnectionStates.Udp) {
-                    me._display.clear();
-                    me._changeTransitConnectionState(me.TransitConnectionStates.Udp);
-                }
-
-                if (pieces == 1) { // Handle it immediately
-                    me._handleUdpRect(u8.slice(20), frame_id);
-                } else { // Use buffer
-                    const now = Date.now();
-
-                    if (udpBuffer.has(id)) {
-                        let item = udpBuffer.get(id);
-                        item.recieved_pieces += 1;
-                        item.data[i] = u8.slice(20);
-                        item.total_bytes += item.data[i].length;
-
-                        if (item.total_pieces == item.recieved_pieces) {
-                            // Message is complete, combile data into a single array
-                            var finaldata = new Uint8Array(item.total_bytes);
-                            let z = 0;
-                            for (let x = 0; x < item.data.length; x++) {
-                                finaldata.set(item.data[x], z);
-                                z += item.data[x].length;
-                            }
-                            udpBuffer.delete(id);
-                            me._handleUdpRect(finaldata, frame_id);
-                        }
-                    } else {
-                        let item = {
-                            total_pieces: pieces,   // number of pieces expected
-                                arrival: now,       //time first piece was recieved
-                            recieved_pieces: 1,     // current number of pieces in data
-                            total_bytes: 0,         // total size of all data pieces combined
-                            data: new Array(pieces)
-                        }
-                        item.data[i] = u8.slice(20);
-                        item.total_bytes = item.data[i].length;
-                        udpBuffer.set(id, item);
-                    }
-                }
-            }
-        }
-
-	    if (this._useUdp && typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
-            setTimeout(function() { this._sendUdpUpgrade() }.bind(this), 3000);
-        }
+        // WebRTC media (libdatachannel) kickoff. The reconciler reads
+        // _useUdp and _streamMode and starts the transport iff both are
+        // in a WebRTC-eligible state (toggle on, codec is not image-mode).
+        // Server-side: enableWebRTCMedia off -> kind=6 gets bounced
+        // and _webrtc tears itself down.
+        setTimeout(function() { this._applyWebRTCMediaState('connect') }.bind(this), 3000);
 
         Log.Debug("<< RFB.connect");
     }
@@ -3332,6 +3399,10 @@ export default class RFB extends EventTargetMixin {
         // encs.push(encodings.pseudoEncodingHardwareProfile0 + this.hwEncoderProfile);
         encs.push(encodings.pseudoEncodingGOP1 + this.gop);
         encs.push(encodings.pseudoEncodingStreamingVideoQualityLevel0 + this.videoStreamQuality);
+
+        if (this._webRTCCongestionControl)
+            encs.push(encodings.pseudoEncodingWebRTCCongestionControl);
+
         encs.push(this.streamMode);
 
 	// preferBandwidth choses preset settings. Since we expose all the settings, let's not pass this
@@ -3836,14 +3907,14 @@ export default class RFB extends EventTargetMixin {
             case 180: // KASM binary clipboard
                 return this._handleBinaryClipboard();
 
-            case 181: // KASM UDP upgrade
-                return this._handleUdpUpgrade();
-
             case 182: // KASM unix relay subscription
                 return this._handleSubscribeUnixRelay();
 
             case 183: // KASM unix relay data
                 return this._handleUnixRelay();
+
+            case WEBRTC_MSG_TYPE: // 190 — KASM WebRTC media signaling
+                return this._handleWebRTCSignal();
             case messages.msgTypeServerDisconnect: // KASM disconnect notice
                 return this._handleDisconnectNotify();
 
@@ -3880,111 +3951,267 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    _handleUdpRect(data, frame_id) {
-        let frame = {
-            x: (data[0] << 8) + data[1],
-            y: (data[2] << 8) + data[3],
-            width: (data[4] << 8) + data[5],
-            height: (data[6] << 8) + data[7],
-            encoding: parseInt((data[8] << 24) + (data[9] << 16) +
-                                            (data[10] << 8) + data[11], 10)
-        };
+    // -------- WebRTC media (libdatachannel migration, Phase 1+) --------
 
-        switch (frame.encoding) {
-            case encodings.pseudoEncodingLastRect:
-                this._display.flip(frame_id, frame.x + 1); //Last Rect message, first 16 bytes contain rect count
-                if (this._display.pending())
-                    this._display.flush(false);
-                break;
-            case encodings.encodingTight:
-                let decoder = this._decoders[encodings.encodingUDP];
-                try {
-                    decoder.decodeRect(frame.x, frame.y,
-                        frame.width, frame.height,
-                        data, this._display,
-                        this._fbDepth, frame_id);
-                } catch (err) {
-                    this._fail("Error decoding rect: " + err);
-                    return false;
-                }
-                break;
-            default:
-                Log.Error("Invalid rect encoding via UDP: " + frame.encoding);
-                return false;
-        }
+    _handleWebRTCSignal() {
+        // Body: [u8 kind][u8 screenId][u16 len][bytes payload]
+        if (this._sock.rQwait('WebRTC sig header', 4, 1)) { return false; }
+        const kind     = this._sock.rQshift8();
+        const screenId = this._sock.rQshift8();
+        const len      = this._sock.rQshift16();
+        if (this._sock.rQwait('WebRTC sig payload', len, 5)) { return false; }
+        const payload = len ? this._sock.rQshiftStr(len) : '';
 
+        this._dispatchWebRTCSignal(kind, screenId, payload);
         return true;
     }
 
-    _sendUdpUpgrade() {
-        if (this._transitConnectionState == this.TransitConnectionStates.Upgrading) {
+    _dispatchWebRTCSignal(kind, screenId, payload) {
+        // Session-level ICE servers: stash (parsed for our own PCs, raw
+        // for relaying to secondary windows before their offers).
+        if (kind === WebRTCSignalKind.IceServers) {
+            this._storeWebRTCIceServers(payload);
             return;
         }
-        this._changeTransitConnectionState(this.TransitConnectionStates.Upgrading);
-
-        let peer = this._udpPeer;
-        let sock = this._sock;
-
-        peer.createOffer().then(function(offer) {
-            return peer.setLocalDescription(offer);
-        }).then(function() {
-            const buff = sock._sQ;
-            const offset = sock._sQlen;
-            const str = Uint8Array.from(Array.from(peer.localDescription.sdp).map(letter => letter.charCodeAt(0)));
-
-            buff[offset] = 181; // msg-type
-            buff[offset + 1] = str.length >> 8; // u16 len
-            buff[offset + 2] = str.length;
-
-            buff.set(str, offset + 3);
-
-            sock._sQlen += 3 + str.length;
-            sock.flush();
-        }).catch(function(reason) {
-            Log.Error("Failed to create offer " + reason);
-            this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
-            this._udpConnectFailures++;
-        });
+        // Session-level fallback: tear everything down, image mode wins.
+        if (kind === WebRTCSignalKind.Fallback && screenId === WEBRTC_SESSION_SCREEN) {
+            this._onWebRTCSessionFallback(payload);
+            return;
+        }
+        // Per-screen signal. Handle locally if this (the primary) window
+        // renders the screen; otherwise relay it to the secondary window
+        // that does.
+        if (this._webrtcScreenIsLocal(screenId)) {
+            this._routeWebRTCSignal(kind, screenId, payload,
+                (sid) => this._makeLocalSignaling(sid));
+        } else {
+            this._relayWebRTCSignalToScreen(screenId, kind, payload);
+        }
     }
 
-    _sendUdpDowngrade() {
-        this._changeTransitConnectionState(this.TransitConnectionStates.Downgrading);
-        const buff = this._sock._sQ;
-        const offset = this._sock._sQlen;
-
-        buff[offset] = 181; // msg-type
-        buff[offset + 1] = 0; // u16 len
-        buff[offset + 2] = 0;
-
-        this._sock._sQlen += 3;
-        this._sock.flush();
+    _storeWebRTCIceServers(payload) {
+        this._webrtcIceServersRaw = payload || '';
+        this._webrtcIceServers = this._webrtcIceServersRaw.split('\n')
+            .map(s => s.trim()).filter(Boolean)
+            .map(raw => RFB._parseIceServer(raw));
+        Log.Debug('WebRTC ICE servers: ' + JSON.stringify(this._webrtcIceServers));
     }
 
-    _handleUdpUpgrade() {
-        if (this._sock.rQwait("UdpUgrade header", 2, 1)) { return false; }
-        let len = this._sock.rQshift16();
-        if (this._sock.rQwait("UdpUpgrade payload", len, 3)) { return false; }
+    // Parse one server-sent ICE server URL into an RTCIceServer dict. STUN
+    // URLs pass through unchanged. TURN URLs carry credentials in the URL
+    // userinfo (turn:user:pass@host:port?...) — the W3C RTCIceServer API
+    // rejects userinfo in `urls`, so split it back out into the separate
+    // username/credential fields (percent-decoding, mirroring the
+    // urlEncodeCredential() done server-side in VNCSConnectionST).
+    static _parseIceServer(raw) {
+        const m = /^(turns?):(?:([^@/:]+):([^@/]*)@)(.+)$/i.exec(raw);
+        if (!m) {
+            return { urls: raw };
+        }
+        return {
+            urls: m[1] + ':' + m[4],
+            username: decodeURIComponent(m[2]),
+            credential: decodeURIComponent(m[3]),
+        };
+    }
 
-        const payload = this._sock.rQshiftStr(len);
+    // The screenId this window renders over WebRTC. The primary renders
+    // screen 0; a secondary window renders its own screenIndex. (Server
+    // screenId === display screenIndex — see setDesktopSize, which sends
+    // the screen's position index as its RFB id.)
+    _localWebRTCScreenId() {
+        if (this._isPrimaryDisplay) return 0;
+        return (this._display && this._display.screenIndex) || 0;
+    }
 
-        let peer = this._udpPeer;
+    _webrtcScreenIsLocal(screenId) {
+        return screenId === this._localWebRTCScreenId();
+    }
 
-        var response = JSON.parse(payload);
-        Log.Debug("UDP Upgrade recieved from server: " + payload);
-        peer.setRemoteDescription(new RTCSessionDescription(response.answer)).then(function() {
-            var candidate = new RTCIceCandidate(response.candidate);
-            peer.addIceCandidate(candidate).then(function() {
-                Log.Debug("success in addicecandidate");
-            }.bind(this)).catch(function(err) {
-                Log.Error("Failure in addIceCandidate", err);
-                this._changeTransitConnectionState(this.TransitConnectionStates.Failure)
-                this._udpConnectFailures++;
-            }.bind(this));
-        }.bind(this)).catch(function(e) {
-            Log.Error("Failure in setRemoteDescription", e);
-            this._changeTransitConnectionState(this.TransitConnectionStates.Failure)
-            this._udpConnectFailures++;
-        }.bind(this));
+    // Route a per-screen offer/ICE/Close/Fallback to this window's
+    // transport for that screen, creating one reactively on a fresh
+    // offer. A second offer for a live screen builds a `pending` transport
+    // that promotes on its first decoded frame (smooth codec switch).
+    // `makeSignaling(screenId)` produces the outbound channel — socket on
+    // the primary's own screen, relay port on a secondary window.
+    _routeWebRTCSignal(kind, screenId, payload, makeSignaling) {
+        if (typeof RTCPeerConnection === 'undefined') {
+            if (kind === WebRTCSignalKind.SdpOffer) {
+                Log.Warn('RTCPeerConnection unsupported; declining screen ' + screenId);
+                const sig = makeSignaling(screenId);
+                try { sig.send(WebRTCSignalKind.Fallback, 'no-rtcpeerconnection'); } catch (e) {}
+            }
+            return;
+        }
+        let slot = this._webrtcScreens.get(screenId);
+        if (kind === WebRTCSignalKind.SdpOffer) {
+            if (!slot) { slot = { live: null, pending: null }; this._webrtcScreens.set(screenId, slot); }
+            const pending = !!slot.live;
+            Log.Info('[WEBRTC-DIAG] building transport screen ' + screenId +
+                ' pending=' + pending + ' (window ' +
+                (this._isPrimaryDisplay ? 'primary' : 'secondary') + ')');
+            const sig = makeSignaling(screenId);
+            const transport = new WebRTCVideoTransport(this, screenId, sig,
+                { pending, iceServers: this._webrtcIceServers });
+            if (pending) {
+                if (slot.pending) { try { slot.pending.stop(); } catch (e) {} }
+                slot.pending = transport;
+            } else {
+                slot.live = transport;
+            }
+            sig.deliver(kind, payload);   // drive _handleOffer
+            return;
+        }
+        // ICE / Close / Fallback for an existing transport. During a codec
+        // switch route to pending (its offer is the one in flight).
+        if (!slot) return;
+        const target = slot.pending || slot.live;
+        if (target) target.signaling.deliver(kind, payload);
+    }
+
+    // PRIMARY: relay a per-screen signal to the secondary window that
+    // renders this screen, over its encodedFramePort. The secondary builds
+    // its own RTCPeerConnection and answers back through the same port
+    // (see _forwardRelayedWebRTCToServer). On a fresh offer, relay the
+    // session ICE-servers first so the secondary can configure its PC.
+    _relayWebRTCSignalToScreen(screenId, kind, payload) {
+        Log.Info('[WEBRTC-DIAG] primary relaying kind=' + kind +
+            ' to secondary screen ' + screenId);
+        if (!this._display || typeof this._display.relayWebRTCSignal !== 'function') return;
+        if (kind === WebRTCSignalKind.SdpOffer) {
+            this._display.relayWebRTCSignal(screenId, WebRTCSignalKind.IceServers,
+                WEBRTC_SESSION_SCREEN,
+                this._webrtcIceServersRaw || '');
+        }
+        this._display.relayWebRTCSignal(screenId, kind, screenId, payload);
+    }
+
+    // PRIMARY: a secondary window relayed one of its WebRTC signals (SDP
+    // answer / ICE / fallback) back up; forward it to the server.
+    _forwardRelayedWebRTCToServer(kind, screenId, payload) {
+        try { this._sendWebRTCFrame(kind, screenId, payload); } catch (e) {
+            Log.Warn('Forwarding relayed WebRTC signal to server failed: ' + e);
+        }
+    }
+
+    // SECONDARY: a WebRTC signal for this window's screen arrived from the
+    // primary over the encodedFramePort. Build/route this window's own
+    // RTCPeerConnection; outbound answers/ICE go back over the relay port.
+    _onRelayedWebRTCSignal(kind, screenId, payload) {
+        Log.Info('[WEBRTC-DIAG] secondary received relayed kind=' + kind +
+            ' screen=' + screenId);
+        if (kind === WebRTCSignalKind.IceServers) {
+            this._storeWebRTCIceServers(payload);
+            return;
+        }
+        this._routeWebRTCSignal(kind, screenId, payload,
+            (sid) => this._makeRelaySignaling(sid));
+    }
+
+    // Outbound signaling sink for a secondary window: post the answer/ICE
+    // to the primary over the encodedFramePort; the primary forwards it to
+    // the server's WebSocket.
+    _makeRelaySignaling(screenId) {
+        return new WebRTCSignaling(screenId,
+            (k, sid, p) => {
+                if (this._display && typeof this._display.relayWebRTCSignalUp === 'function')
+                    this._display.relayWebRTCSignalUp(k, sid, p);
+            });
+    }
+
+    _onWebRTCVideoReady(video, transport) {
+        // Overlay the <video> full-window on top of the canvas. Each
+        // window renders exactly one screen and that screen's PC streams
+        // exactly that screen's content, so the overlay is 100%x100% (no
+        // sub-rect positioning — that was only needed by the rejected
+        // spanning approach). The canvas stays in the DOM so the
+        // WebSocket/image-mode path can take over instantly on failure.
+        // A *pending* (codec-switch) transport sits above the live one
+        // and promotes on `playing`.
+        const screenId = transport.screenId;
+        const slot = this._webrtcScreens.get(screenId);
+        const pending = !!(slot && transport === slot.pending);
+        try {
+            video.style.position = 'absolute';
+            video.style.left   = '0';
+            video.style.top    = '0';
+            video.style.width  = '100%';
+            video.style.height = '100%';
+            // Pending overlay must sit above the live overlay (z=1) so
+            // it visually wins on opacity:1. Both stay click-through.
+            video.style.zIndex = pending ? '2' : '1';
+            // CRITICAL: the overlay must be click-through. Without this,
+            // the <video> intercepts all mouse/touch events and the
+            // canvas underneath (where rfb's input handlers live)
+            // never receives them — the user can see the stream but
+            // can't interact with the remote desktop.
+            video.style.pointerEvents = 'none';
+            // Hide until the first frame is decoded and ready to paint.
+            // Otherwise the user sees a black <video> rectangle covering
+            // whatever the canvas had during ICE/SDP negotiation.
+            video.style.opacity = '0';
+            Log.Info('[WEBRTC-DIAG] mounting <video> screen ' + screenId +
+                ' (window ' + (this._isPrimaryDisplay ? 'primary' : 'secondary') +
+                ', pending=' + pending + ')');
+            video.addEventListener('playing', () => {
+                Log.Info('[WEBRTC-DIAG] <video> PLAYING screen ' + screenId +
+                    ' (' + video.videoWidth + 'x' + video.videoHeight + ')');
+                video.style.opacity = '1';
+                if (pending) this._promotePendingWebRTCScreen(screenId, transport);
+            }, { once: true });
+            // Find the canvas's parent. _screen is the standard mount
+            // point; if a project embeds rfb differently, the hook can
+            // be overridden by subclassing.
+            const host = this._screen || this._target;
+            if (host && host.appendChild) host.appendChild(video);
+        } catch (e) {
+            Log.Warn('Failed to mount WebRTC <video> (screen ' + screenId + '): ' + e);
+        }
+    }
+
+    // First decoded frame from a screen's pending transport has painted —
+    // promote it: drop that screen's old live transport + <video>, make
+    // the pending one live.
+    _promotePendingWebRTCScreen(screenId, transport) {
+        const slot = this._webrtcScreens.get(screenId);
+        if (!slot || transport !== slot.pending) return;  // superseded
+        Log.Info('Pending WebRTC media (screen ' + screenId + ') is playing — promoting');
+        const oldLive  = slot.live;
+        const oldVideo = oldLive && oldLive.video;
+        if (oldLive) { try { oldLive.stop(); } catch (e) {} }
+        if (oldVideo && oldVideo.parentNode) {
+            oldVideo.parentNode.removeChild(oldVideo);
+        }
+        slot.live = slot.pending;
+        slot.pending = null;
+        // Drop the now-live overlay back to z=1.
+        try { if (slot.live.video) slot.live.video.style.zIndex = '1'; } catch (e) {}
+    }
+
+    // One screen's live transport failed (ICE / codec) — drop just that
+    // screen; the server streams it over the WebSocket and the canvas /
+    // KasmVideo path renders it. Other screens keep streaming. The
+    // transport already sent a per-screen Fallback to the server.
+    _onWebRTCScreenFallback(screenId, reason) {
+        Log.Warn('WebRTC screen ' + screenId + ' fallback (' + reason +
+            ') — this screen now streams over the WebSocket');
+        const slot = this._webrtcScreens.get(screenId);
+        if (!slot) return;
+        this._freezeFrameWebRTC();
+        if (slot.pending) { try { slot.pending.stop(); } catch (e) {} }
+        if (slot.live)    { try { slot.live.stop(); }    catch (e) {} }
+        this._webrtcScreens.delete(screenId);
+    }
+
+    // The server tore down the whole WebRTC session (ICE timeout, no
+    // server codec, etc.). Drop every screen; image mode / WebSocket
+    // video takes over for all of them.
+    _onWebRTCSessionFallback(reason) {
+        Log.Warn('WebRTC session fallback (' + reason + ') — image mode taking over');
+        this._freezeFrameWebRTC();
+        this._teardownAllWebRTCScreens();
+        this._webrtcSessionActive = false;
+        this._webrtcSessionCodec = null;
     }
 
     _handleSubscribeUnixRelay() {
@@ -4490,27 +4717,6 @@ export default class RFB extends EventTargetMixin {
         }
 
         try {
-            if (this._transitConnectionState == this.TransitConnectionStates.Udp || this._transitConnectionState == this.TransitConnectionStates.Failure) {
-                if (this._transitConnectionState == this.TransitConnectionStates.Udp) {
-                    Log.Warn("Implicit UDP Transit Failure, TCP rects recieved while in UDP mode.")
-                    this._udpTransitFailures++;
-                }
-                this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
-                this._display.clear();
-                if (this._useUdp) {
-                    if (this._udpConnectFailures < 3 && this._udpTransitFailures < 3) {
-                        setTimeout(function() {
-                            Log.Warn("Attempting to connect via UDP again after failure.")
-                            this.enableWebRTC = true;
-                        }.bind(this), 3000);
-                    } else {
-                        Log.Warn("UDP connection failures exceeded limit, remaining on TCP transit.")
-                    }
-                }
-            } else if (this._transitConnectionState == this.TransitConnectionStates.Downgrading) {
-                this._display.clear();
-                this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
-            }
             return decoder.decodeRect(this._FBU.x, this._FBU.y,
                                       this._FBU.width, this._FBU.height,
                                       this._sock, this._display,

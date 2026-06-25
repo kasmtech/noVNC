@@ -18,6 +18,27 @@ import {Canvas2DRenderer} from "./renderers/Canvas2DRenderer";
 import {WebGLRenderer} from "./renderers/WebGLRenderer";
 import { perfLogger } from './util/performance-logger.js';
 
+const MIN_RESOLUTION_SCALE = 25;
+const MAX_RESOLUTION_SCALE = 200;
+const RESOLUTION_SCALE_STEP = 25;
+
+function clampResolutionScale(value) {
+    value = Number(value);
+    if (!Number.isFinite(value)) {
+        return 100;
+    }
+    value = Math.round(value / RESOLUTION_SCALE_STEP) * RESOLUTION_SCALE_STEP;
+    return Math.min(MAX_RESOLUTION_SCALE, Math.max(MIN_RESOLUTION_SCALE, value));
+}
+
+function defaultResolutionScale(pixelRatio) {
+    return clampResolutionScale((Number(pixelRatio) || 1) * 100);
+}
+
+function resolutionScaleRatio(resolutionScale, pixelRatio) {
+    return (Number(pixelRatio) || 1) / (clampResolutionScale(resolutionScale) / 100);
+}
+
 export default class Display {
     constructor(target, rfb, isPrimaryDisplay, videoRenderingMode = 'canvas2d') {
         Log.Debug(">> Display.constructor");
@@ -156,6 +177,8 @@ export default class Display {
             relativePositionX: 0, //offset relative to primary monitor, always 0 for primary
             relativePositionY: 0, //offset relative to primary monitor, always 0 for primary
             pixelRatio: window.devicePixelRatio,
+            resolutionScale: defaultResolutionScale(window.devicePixelRatio),
+            resolutionScaleCustom: false,
             containerHeight: this._target.parentNode.offsetHeight,
             containerWidth: this._target.parentNode.offsetWidth,
             channel: null,
@@ -299,6 +322,9 @@ export default class Display {
         this._screens[i].containerHeight = Math.floor(parentNodeSize.height / 2) * 2;
         this._screens[i].containerWidth = Math.floor(parentNodeSize.width / 2) * 2;
         this._screens[i].pixelRatio = window.devicePixelRatio;
+        if (!this._screens[i].resolutionScaleCustom) {
+            this._screens[i].resolutionScale = defaultResolutionScale(this._screens[i].pixelRatio);
+        }
         this._screens[i].width = this._screens[i].containerWidth;
         this._screens[i].height = this._screens[i].containerHeight;
 
@@ -310,14 +336,20 @@ export default class Display {
         //max the resolution of a single screen to 1280
         if (
             (this._screens[i].serverReportedWidth > 0 && this._screens[i].serverReportedHeight > 0) &&
-            (
-                disableScaling ||
-                (this._screens[i].serverReportedWidth !== this._screens[i].serverWidth || this._screens[i].serverReportedHeight !== this._screens[i].serverHeight)
-            ) &&
+            (disableScaling ||
+             (!this._screens[i].resolutionScaleCustom &&
+              (this._screens[i].serverReportedWidth !== this._screens[i].serverWidth ||
+               this._screens[i].serverReportedHeight !== this._screens[i].serverHeight))) &&
             (!max_width && !max_height)
         ) {
             height = this._screens[i].serverReportedHeight;
             width = this._screens[i].serverReportedWidth;
+        }
+        else if (!max_width && !max_height) {
+            const scaleRatio = resolutionScaleRatio(this._screens[i].resolutionScale, this._screens[i].pixelRatio);
+            width = Math.floor(width * scaleRatio);
+            height = Math.floor(height * scaleRatio);
+            scale = 1 / scaleRatio;
         }
         else if (width > 1280 && !disableLimit && resolutionQuality == 1 && streamMode == encodings.pseudoEncodingStreamingModeJpegWebp) {
             height = Math.floor(1280 * (height/width)); //keeping the aspect ratio of original resolution, shrink y to match x
@@ -384,19 +416,39 @@ export default class Display {
         for (let i = 0; i < screenPlan.screens.length; i++) {
             for (let z = 0; z < this._screens.length; z++) {
                 if (screenPlan.screens[i].screenID === this._screens[z].screenID) {
-                    if (this._screens[z].x !== screenPlan.screens[i].x || this._screens[z].y !== screenPlan.screens[i].y) {
-                        if (z == 0) {
-                            this._screens[z].x = screenPlan.screens[i].x;
-                            this._screens[z].y = screenPlan.screens[i].y;
+                    if (typeof screenPlan.screens[i].resolutionScale !== 'undefined') {
+                        const resolutionScale = clampResolutionScale(screenPlan.screens[i].resolutionScale);
+                        if (this._screens[z].resolutionScale !== resolutionScale) {
+                            this._screens[z].resolutionScale = resolutionScale;
+                            this._screens[z].resolutionScaleCustom = true;
+                            changes = true;
                         }
+                    }
+                    if (typeof screenPlan.screens[i].serverWidth !== 'undefined' &&
+                        typeof screenPlan.screens[i].serverHeight !== 'undefined' &&
+                        (this._screens[z].serverWidth !== screenPlan.screens[i].serverWidth ||
+                         this._screens[z].serverHeight !== screenPlan.screens[i].serverHeight)) {
+                        this._screens[z].serverWidth = screenPlan.screens[i].serverWidth;
+                        this._screens[z].serverHeight = screenPlan.screens[i].serverHeight;
+                        changes = true;
+                    }
+                    if (typeof screenPlan.screens[i].width !== 'undefined') {
+                        this._screens[z].width = screenPlan.screens[i].width;
+                    }
+                    if (typeof screenPlan.screens[i].height !== 'undefined') {
+                        this._screens[z].height = screenPlan.screens[i].height;
+                    }
+                    if (typeof screenPlan.screens[i].scale !== 'undefined') {
+                        this._screens[z].scale = screenPlan.screens[i].scale;
+                    }
+                    if (this._screens[z].x !== screenPlan.screens[i].x || this._screens[z].y !== screenPlan.screens[i].y) {
+                        this._screens[z].x = screenPlan.screens[i].x;
+                        this._screens[z].y = screenPlan.screens[i].y;
                         changes = true;
                     }
                     if (this._screens[z].x2 !== this._screens[z].x + this._screens[z].serverWidth || this._screens[z].y2 !== this._screens[z].y + this._screens[z].serverHeight) {
-                        if (z == 0) {
-                            this._screens[z].x2 = this._screens[z].x + this._screens[z].serverWidth
-                            this._screens[z].y2 = this._screens[z].y + this._screens[z].serverHeight
-
-                        }
+                        this._screens[z].x2 = this._screens[z].x + this._screens[z].serverWidth
+                        this._screens[z].y2 = this._screens[z].y + this._screens[z].serverHeight
                         changes = true;
                     }
                 }
@@ -405,7 +457,7 @@ export default class Display {
         return changes;
     }
 
-    addScreen(screenID, width, height, pixelRatio, containerHeight, containerWidth, scale, serverWidth, serverHeight, x, y, windowId) {
+    addScreen(screenID, width, height, pixelRatio, containerHeight, containerWidth, scale, serverWidth, serverHeight, x, y, windowId, resolutionScale = null) {
         if (!this._isPrimaryDisplay) {
             throw new Error("Cannot add a screen to a secondary display.");
         }
@@ -424,14 +476,17 @@ export default class Display {
         if (screenIdx > 0) {
             //existing screen, update
             const existing_screen = this._screens[screenIdx];
+            const resolvedResolutionScale = resolutionScale || defaultResolutionScale(pixelRatio);
             if (existing_screen.serverHeight !== serverHeight || existing_screen.serverWidth !== serverWidth || existing_screen.width !== width || existing_screen.height !== height
                 || existing_screen.containerHeight !== containerHeight || existing_screen.containerWidth !== containerWidth || existing_screen.scale !== scale || existing_screen.pixelRatio !== pixelRatio ||
-                existing_screen.x !== x || existing_screen.y !== y) {
+                existing_screen.x !== x || existing_screen.y !== y || existing_screen.resolutionScale !== resolvedResolutionScale) {
                 existing_screen.width = width;
                 existing_screen.height = height;
                 existing_screen.containerHeight = containerHeight;
                 existing_screen.containerWidth = containerWidth;
                 existing_screen.pixelRatio = pixelRatio;
+                existing_screen.resolutionScale = resolvedResolutionScale;
+                existing_screen.resolutionScaleCustom = resolutionScale !== null;
                 existing_screen.scale = scale;
                 existing_screen.serverWidth = serverWidth;
                 existing_screen.serverHeight = serverHeight;
@@ -459,6 +514,8 @@ export default class Display {
                 x: x,
                 y: 0,
                 pixelRatio: pixelRatio,
+                resolutionScale: resolutionScale || defaultResolutionScale(pixelRatio),
+                resolutionScaleCustom: resolutionScale !== null,
                 containerHeight: containerHeight,
                 containerWidth: containerWidth,
                 channel: new BroadcastChannel(`channel_${screenID}`),

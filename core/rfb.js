@@ -103,6 +103,7 @@ export default class RFB extends EventTargetMixin {
         this._isPrimaryDisplay = (isPrimaryDisplay !== false);
         this.videoCodecs = videoCodecs;
         this._videoRenderingMode = options.videoRenderingMode || 'canvas2d';
+        this._preserveLastActiveAtOnConnect = !!options.preserveLastActiveAtOnConnect;
 
         // Internal state
         this._rfbConnectionState = '';
@@ -323,7 +324,7 @@ export default class RFB extends EventTargetMixin {
         // ===== PROPERTIES =====
         this.dragViewport = false;
         this.focusOnClick = true;
-        this.lastActiveAt = Date.now();
+        this.lastActiveAt = options.lastActiveAt || Date.now();
 
         this._viewOnly = false;
         this._clipViewport = false;
@@ -1224,6 +1225,9 @@ export default class RFB extends EventTargetMixin {
 
     _setLastActive() {
         this.lastActiveAt = Date.now();
+        this.dispatchEvent(new CustomEvent("activity", {
+            detail: { lastActiveAt: this.lastActiveAt },
+        }));
     }
 
     _changeTransitConnectionState(value) {
@@ -1315,7 +1319,9 @@ export default class RFB extends EventTargetMixin {
             try {
                 Log.Info(`connecting to ${this._url}`);
                 this._sock.open(this._url, this._wsProtocols);
-                this._setLastActive();
+                if (!this._preserveLastActiveAtOnConnect) {
+                    this._setLastActive();
+                }
             } catch (e) {
                 if (e.name === 'SyntaxError') {
                     this._fail("Invalid host or port (" + e + ")");

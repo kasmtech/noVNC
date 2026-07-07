@@ -78,6 +78,10 @@ const UI = {
     inhibitReconnect: true,
     reconnectCallback: null,
     reconnectPassword: null,
+    kasmSessionLastActiveAt: null,
+    kasmIdleDisconnectInS: null,
+    kasmIdleTimeoutSent: false,
+    _sessionTimeoutInterval: null,
     monitors: [],
     sortedMonitors: [],
     selectedMonitor: null,
@@ -1855,7 +1859,9 @@ const UI = {
                             shared: UI.getSetting('shared'),
                             repeaterID: UI.getSetting('repeaterID'),
                             credentials: { password: password },
-                            videoRenderingMode: UI.getSetting('video_rendering_mode')
+                            videoRenderingMode: UI.getSetting('video_rendering_mode'),
+                            lastActiveAt: UI.kasmSessionLastActiveAt,
+                            preserveLastActiveAtOnConnect: UI.kasmSessionLastActiveAt !== null,
                         },
                         UI.codecDetector?.getSupportedCodecIds(),
                         true );
@@ -1940,6 +1946,7 @@ const UI = {
             if (UI.rfb.clipboardDown){
                 UI.rfb.addEventListener("clipboard", UI.clipboardRx);
             }
+            UI.rfb.addEventListener("activity", UI.kasmActivity);
             UI.rfb.addEventListener("disconnect", UI.disconnectedRx);
             if (! WebUtil.getConfigVar('show_control_bar')) {
                 document.getElementById('noVNC_control_bar_anchor').setAttribute('style', 'display: none');
@@ -1947,28 +1954,7 @@ const UI = {
 
             //keep alive for websocket connection to stay open, since we may not control reverse proxies
             //send a keep alive within a window that we control
-            UI._sessionTimeoutInterval = setInterval(function() {
-               if (UI.rfb) {
-                    const timeSinceLastActivityInS = (Date.now() - UI.rfb.lastActiveAt) / 1000;
-                    let idleDisconnectInS = 1200; //20 minute default
-                    if (Number.isFinite(parseFloat(UI.rfb.idleDisconnect))) {
-                        idleDisconnectInS = parseFloat(UI.rfb.idleDisconnect) * 60;
-                    }
-
-                    if (timeSinceLastActivityInS > idleDisconnectInS) {
-                        Log.Warn("Idle Disconnect reached, disconnecting rfb session...");
-                        parent.postMessage({ action: 'idle_session_timeout', value: 'Idle session timeout exceeded'}, '*' );
-
-                        // in some cases the intra-frame message could be blocked, fall back to navigating to a disconnect page.
-                        setTimeout(function() {
-                            window.location.replace('disconnected.html');
-                        }, 10000);
-                    } else {
-                        //send keep-alive
-                        UI.rfb.sendKeepAlive();
-                    }
-                }
-            }, 5000);
+            UI.startKasmSessionTimeoutInterval();
         } else {
             document.getElementById('noVNC_status').style.visibility = "visible";
         }
@@ -2002,7 +1988,7 @@ const UI = {
 
         UI.updateVisualState('disconnecting');
 
-        clearInterval(UI._sessionTimeoutInterval);
+        UI.stopKasmSessionTimeoutInterval(true);
         UI.hideControlInput('noVNC_displays_button');
     },
 
@@ -2047,6 +2033,63 @@ const UI = {
         UI.rfb.focus();
     },
 
+    kasmActivity(event) {
+        UI.kasmSessionLastActiveAt = event.detail.lastActiveAt;
+        UI.kasmIdleTimeoutSent = false;
+    },
+
+    startKasmSessionTimeoutInterval() {
+        if (UI.kasmSessionLastActiveAt === null && UI.rfb) {
+            UI.kasmSessionLastActiveAt = UI.rfb.lastActiveAt;
+        }
+
+        if (UI.kasmIdleDisconnectInS === null && UI.rfb && Number.isFinite(parseFloat(UI.rfb.idleDisconnect))) {
+            UI.kasmIdleDisconnectInS = parseFloat(UI.rfb.idleDisconnect) * 60;
+        }
+
+        if (UI._sessionTimeoutInterval !== null) {
+            return;
+        }
+
+        UI._sessionTimeoutInterval = setInterval(function() {
+            if (UI.kasmSessionLastActiveAt === null) {
+                return;
+            }
+
+            const timeSinceLastActivityInS = (Date.now() - UI.kasmSessionLastActiveAt) / 1000;
+            const idleDisconnectInS = UI.kasmIdleDisconnectInS || 1200; //20 minute default
+
+            if (timeSinceLastActivityInS > idleDisconnectInS) {
+                if (!UI.kasmIdleTimeoutSent) {
+                    UI.kasmIdleTimeoutSent = true;
+                    Log.Warn("Idle Disconnect reached, disconnecting rfb session...");
+                    parent.postMessage({ action: 'idle_session_timeout', value: 'Idle session timeout exceeded'}, '*' );
+
+                    // in some cases the intra-frame message could be blocked, fall back to navigating to a disconnect page.
+                    setTimeout(function() {
+                        window.location.replace('disconnected.html');
+                    }, 10000);
+                }
+            } else if (UI.rfb) {
+                //send keep-alive
+                UI.rfb.sendKeepAlive();
+            }
+        }, 5000);
+    },
+
+    stopKasmSessionTimeoutInterval(resetLastActiveAt=false) {
+        if (UI._sessionTimeoutInterval !== null) {
+            clearInterval(UI._sessionTimeoutInterval);
+            UI._sessionTimeoutInterval = null;
+        }
+
+        if (resetLastActiveAt) {
+            UI.kasmSessionLastActiveAt = null;
+            UI.kasmIdleDisconnectInS = null;
+            UI.kasmIdleTimeoutSent = false;
+        }
+    },
+
     disconnectFinished(e) {
         const wasConnected = UI.connected;
 
@@ -2079,6 +2122,7 @@ const UI = {
             UI.showStatus(_("Disconnected"), 'normal');
         }
 
+        UI.stopKasmSessionTimeoutInterval(true);
         document.title = PAGE_TITLE;
 
         UI.openControlbar();
@@ -2250,7 +2294,10 @@ const UI = {
                     //message value in seconds
                     const idle_timeout_min = Math.ceil(event.data.value / 60);
                     UI.forceSetting('idle_disconnect', idle_timeout_min, false);
-                    UI.rfb.idleDisconnect = idle_timeout_min;
+                    UI.kasmIdleDisconnectInS = event.data.value;
+                    if (UI.rfb) {
+                        UI.rfb.idleDisconnect = idle_timeout_min;
+                    }
                     console.log(`Updated the idle timeout to ${event.data.value}s`);
                     break;
                 case 'enable_hidpi':

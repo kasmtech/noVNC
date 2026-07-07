@@ -2060,7 +2060,13 @@ const UI = {
         UI.monitors = [];
         UI.sortedMonitors = [];
 
-        if (!e.detail.clean) {
+        if (!e.detail.clean && UI.getSetting('reconnect', false) === true && !UI.inhibitReconnect) {
+            UI.updateVisualState('reconnecting');
+
+            const delay = parseInt(UI.getSetting('reconnect_delay'));
+            UI.reconnectCallback = setTimeout(UI.reconnect, delay);
+            return;
+        } else if (!e.detail.clean) {
             UI.updateVisualState('disconnected');
             if (wasConnected) {
                 UI.showStatus(_("Something went wrong, connection is closed"),
@@ -2068,12 +2074,6 @@ const UI = {
             } else {
                 UI.showStatus(_("Failed to connect to server"), 'error');
             }
-        } else if (UI.getSetting('reconnect', false) === true && !UI.inhibitReconnect) {
-            UI.updateVisualState('reconnecting');
-
-            const delay = parseInt(UI.getSetting('reconnect_delay'));
-            UI.reconnectCallback = setTimeout(UI.reconnect, delay);
-            return;
         } else {
             UI.updateVisualState('disconnected');
             UI.showStatus(_("Disconnected"), 'normal');

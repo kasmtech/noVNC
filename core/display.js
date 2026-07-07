@@ -478,7 +478,7 @@ export default class Display {
             // Set up SharedWorker port relay for encoded-frame fast path
             if (!this._portRelayWorker) {
                 this._portRelayWorker = new SharedWorker(
-                    new URL('../app/port-relay-worker.js', import.meta.url));
+                    new URL('../app/port-relay-worker.js', import.meta.url), this._rfb.connectionID);
                 this._portRelayWorker.port.start();
                 this._portRelayWorker.port.onmessage = (e) => {
                     if (e.data.type === 'port') {
@@ -1047,7 +1047,8 @@ export default class Display {
                     }
                     // Connect to SharedWorker to receive direct MessagePort from primary
                     const relayWorker = new SharedWorker(
-                        new URL('../app/port-relay-worker.js', import.meta.url));
+                        new URL('../app/port-relay-worker.js', import.meta.url),
+                        this._rfb.connectionID);
                     relayWorker.port.start();
                     relayWorker.port.onmessage = (e) => {
                         if (e.data.type === 'port') {

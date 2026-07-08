@@ -78,6 +78,8 @@ const UI = {
     inhibitReconnect: true,
     reconnectCallback: null,
     reconnectPassword: null,
+    reconnectAttempts: 0,
+    suppressDisconnectRx: false,
     kasmSessionLastActiveAt: null,
     kasmIdleDisconnectInS: null,
     kasmIdleTimeoutSent: false,
@@ -323,6 +325,7 @@ const UI = {
         UI.initSetting('repeaterID', '');
         UI.initSetting('reconnect', WebUtil.isInsideKasmVDI());
         UI.initSetting('reconnect_delay', 5000);
+        UI.initSetting('reconnect_retries', 5);
         UI.initSetting('idle_disconnect', 20);
         UI.initSetting('prefer_local_cursor', true);
         UI.initSetting('toggle_control_panel', false);
@@ -688,6 +691,7 @@ const UI = {
         UI.addSettingChangeHandler('logging', UI.updateLogging);
         UI.addSettingChangeHandler('reconnect');
         UI.addSettingChangeHandler('reconnect_delay');
+        UI.addSettingChangeHandler('reconnect_retries');
         UI.addSettingChangeHandler('enable_webp');
         UI.addSettingChangeHandler('clipboard_seamless');
         UI.addSettingChangeHandler('clipboard_up');
@@ -1567,6 +1571,7 @@ const UI = {
         UI.updateSetting('logging');
         UI.updateSetting('reconnect');
         UI.updateSetting('reconnect_delay');
+        UI.updateSetting('reconnect_retries');
 
         document.getElementById('noVNC_settings')
             .classList.add("noVNC_open");
@@ -1985,6 +1990,8 @@ const UI = {
 
         // Disable automatic reconnecting
         UI.inhibitReconnect = true;
+        UI.reconnectAttempts = 0;
+        UI.suppressDisconnectRx = false;
 
         UI.updateVisualState('disconnecting');
 
@@ -2018,6 +2025,8 @@ const UI = {
     connectFinished(e) {
         UI.connected = true;
         UI.inhibitReconnect = false;
+        UI.reconnectAttempts = 0;
+        UI.suppressDisconnectRx = false;
 
         let msg;
         if (UI.getSetting('encrypt')) {
@@ -2036,6 +2045,20 @@ const UI = {
     kasmActivity(event) {
         UI.kasmSessionLastActiveAt = event.detail.lastActiveAt;
         UI.kasmIdleTimeoutSent = false;
+    },
+
+    notifyKasmSessionTimeout() {
+        if (UI.kasmIdleTimeoutSent) {
+            return;
+        }
+
+        UI.kasmIdleTimeoutSent = true;
+        parent.postMessage({ action: 'idle_session_timeout', value: 'Idle session timeout exceeded'}, '*' );
+
+        // in some cases the intra-frame message could be blocked, fall back to navigating to a disconnect page.
+        setTimeout(function() {
+            window.location.replace('disconnected.html');
+        }, 10000);
     },
 
     startKasmSessionTimeoutInterval() {
@@ -2061,14 +2084,8 @@ const UI = {
 
             if (timeSinceLastActivityInS > idleDisconnectInS) {
                 if (!UI.kasmIdleTimeoutSent) {
-                    UI.kasmIdleTimeoutSent = true;
                     Log.Warn("Idle Disconnect reached, disconnecting rfb session...");
-                    parent.postMessage({ action: 'idle_session_timeout', value: 'Idle session timeout exceeded'}, '*' );
-
-                    // in some cases the intra-frame message could be blocked, fall back to navigating to a disconnect page.
-                    setTimeout(function() {
-                        window.location.replace('disconnected.html');
-                    }, 10000);
+                    UI.notifyKasmSessionTimeout();
                 }
             } else if (UI.rfb) {
                 //send keep-alive
@@ -2092,9 +2109,38 @@ const UI = {
 
     shouldAutoReconnectDisconnect(e) {
         const detail = e.detail || {};
-        return !detail.clean &&
-               UI.getSetting('reconnect', false) === true &&
-               !UI.inhibitReconnect;
+        return UI.getSetting('reconnect', false) === true &&
+               !UI.inhibitReconnect &&
+               !detail.serverNotice?.graceful;
+    },
+
+    getReconnectRetries() {
+        const reconnectRetries = parseInt(UI.getSetting('reconnect_retries'), 10);
+        if (!Number.isFinite(reconnectRetries) || reconnectRetries < 0) {
+            return 5;
+        }
+
+        return reconnectRetries;
+    },
+
+    hasReconnectRetriesRemaining() {
+        const reconnectRetries = UI.getReconnectRetries();
+        return reconnectRetries === 0 || UI.reconnectAttempts < reconnectRetries;
+    },
+
+    reconnectRetriesExceeded() {
+        UI.inhibitReconnect = true;
+        UI.reconnectCallback = null;
+        UI.updateVisualState('disconnected');
+        UI.stopKasmSessionTimeoutInterval(true);
+
+        if (WebUtil.isInsideKasmVDI()) {
+            Log.Warn("Reconnect retries exhausted, notifying parent session timed out.");
+            UI.notifyKasmSessionTimeout();
+        } else {
+            Log.Warn("Reconnect retries exhausted, automatic reconnect stopped.");
+            UI.openControlbar();
+        }
     },
 
     disconnectFinished(e) {
@@ -2111,6 +2157,14 @@ const UI = {
         UI.sortedMonitors = [];
 
         if (UI.shouldAutoReconnectDisconnect(e)) {
+            UI.suppressDisconnectRx = true;
+
+            if (!UI.hasReconnectRetriesRemaining()) {
+                UI.reconnectRetriesExceeded();
+                return;
+            }
+
+            UI.reconnectAttempts++;
             UI.updateVisualState('reconnecting');
 
             const delay = parseInt(UI.getSetting('reconnect_delay'));
@@ -2356,6 +2410,12 @@ const UI = {
     },
 
     disconnectedRx(event) {
+        if (UI.suppressDisconnectRx) {
+            UI.suppressDisconnectRx = false;
+            Log.Info("Suppressing disconnectrx while automatic reconnect handles the disconnect");
+            return;
+        }
+
         if (UI.shouldAutoReconnectDisconnect(event)) {
             Log.Info("Suppressing disconnectrx while automatic reconnect is pending");
             return;

@@ -321,7 +321,7 @@ const UI = {
         UI.initSetting('show_dot', false);
         UI.initSetting('path', 'websockify');
         UI.initSetting('repeaterID', '');
-        UI.initSetting('reconnect', false);
+        UI.initSetting('reconnect', WebUtil.isInsideKasmVDI());
         UI.initSetting('reconnect_delay', 5000);
         UI.initSetting('idle_disconnect', 20);
         UI.initSetting('prefer_local_cursor', true);
@@ -2090,6 +2090,13 @@ const UI = {
         }
     },
 
+    shouldAutoReconnectDisconnect(e) {
+        const detail = e.detail || {};
+        return !detail.clean &&
+               UI.getSetting('reconnect', false) === true &&
+               !UI.inhibitReconnect;
+    },
+
     disconnectFinished(e) {
         const wasConnected = UI.connected;
 
@@ -2103,7 +2110,7 @@ const UI = {
         UI.monitors = [];
         UI.sortedMonitors = [];
 
-        if (!e.detail.clean && UI.getSetting('reconnect', false) === true && !UI.inhibitReconnect) {
+        if (UI.shouldAutoReconnectDisconnect(e)) {
             UI.updateVisualState('reconnecting');
 
             const delay = parseInt(UI.getSetting('reconnect_delay'));
@@ -2349,6 +2356,11 @@ const UI = {
     },
 
     disconnectedRx(event) {
+        if (UI.shouldAutoReconnectDisconnect(event)) {
+            Log.Info("Suppressing disconnectrx while automatic reconnect is pending");
+            return;
+        }
+
         const detail = event.detail || {};
         parent.postMessage({ action: 'disconnectrx', value: detail.reason}, '*' );
         if (detail.serverNotice && detail.serverNotice.graceful) {

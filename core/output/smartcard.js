@@ -144,6 +144,14 @@ class SmartcardSession {
         this.cardAtr = null;
       }
     } catch (error) {
+      // A failed status query (bad context, unknown-reader name, native host
+      // down, macOS SCARD_STATE_EMPTY quirk) must not look identical to a
+      // genuinely empty reader — log it so "no card" can be told apart from
+      // "status query failed".
+      Log.Warn(
+        `smartcard: reader[${this.readerId}] "${this.readerName || "(unbound)"}" ` +
+        `status refresh failed: ${error.message}`
+      );
       this.context = null;
       this.cardAtr = null;
       this.cardHandle = null;

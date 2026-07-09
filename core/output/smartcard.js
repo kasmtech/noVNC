@@ -99,11 +99,13 @@ const parseRelayPacket = (data) => {
 
 const KASM_SMARTCARD_EXTENSION_ID = "cjkohjfgidilbllbjkdhpoeonjanpomo";
 
-// SmartcardSession is bound to one specific reader name at construction.
-// readerName=null means the lane is empty (no reader assigned); all ops become no-ops.
+// SmartcardSession is bound to one specific reader name.
+// readerId is the lane index (0..N-1) used for self-healing reader discovery.
+// readerName=null means the lane is empty; refresh() will attempt discovery.
 class SmartcardSession {
-  constructor(readerName) {
+  constructor(readerName, readerId = 0) {
     this.readerName = readerName;
+    this.readerId = readerId;
     this.context = null;
     this.cardAtr = null;
     this.cardHandle = null;
@@ -124,8 +126,18 @@ class SmartcardSession {
     let refreshContext = null;
 
     try {
+      refreshContext = await this._establishContext();
+
+      // If no reader is bound yet (initializeSessions ran too early), try to bind now.
+      if (!this.readerName) {
+        const readers = await this._listReaders(refreshContext);
+        if (readers.length > this.readerId) {
+          this.readerName = readers[this.readerId];
+          Log.Info(`smartcard: reader[${this.readerId}] late-bound to "${this.readerName}"`);
+        }
+      }
+
       if (this.readerName) {
-        refreshContext = await this._establishContext();
         this.cardAtr = await this._getStatusChange(refreshContext, this.readerName)
           .then(({ atr }) => atr);
       } else {
@@ -290,14 +302,15 @@ const initializeSessions = async () => {
 
   const numLanes = Math.min(readers.length, MAX_READER_LANES);
   for (let i = 0; i < numLanes; i++) {
-    const session = new SmartcardSession(readers[i]);
+    const session = new SmartcardSession(readers[i], i);
     sessions.set(i, session);
     await session.refresh().catch(() => {});
   }
 
   // Always provide lane 0 for backward compat with v0 (legacy single-reader) bridges.
+  // readerId is set so refresh() can late-bind the reader if discovery failed at startup.
   if (!sessions.has(0)) {
-    sessions.set(0, new SmartcardSession(null));
+    sessions.set(0, new SmartcardSession(null, 0));
   }
 
   Log.Info(`smartcard: initialized ${numLanes} reader lane(s): [${readers.join(", ")}]`);
@@ -359,9 +372,8 @@ export default async (rfb) => {
 
     let session = sessions.get(readerId);
     if (!session) {
-      // Lane not yet initialized — create an empty placeholder and add it.
-      // This can happen if the bridge has more lanes than readers discovered at startup.
-      session = new SmartcardSession(null);
+      // Lane not yet initialized — create a placeholder; refresh() will late-bind the reader.
+      session = new SmartcardSession(null, readerId);
       sessions.set(readerId, session);
     }
 

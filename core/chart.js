@@ -1,6 +1,6 @@
 class BasicChart {
-    static CHART_WIDTH = 200;
-    static CHART_HEIGHT = 50;
+    static CHART_WIDTH = 300;
+    static CHART_HEIGHT = 100;
     static CHART_MAX_POINTS = 60;
     static FPS_CHART_MAX_FPS_VALUE = 120;
 

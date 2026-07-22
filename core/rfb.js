@@ -170,6 +170,15 @@ export default class RFB extends EventTargetMixin {
 
         this._trackFrameStats = false;
 
+        // Client-side input-to-photon latency measurement
+        this._inputLatencyEnabled = false;
+        this._pendingInputs = [];
+        this._latencyStats = [];
+        this._maxPendingInputs = 50;
+        this._nextMeasurementId = 1;
+        this._inflightMeasurementId = null;
+        this._pendingLatencyRender = null;
+
         this._clipboardText = null;
         this._clipboardServerCapabilitiesActions = {};
         this._clipboardServerCapabilitiesFormats = {};
@@ -298,6 +307,7 @@ export default class RFB extends EventTargetMixin {
             throw exc;
         }
         this._display.onflush = this._onFlush.bind(this);
+        this._display.onFrameRendered = this._onFrameRendered.bind(this);
 
         // populate decoder array with objects
         this._decoders[encodings.encodingRaw] = new RawDecoder();
@@ -1036,6 +1046,10 @@ export default class RFB extends EventTargetMixin {
             this.sendKey(keysym, code, true);
             this.sendKey(keysym, code, false);
             return;
+        }
+
+        if (down && this._inputLatencyEnabled) {
+            this._trackInputEvent('keydown', 0, 0);
         }
 
         const scancode = XtScancode[code];
@@ -2360,6 +2374,11 @@ export default class RFB extends EventTargetMixin {
 
         if (down) {
             this._mouseButtonMask |= bmask;
+
+            // Track input for latency measurement (client-side only)
+            if (this._inputLatencyEnabled) {
+                this._trackInputEvent('mousedown', x, y);
+            }
         } else {
             this._mouseButtonMask &= ~bmask;
         }
@@ -2482,6 +2501,118 @@ export default class RFB extends EventTargetMixin {
         if (this._viewOnly) { return; }
         if (!this._isPrimaryDisplay) { return; }
         RFB.messages.directMouseEvent(this._sock, dx, dy, buttonMask, scrollDX, scrollDY);
+    }
+
+    _trackInputEvent(eventType, x, y) {
+        const now = performance.now();
+        const measurementId = this._nextMeasurementId++;
+
+        if (this._nextMeasurementId > 0xFFFFFFFF) {
+            this._nextMeasurementId = 1;
+        }
+
+        // Drop entries older than 2 seconds — they will never be matched
+        while (this._pendingInputs.length > 0 &&
+               (now - this._pendingInputs[0].timestamp) > 2000) {
+            this._pendingInputs.shift();
+        }
+
+        this._pendingInputs.push({
+            timestamp: now,
+            type: eventType,
+            x: x,
+            y: y,
+            measurementId: measurementId
+        });
+
+        // Only send one measurement request at a time. If a previous
+        // request is still in flight, skip sending — the server uses a
+        // single slot so it would overwrite the old ID anyway, and the
+        // near-instant response for an ID that arrived mid-frame-update
+        // produces false low-latency readings.
+        if (this._rfbConnectionState === 'connected' &&
+            this._inflightMeasurementId === null) {
+            this._inflightMeasurementId = measurementId;
+            RFB.messages.latencyMeasurementRequest(this._sock, measurementId);
+        }
+    }
+
+    _recordLatencyMeasurement(measurement) {
+        this._latencyStats.push(measurement);
+
+        // Keep only last 50 measurements for responsive averages
+        while (this._latencyStats.length > 50) {
+            this._latencyStats.shift();
+        }
+
+        // Calculate and emit statistics
+        if (this._latencyStats.length >= 3) {
+            const latencies = this._latencyStats.map(m => m.latency);
+            const renderTimes = this._latencyStats.map(m => m.renderTime || 0);
+            const stats = this._calculateStats(latencies);
+            const renderStats = this._calculateStats(renderTimes);
+
+            console.log(`[latency stats] samples=${this._latencyStats.length} avg=${stats.avg.toFixed(1)}ms p50=${stats.p50.toFixed(1)}ms p95=${stats.p95.toFixed(1)}ms min=${stats.min.toFixed(1)}ms max=${stats.max.toFixed(1)}ms`, latencies.map(l => l.toFixed(1)));
+
+            // Emit event for UI
+            this.dispatchEvent(new CustomEvent('inputlatency', {
+                detail: {
+                    latest: measurement.latency,
+                    latestRenderTime: measurement.renderTime || 0,
+                    average: stats.avg,
+                    min: stats.min,
+                    max: stats.max,
+                    p50: stats.p50,
+                    p95: stats.p95,
+                    p99: stats.p99,
+                    renderAvg: renderStats.avg,
+                    renderP95: renderStats.p95,
+                    samples: this._latencyStats.length
+                }
+            }));
+
+            // Log periodically
+            if (this._latencyStats.length % 100 === 0) {
+                Log.Info(`Input latency: avg=${stats.avg.toFixed(1)}ms p95=${stats.p95.toFixed(1)}ms render=${renderStats.avg.toFixed(1)}ms (${this._latencyStats.length} samples)`);
+            }
+        }
+    }
+
+    _calculateStats(values) {
+        const sorted = [...values].sort((a, b) => a - b);
+        const sum = values.reduce((a, b) => a + b, 0);
+        const n = sorted.length;
+        const percentile = (p) => sorted[Math.min(Math.ceil(n * p) - 1, n - 1)];
+
+        return {
+            avg: sum / n,
+            min: sorted[0],
+            max: sorted[n - 1],
+            p50: percentile(0.50),
+            p95: percentile(0.95),
+            p99: percentile(0.99)
+        };
+    }
+
+    // Public API for enabling/disabling latency measurement
+    enableInputLatencyMeasurement(enabled) {
+        this._inputLatencyEnabled = enabled;
+
+        if (!enabled) {
+            this._pendingInputs = [];
+            this._pendingLatencyRender = null;
+        }
+
+        Log.Info(`Input latency measurement ${enabled ? 'enabled' : 'disabled'}`);
+    }
+
+    getInputLatencyStats() {
+        if (this._latencyStats.length === 0) {
+            return null;
+        }
+
+        const latencies = this._latencyStats.map(m => m.latency);
+        return this._calculateStats(latencies);
     }
 
     _handleWheel(ev) {
@@ -3683,7 +3814,7 @@ export default class RFB extends EventTargetMixin {
         const text = this._sock.rQshiftStr(length);
 
         Log.Debug("Received KASM '" + stats + "':");
-        Log.Debug(text);
+        // Log.Debug(text);
         this.dispatchEvent(new CustomEvent(
             stats,
             {detail: {text: text}}));
@@ -3778,6 +3909,45 @@ export default class RFB extends EventTargetMixin {
         return true;
     }
 
+    _handleLatencyMeasurementResponse() {
+        if (this._sock.rQwait("LatencyMeasurement", 7, 1))
+            return false;
+
+        this._sock.rQskipBytes(3);
+        const measurementId = this._sock.rQshift32();
+
+        // Clear in-flight tracker so the next input can send a new request
+        if (this._inflightMeasurementId === measurementId) {
+            this._inflightMeasurementId = null;
+        }
+
+        const idx = this._pendingInputs.findIndex(
+            input => input.measurementId === measurementId
+        );
+
+        if (idx !== -1) {
+            const entry = this._pendingInputs[idx];
+            // Remove the matched entry and all older unmatched entries
+            this._pendingInputs.splice(0, idx + 1);
+
+            const now = performance.now();
+            const latency = now - entry.timestamp;
+            console.log(`[latency] id=${measurementId} type=${entry.type} latency=${latency.toFixed(1)}ms`);
+            this._recordLatencyMeasurement({
+                latency: latency,
+                renderTime: 0,
+                type: entry.type,
+                timestamp: now,
+                measurementId: measurementId
+            });
+        }
+
+        return true;
+    }
+
+    _onFrameRendered() {
+    }
+
     _normalMsg() {
         let msgType;
         if (this._FBU.rects > 0) {
@@ -3855,6 +4025,9 @@ export default class RFB extends EventTargetMixin {
 
             case messages.msgTypeForceGameMode:
                 return this._handleForceGameMode();
+
+            case messages.msgTypeLatencyMeasurement:
+                return this._handleLatencyMeasurementResponse();
 
             case messages.msgTypeVideoEncoders:
                 return this._handleServerVideoEncoders();
@@ -4717,6 +4890,24 @@ RFB.messages = {
         buff[offset] = messages.msgTypeKeepAlive;
 
         sock._sQlen += 1;
+        sock.flush();
+    },
+
+    latencyMeasurementRequest(sock, measurementId) {
+        const buff = sock._sQ;
+        const offset = sock._sQlen;
+
+        buff[offset] = messages.msgTypeLatencyMeasurement;
+        buff[offset + 1] = 0;
+        buff[offset + 2] = 0;
+        buff[offset + 3] = 0;
+
+        buff[offset + 4] = (measurementId >> 24) & 0xff;
+        buff[offset + 5] = (measurementId >> 16) & 0xff;
+        buff[offset + 6] = (measurementId >> 8) & 0xff;
+        buff[offset + 7] = measurementId & 0xff;
+
+        sock._sQlen += 8;
         sock.flush();
     },
 

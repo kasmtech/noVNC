@@ -1,8 +1,8 @@
 export const messages = {
     msgTypeRequestStats: 178,
     msgTypeFrameStats: 179,
-    msgTypeNetworkStats: 180,
-    msgTypeSystemStats: 181,
+    msgTypeNetworkStats: 190,
+    msgTypeSystemStats: 191,
     msgTypeVideoEncoders: 184,
     msgTypeKeepAlive: 185,
     msgTypeServerDisconnect: 186,

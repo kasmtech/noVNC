@@ -180,6 +180,7 @@ export default class Display {
         // ===== EVENT HANDLERS =====
 
         this.onflush = () => {  }; // A flush request has finished
+        this.onFrameRendered = () => {};  // A frame has been painted to canvas
 
         this._broadcastChannel = new BroadcastChannel(`channel_${this.screenID}`);
         if (!this._isPrimaryDisplay) {
@@ -1547,6 +1548,8 @@ export default class Display {
             }
 
             perfLogger.end('frameProcessing', frameStart);
+
+            this.onFrameRendered();
 
             // if there is more data in queue, then keep checking
             if (this._asyncFrameQueue[0][2].length > 0) {

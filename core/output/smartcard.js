@@ -25,10 +25,9 @@ const REQUEST_INITIALIZE = 0x06;
 const RESPONSE_ACK = 0x80;
 const RESPONSE_ERROR = 0x81;
 
-// Protocol version marker — outside the command/response byte range (0x01-0x06, 0x80-0x81)
-// so v1 packets are unambiguously distinguishable from v0 legacy packets.
-// v1 layout: [0x10][command (1)][reader_id (1)][U32 length (4)][payload]
-// v0 layout: [command (1)][U16 length (2)][payload]  (reader_id=0 implied)
+// Protocol version marker, checked so a mismatched/garbled peer is rejected
+// rather than silently misparsed.
+// layout: [0x10][command (1)][reader_id (1)][U32 length (4)][payload]
 const PROTOCOL_VERSION_V1 = 0x10;
 
 const MAX_READER_LANES = 8;
@@ -64,37 +63,21 @@ const createRelayPacket = (command, readerId, payload = new Uint8Array(0)) => {
   return packet;
 };
 
-// parseRelayPacket: the bridge (or a legacy client) sends requests.
-// Returns { command, readerId, payload }.
+// parseRelayPacket: the bridge sends requests. Returns { command, readerId, payload }.
 const parseRelayPacket = (data) => {
-  if (!data || data.length < 1) {
-    throw new Error("relay_packet_empty");
+  if (!data || data.length < 7) {
+    throw new Error("relay_packet_too_short");
   }
-
-  if (data[0] === PROTOCOL_VERSION_V1) {
-    // v1: [0x10][command][reader_id][U32 length][payload]
-    if (data.length < 7) {
-      throw new Error("relay_packet_v1_too_short");
-    }
-    const command = data[1];
-    const readerId = data[2];
-    const payloadLength = ((data[3] << 24) | (data[4] << 16) | (data[5] << 8) | data[6]) >>> 0;
-    if (data.length < 7 + payloadLength) {
-      throw new Error("relay_packet_v1_incomplete");
-    }
-    return { command, readerId, payload: data.slice(7, 7 + payloadLength) };
+  if (data[0] !== PROTOCOL_VERSION_V1) {
+    throw new Error(`relay_packet_unknown_version: 0x${data[0].toString(16)}`);
   }
-
-  // v0 legacy: [command][U16 length][payload], reader_id=0 implied
-  if (data.length < 3) {
-    throw new Error("relay_packet_v0_too_short");
+  const command = data[1];
+  const readerId = data[2];
+  const payloadLength = ((data[3] << 24) | (data[4] << 16) | (data[5] << 8) | data[6]) >>> 0;
+  if (data.length < 7 + payloadLength) {
+    throw new Error("relay_packet_incomplete");
   }
-  const command = data[0];
-  const payloadLength = (data[1] << 8) | data[2];
-  if (data.length < 3 + payloadLength) {
-    throw new Error("relay_packet_v0_incomplete");
-  }
-  return { command, readerId: 0, payload: data.slice(3, 3 + payloadLength) };
+  return { command, readerId, payload: data.slice(7, 7 + payloadLength) };
 };
 
 const KASM_SMARTCARD_EXTENSION_ID = "cjkohjfgidilbllbjkdhpoeonjanpomo";
@@ -356,6 +339,7 @@ export default async (rfb) => {
   Log.Debug("smartcard.initializeSmartcardRelay");
 
   const sessions = await initializeSessions();
+  broadcastStatus(sessions);
 
   const sendSmartcardResponse = (readerId, command, payload = new Uint8Array(0)) => {
     Log.Debug(
@@ -391,18 +375,27 @@ export default async (rfb) => {
           // Reply with the bound reader list so the bridge can size its active
           // lane count off real discovery instead of falling back to a static
           // --readers value. Payload format must match bridge.py's
-          // parse_reader_list: repeated [name_len (1 byte)][name (UTF-8)],
-          // ordered by readerId — entry i binds to lane i.
+          // parse_reader_list: repeated [reader_id (1 byte)][name_len (1 byte)]
+          // [name (UTF-8)], one entry per bound lane. reader_id is explicit
+          // (rather than inferred from list position) so a gap in the lane
+          // map never truncates or misattributes an entry.
           const encoder = new TextEncoder();
           const chunks = [];
-          let i = 0;
-          while (sessions.has(i)) {
-            const boundName = sessions.get(i).readerName;
+          for (const [laneId, laneSession] of sessions) {
+            const boundName = laneSession.readerName;
             if (boundName) {
               const nameBytes = encoder.encode(boundName);
-              chunks.push(new Uint8Array([nameBytes.length]), nameBytes);
+              if (nameBytes.length > 255) {
+                // name_len is a single byte; a longer name would silently wrap
+                // and desync every entry after it, so drop this one instead.
+                Log.Warn(
+                  `smartcard: reader[${laneId}] name too long (${nameBytes.length} bytes) ` +
+                  "for REQUEST_INITIALIZE encoding, omitting from reader list"
+                );
+                continue;
+              }
+              chunks.push(new Uint8Array([laneId, nameBytes.length]), nameBytes);
             }
-            i++;
           }
           const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
           const listPayload = new Uint8Array(totalLength);

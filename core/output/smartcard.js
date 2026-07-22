@@ -387,9 +387,33 @@ export default async (rfb) => {
 
     try {
       switch (command) {
-        case REQUEST_INITIALIZE:
-          sendSmartcardResponse(readerId, RESPONSE_ACK);
+        case REQUEST_INITIALIZE: {
+          // Reply with the bound reader list so the bridge can size its active
+          // lane count off real discovery instead of falling back to a static
+          // --readers value. Payload format must match bridge.py's
+          // parse_reader_list: repeated [name_len (1 byte)][name (UTF-8)],
+          // ordered by readerId — entry i binds to lane i.
+          const encoder = new TextEncoder();
+          const chunks = [];
+          let i = 0;
+          while (sessions.has(i)) {
+            const boundName = sessions.get(i).readerName;
+            if (boundName) {
+              const nameBytes = encoder.encode(boundName);
+              chunks.push(new Uint8Array([nameBytes.length]), nameBytes);
+            }
+            i++;
+          }
+          const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+          const listPayload = new Uint8Array(totalLength);
+          let offset = 0;
+          for (const chunk of chunks) {
+            listPayload.set(chunk, offset);
+            offset += chunk.length;
+          }
+          sendSmartcardResponse(readerId, RESPONSE_ACK, listPayload);
           break;
+        }
 
         case REQUEST_STATUS:
           await session.refresh();

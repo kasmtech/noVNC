@@ -25,6 +25,7 @@ import initializeSmartcardRelay from "./output/smartcard.js";
 import initializeFido2Relay from "./output/fido2.js";
 import initializeSshAgentRelay from "./output/ssh_agent.js";
 import * as WebUtil from "../app/webutil.js";
+import initializeFido2Relay from "./output/fido2.js";
 import GestureHandler from "./input/gesturehandler.js";
 import IOSKeyboard from "./input/ioskeyboard.js";
 import TextInputFocusGate from "./input/textinputfocusgate.js";

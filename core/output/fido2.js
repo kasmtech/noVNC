@@ -62,7 +62,7 @@ const parseRelayPacket = (data) => {
 const encodeJson = (value) => new TextEncoder().encode(JSON.stringify(value ?? {}));
 const decodeJson = (payload) => (payload.length === 0 ? {} : JSON.parse(new TextDecoder().decode(payload)));
 
-const KASM_FIDO2_EXTENSION_ID = "cjkohjfgidilbllbjkdhpoeonjanpomo";
+const KASM_FIDO2_EXTENSION_ID = "obhhhhhfhnmfoonndahjcjpkndkeompc";
 
 // Forwards a request to the client's real browser extension
 // (kasm-smartcard-extension), which routes ctap_* commands to the native

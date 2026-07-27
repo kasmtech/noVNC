@@ -1748,13 +1748,24 @@ const UI = {
 
     inputLatencyReceive(e) {
         const d = e.detail;
-        const statsEl = document.getElementById("noVNC_connection_stats");
-        if (statsEl) {
-            const tag = " | Latency: " + d.latest.toFixed(1) + "ms (min " + d.min.toFixed(1) + "ms, p95 " + d.p95.toFixed(1) + "ms)";
-            // Append to existing stats if visible, otherwise show standalone
-            if (statsEl.style.visibility === "visible") {
-                // Remove old latency suffix before appending new one
-                statsEl.innerHTML = statsEl.innerHTML.replace(/ \| Latency:.*$/, '') + tag;
+
+        if (WebUtil.isInsideKasmVDI()) {
+            UI.sendMessage('input_latency', {
+                latest: d.latest,
+                average: d.average,
+                min: d.min,
+                max: d.max,
+                p50: d.p50,
+                p95: d.p95,
+                p99: d.p99,
+            });
+        } else {
+            const stats = document.getElementById("noVNC_connection_stats");
+            if (stats) {
+                const tag = " | Latency: " + d.latest.toFixed(1) + "ms (min " + d.min.toFixed(1) + "ms, p95 " + d.p95.toFixed(1) + "ms)";
+                if (stats.style.visibility === "visible") {
+                    stats.innerHTML = stats.innerHTML.replace(/ \| Latency:.*$/, '') + tag;
+                }
             }
         }
     },

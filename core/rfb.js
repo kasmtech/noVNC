@@ -2601,6 +2601,7 @@ export default class RFB extends EventTargetMixin {
         if (!enabled) {
             this._pendingInputs = [];
             this._pendingLatencyRender = null;
+            this._inflightMeasurementId = null;
         }
 
         Log.Info(`Input latency measurement ${enabled ? 'enabled' : 'disabled'}`);

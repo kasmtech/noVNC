@@ -885,7 +885,7 @@ const UI = {
 
     toggleLatencyStats() {
         UI.saveSetting('enable_latency_stats');
-        if (UI.rfb)
+        if (!UI.rfb)
             return;
 
         const enabled = document.getElementById('noVNC_setting_enable_latency_stats').checked;

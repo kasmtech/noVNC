@@ -2547,24 +2547,24 @@ export default class RFB extends EventTargetMixin {
 
         // Calculate and emit statistics
         if (this._latencyStats.length >= 3) {
-            const latencies = this._latencyStats.map(m => m.latency);
-            const renderTimes = this._latencyStats.map(m => m.renderTime || 0);
-            const stats = this._calculateStats(latencies);
-            const renderStats = this._calculateStats(renderTimes);
+            const totalStats = this._calculateStats(this._latencyStats.map(m => m.totalLatency));
+            const networkStats = this._calculateStats(this._latencyStats.map(m => m.networkLatency));
+            const renderStats = this._calculateStats(this._latencyStats.map(m => m.clientRenderTime));
 
-            console.log(`[latency stats] samples=${this._latencyStats.length} avg=${stats.avg.toFixed(1)}ms p50=${stats.p50.toFixed(1)}ms p95=${stats.p95.toFixed(1)}ms min=${stats.min.toFixed(1)}ms max=${stats.max.toFixed(1)}ms`, latencies.map(l => l.toFixed(1)));
+            Log.Debug(`[latency stats] samples=${this._latencyStats.length} total avg=${totalStats.avg.toFixed(1)}ms p50=${totalStats.p50.toFixed(1)}ms p95=${totalStats.p95.toFixed(1)}ms network avg=${networkStats.avg.toFixed(1)}ms render avg=${renderStats.avg.toFixed(1)}ms`);
 
             // Emit event for UI
             this.dispatchEvent(new CustomEvent('inputlatency', {
                 detail: {
-                    latest: measurement.latency,
-                    latestRenderTime: measurement.renderTime || 0,
-                    average: stats.avg,
-                    min: stats.min,
-                    max: stats.max,
-                    p50: stats.p50,
-                    p95: stats.p95,
-                    p99: stats.p99,
+                    latest: measurement.totalLatency,
+                    average: totalStats.avg,
+                    min: totalStats.min,
+                    max: totalStats.max,
+                    p50: totalStats.p50,
+                    p95: totalStats.p95,
+                    p99: totalStats.p99,
+                    networkAvg: networkStats.avg,
+                    networkP95: networkStats.p95,
                     renderAvg: renderStats.avg,
                     renderP95: renderStats.p95,
                     samples: this._latencyStats.length
@@ -2572,9 +2572,8 @@ export default class RFB extends EventTargetMixin {
             }));
 
             // Log periodically
-            if (this._latencyStats.length % 100 === 0) {
-                Log.Info(`Input latency: avg=${stats.avg.toFixed(1)}ms p95=${stats.p95.toFixed(1)}ms render=${renderStats.avg.toFixed(1)}ms (${this._latencyStats.length} samples)`);
-            }
+            if (this._latencyStats.length % 100 === 0)
+                Log.Info(`Input latency: total avg=${totalStats.avg.toFixed(1)}ms p95=${totalStats.p95.toFixed(1)}ms network avg=${networkStats.avg.toFixed(1)}ms render avg=${renderStats.avg.toFixed(1)}ms (${this._latencyStats.length} samples)`);
         }
     }
 
@@ -3931,22 +3930,41 @@ export default class RFB extends EventTargetMixin {
             // Remove the matched entry and all older unmatched entries
             this._pendingInputs.splice(0, idx + 1);
 
-            const now = performance.now();
-            const latency = now - entry.timestamp;
-            console.log(`[latency] id=${measurementId} type=${entry.type} latency=${latency.toFixed(1)}ms`);
-            this._recordLatencyMeasurement({
-                latency: latency,
-                renderTime: 0,
+            this._pendingLatencyRender = {
+                inputTimestamp: entry.timestamp,
+                echoTimestamp: performance.now(),
                 type: entry.type,
-                timestamp: now,
                 measurementId: measurementId
-            });
+            };
         }
 
         return true;
     }
 
     _onFrameRendered() {
+        if (!this._pendingLatencyRender)
+            return;
+
+        const now = performance.now();
+        const pending = this._pendingLatencyRender;
+        this._pendingLatencyRender = null;
+
+        if (now - pending.echoTimestamp > 1000)
+            return;
+
+        const totalLatency = now - pending.inputTimestamp;
+        const clientRenderTime = now - pending.echoTimestamp;
+        const networkLatency = totalLatency - clientRenderTime;
+
+        Log.Debug(`[latency] id=${pending.measurementId} type=${pending.type} total=${totalLatency.toFixed(1)}ms network=${networkLatency.toFixed(1)}ms render=${clientRenderTime.toFixed(1)}ms`);
+        this._recordLatencyMeasurement({
+            totalLatency,
+            clientRenderTime,
+            networkLatency,
+            type: pending.type,
+            timestamp: now,
+            measurementId: pending.measurementId
+        });
     }
 
     _normalMsg() {

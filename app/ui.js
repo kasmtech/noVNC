@@ -1758,6 +1758,10 @@ const UI = {
                 p50: d.p50,
                 p95: d.p95,
                 p99: d.p99,
+                networkAvg: d.networkAvg,
+                networkP95: d.networkP95,
+                renderAvg: d.renderAvg,
+                renderP95: d.renderP95
             });
         } else {
             const stats = document.getElementById("noVNC_connection_stats");

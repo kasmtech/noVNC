@@ -2334,6 +2334,10 @@ const UI = {
                     UI.forceSetting('enable_perf_stats', event.data.value, false);
                     UI.showStats();
                     break;
+                case 'set_latency_stats':
+                    UI.forceSetting('enable_latency_stats', event.data.value, false);
+                    UI.toggleLatencyStats();
+                    break;
                 case 'set_idle_timeout':
                     //message value in seconds
                     const idle_timeout_min = Math.ceil(event.data.value / 60);

@@ -32,6 +32,12 @@ const PROTOCOL_VERSION_V1 = 0x10;
 
 const MAX_READER_LANES = 8;
 
+// Reserved reader_id the bridge uses for REQUEST_INITIALIZE discovery traffic —
+// must match bridge.py's DISCOVERY_READER_ID. Kept off every real lane id so a
+// discovery request/response can never be mistaken for a lane's own ATR/status
+// traffic, and so discovery works even while lane 0 is serving a card.
+const DISCOVERY_READER_ID = 0xff;
+
 const commandToString = (command) => {
   return {
     [REQUEST_STATUS]: "REQUEST_STATUS",
@@ -95,6 +101,14 @@ class SmartcardSession {
     this.activeProtocol = null;
     this.lastTransmitAt = null;
     this.lastRefreshAt = null;
+    // Injected by registerSession() so the positional late-bind in refresh() can
+    // see what the other lanes already hold. Defaults to "no peers" for a probe
+    // session that isn't in any map.
+    this.getPeerSessions = () => [];
+  }
+
+  isReaderNameBoundElsewhere(readerName) {
+    return this.getPeerSessions().some((s) => s !== this && s.readerName === readerName);
   }
 
   async refresh() {
@@ -111,11 +125,23 @@ class SmartcardSession {
     try {
       refreshContext = await this._establishContext();
 
-      // If no reader is bound yet (initializeSessions ran too early), try to bind now.
+      // If no reader is bound yet (initializeSessions ran too early), try to bind
+      // now. This is a POSITIONAL guess (readers[readerId]), so it must not claim a
+      // name that reconcileSessions has already bound to another lane: after a
+      // reader is unplugged, lane 0 is unbound while readers[0] is now the reader
+      // living on lane 1, and binding it here would leave one physical reader
+      // bound to two lanes — the bridge would then activate two vpcd lanes for one
+      // card and interleave transactions against it.
       if (!this.readerName) {
         const readers = await this._listReaders(refreshContext);
-        if (readers.length > this.readerId) {
-          this.readerName = readers[this.readerId];
+        const candidate = readers.length > this.readerId ? readers[this.readerId] : null;
+        if (candidate && this.isReaderNameBoundElsewhere(candidate)) {
+          Log.Debug(
+            `smartcard: reader[${this.readerId}] skipping late-bind to "${candidate}" ` +
+            "(already bound to another lane)"
+          );
+        } else if (candidate) {
+          this.readerName = candidate;
           Log.Info(`smartcard: reader[${this.readerId}] late-bound to "${this.readerName}"`);
         }
       }
@@ -160,15 +186,22 @@ class SmartcardSession {
   }
 
   async powerOff() {
-    if (this.context && this.cardHandle) {
-      await this._disconnect(this.context, this.cardHandle);
-      await this._releaseContext(this.context);
+    // The local handle/context fields MUST be cleared even if the PC/SC calls
+    // fail — which they routinely do once the reader is physically gone
+    // (_disconnect rejects with SCARD_E_* ). Leaving cardHandle set makes a later
+    // powerOn() skip _connect entirely ("already connected"), so every subsequent
+    // transmit on this session goes to a dead handle and fails.
+    try {
+      if (this.context && this.cardHandle) {
+        await this._disconnect(this.context, this.cardHandle);
+        await this._releaseContext(this.context);
+      }
+    } finally {
+      this.context = null;
+      this.cardHandle = null;
+      this.cardAtr = null;
+      this.activeProtocol = null;
     }
-
-    this.context = null;
-    this.cardHandle = null;
-    this.cardAtr = null;
-    this.activeProtocol = null;
   }
 
   async transmit(apdu) {
@@ -272,40 +305,209 @@ class SmartcardSession {
   }
 }
 
+// Whether the smartcard Chrome extension + native host are reachable, independent of
+// whether any reader is attached. ControlPanel.js renders this as its own
+// "Smartcard Chrome Extension: Enabled/Disabled" row, separate from the reader and
+// card rows, so it must NOT be conflated with reader presence: a working extension
+// with no reader plugged in has to read Enabled + Reader Disconnected, otherwise the
+// user is sent off troubleshooting the extension instead of plugging in a reader.
+let extensionResponsive = false;
+
+// A rejection carrying a PC/SC status code (e.g. "0x8010002E" =
+// SCARD_E_NO_READERS_AVAILABLE) means the native host DID answer — the extension is
+// working, there just isn't a reader attached. Only a transport-level failure
+// (chrome.runtime.lastError: extension missing, disabled, or native host not
+// installed) means it is genuinely unreachable.
+const isPcscStatusError = (error) => /^0x[0-9a-f]{8}$/i.test((error && error.message) || "");
+
+// SCARD_E_NO_READERS_AVAILABLE. Compared case-INSENSITIVELY on purpose: the native
+// host formats the code uppercase ("0x8010002E"), but it reaches us via the
+// extension's asHex() (BigInt.toString(16)), which lowercases it — a case-sensitive
+// match here would silently never fire.
+const SCARD_E_NO_READERS_AVAILABLE = "0x8010002e";
+
+const isNoReadersError = (error) =>
+  (((error && error.message) || "").toLowerCase() === SCARD_E_NO_READERS_AVAILABLE);
+
+// Add a session to the lane map, wiring up the peer lookup its late-bind guard
+// needs. All session inserts must go through this.
+const registerSession = (sessions, laneId, session) => {
+  session.getPeerSessions = () => Array.from(sessions.values());
+  sessions.set(laneId, session);
+  return session;
+};
+
+// Live PC/SC reader enumeration — establish a throwaway context, list readers,
+// release it. Used both for the one-time startup warm start and for every
+// REQUEST_INITIALIZE discovery request, so discovery always reflects reality
+// instead of replaying whatever was seen at page load.
+const enumerateReaders = async () => {
+  const probe = new SmartcardSession(null);
+  let ctx;
+  try {
+    ctx = await probe._establishContext();
+  } catch (error) {
+    // Couldn't even get a context: extension unreachable, unless the native host
+    // answered with a PC/SC status code (in which case it's alive and something
+    // else is wrong).
+    extensionResponsive = isPcscStatusError(error);
+    throw error;
+  }
+  extensionResponsive = true;
+  try {
+    return await probe._listReaders(ctx);
+  } catch (error) {
+    // "No readers attached" arrives as a PC/SC error rather than an empty list, so
+    // treat it as the empty list it logically is. Without this, unplugging the LAST
+    // reader makes enumeration throw, reconcileSessions() never runs, the stale
+    // binding is kept, and the bridge holds a phantom active lane while ControlPanel
+    // shows "Reader: Connected" with nothing attached.
+    //
+    // Deliberately handled HERE and not in the native host's
+    // handle_smartcard_list_readers: that function is shared with the RDP path, where
+    // guac_server forwards the result to guacd WITHOUT checking status, so returning
+    // success+empty there would make redirected SCardListReaders stop reporting
+    // SCARD_E_NO_READERS_AVAILABLE to the RDP client.
+    if (isNoReadersError(error)) {
+      Log.Debug("smartcard: no readers attached, treating as empty reader list");
+      return [];
+    }
+    throw error;
+  } finally {
+    await probe._releaseContext(ctx).catch(() => {});
+  }
+};
+
 // Discover the current reader list and build a session Map:
 // lane i → the i-th reader from list_readers, capped at MAX_READER_LANES.
 // Empty lanes (no reader bound) are left out of the map; lane 0 always exists for compat.
+// This is a one-time warm start only — ongoing discovery is driven by
+// reconcileSessions() on every REQUEST_INITIALIZE.
 const initializeSessions = async () => {
   const sessions = new Map();
-  const probe = new SmartcardSession(null);
   let readers = [];
 
   try {
-    const ctx = await probe._establishContext();
-    try {
-      readers = await probe._listReaders(ctx);
-    } finally {
-      await probe._releaseContext(ctx).catch(() => {});
-    }
+    readers = await enumerateReaders();
   } catch (err) {
     Log.Warn(`smartcard: reader discovery failed: ${err.message}`);
   }
 
   const numLanes = Math.min(readers.length, MAX_READER_LANES);
   for (let i = 0; i < numLanes; i++) {
-    const session = new SmartcardSession(readers[i], i);
-    sessions.set(i, session);
+    const session = registerSession(sessions, i, new SmartcardSession(readers[i], i));
     await session.refresh().catch(() => {});
   }
 
   // Always provide lane 0 for backward compat with v0 (legacy single-reader) bridges.
   // readerId is set so refresh() can late-bind the reader if discovery failed at startup.
   if (!sessions.has(0)) {
-    sessions.set(0, new SmartcardSession(null, 0));
+    registerSession(sessions, 0, new SmartcardSession(null, 0));
   }
 
   Log.Info(`smartcard: initialized ${numLanes} reader lane(s): [${readers.join(", ")}]`);
   return sessions;
+};
+
+// Reconcile the session map against a freshly enumerated reader-name list
+// (positional, no ids — PC/SC's list_readers has no native id concept). A
+// bound session whose reader disappeared is unbound (never renumbered away —
+// a live card session keeps its lane even if this poll's list omits it only
+// transiently is NOT handled here; the caller decides whether to call this at
+// all on enumeration failure). A newly seen name takes the lowest lane with no
+// session or an unbound session, so the lane-0 compat placeholder never blocks
+// a real reader from claiming lane 0.
+const reconcileSessions = (sessions, readerNames) => {
+  const nameSet = new Set(readerNames);
+
+  for (const [laneId, session] of sessions) {
+    if (session.readerName && !nameSet.has(session.readerName)) {
+      Log.Info(`smartcard: reader[${laneId}] "${session.readerName}" no longer present, unbinding`);
+      // Clear the card/context state SYNCHRONOUSLY here rather than relying on the
+      // in-flight powerOff(): this lane may be rebound to a different reader later
+      // in this same pass, and a powerOff() promise resolving after that would null
+      // out a cardHandle the new binding had already established.
+      const staleContext = session.context;
+      const staleHandle = session.cardHandle;
+      session.readerName = null;
+      session.cardAtr = null;
+      session.context = null;
+      session.cardHandle = null;
+      session.activeProtocol = null;
+      // Best-effort release of the now-orphaned handle/context, detached from the
+      // session so its outcome can't touch the (possibly rebound) session state.
+      if (staleContext && staleHandle) {
+        session._disconnect(staleContext, staleHandle)
+          .catch(() => {})
+          .then(() => session._releaseContext(staleContext).catch(() => {}));
+      }
+    }
+  }
+
+  const boundNames = new Set(
+    Array.from(sessions.values()).map((s) => s.readerName).filter(Boolean)
+  );
+
+  for (const name of readerNames) {
+    if (boundNames.has(name)) continue; // already bound to some lane
+
+    let freeLaneId = null;
+    for (let i = 0; i < MAX_READER_LANES; i++) {
+      const existing = sessions.get(i);
+      if (!existing || !existing.readerName) {
+        freeLaneId = i;
+        break;
+      }
+    }
+    if (freeLaneId === null) {
+      Log.Warn(`smartcard: reader "${name}" discovered but all ${MAX_READER_LANES} lanes are bound; ignoring`);
+      continue;
+    }
+
+    let session = sessions.get(freeLaneId);
+    if (session) {
+      session.readerName = name;
+    } else {
+      session = registerSession(sessions, freeLaneId, new SmartcardSession(name, freeLaneId));
+    }
+    boundNames.add(name);
+    Log.Info(`smartcard: reader[${freeLaneId}] bound to "${name}"`);
+  }
+};
+
+// Encode the session map's bound reader names for a REQUEST_INITIALIZE reply.
+// Wire format must match bridge.py's parse_reader_list: repeated
+// [reader_id (1 byte)][name_len (1 byte)][name (UTF-8)], one entry per bound
+// lane. reader_id is explicit (rather than inferred from list position) so a
+// gap in the lane map never truncates or misattributes an entry.
+const encodeReaderList = (sessions) => {
+  const encoder = new TextEncoder();
+  const chunks = [];
+  for (const [laneId, laneSession] of sessions) {
+    const boundName = laneSession.readerName;
+    if (!boundName) continue;
+
+    const nameBytes = encoder.encode(boundName);
+    if (nameBytes.length > 255) {
+      // name_len is a single byte; a longer name would silently wrap and
+      // desync every entry after it, so drop this one instead.
+      Log.Warn(
+        `smartcard: reader[${laneId}] name too long (${nameBytes.length} bytes) ` +
+        "for REQUEST_INITIALIZE encoding, omitting from reader list"
+      );
+      continue;
+    }
+    chunks.push(new Uint8Array([laneId, nameBytes.length]), nameBytes);
+  }
+
+  const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
+  const listPayload = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    listPayload.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return listPayload;
 };
 
 // Aggregate per-session state into a postMessage payload for the parent frame.
@@ -322,7 +524,7 @@ const broadcastStatus = (sessions) => {
   }
 
   const status = {
-    isExtensionEnabled: readers.some((r) => !!r.readerName),
+    isExtensionEnabled: extensionResponsive,
     isReaderConnected: readers.some((r) => !!r.readerName),
     isCardPresent: readers.some((r) => r.isCardPresent),
     readers,
@@ -362,51 +564,49 @@ export default async (rfb) => {
       `smartcard.request: reader[${readerId}] command=${commandToString(command)}, payloadLen=${payload.length}`
     );
 
+    // The discovery lane is not a real reader lane — it never gets a
+    // SmartcardSession. Every REQUEST_INITIALIZE re-enumerates PC/SC live
+    // (rather than replaying whatever initializeSessions() saw at page load),
+    // so hot-plugged/removed readers are picked up on the bridge's next
+    // discovery poll without a page reload.
+    if (readerId === DISCOVERY_READER_ID) {
+      if (command !== REQUEST_INITIALIZE) {
+        Log.Error(`smartcard: unexpected command ${commandToString(command)} on discovery lane`);
+        sendSmartcardResponse(readerId, RESPONSE_ERROR, new TextEncoder().encode("unsupported_on_discovery_lane"));
+        return;
+      }
+      try {
+        const readerNames = await enumerateReaders();
+        reconcileSessions(sessions, readerNames);
+      } catch (error) {
+        // A native-host hiccup must not flap live lanes — keep the existing
+        // bindings and reply with whatever the session map currently holds.
+        Log.Warn(`smartcard: discovery enumeration failed, keeping existing bindings: ${error.message}`);
+      }
+      broadcastStatus(sessions);
+      sendSmartcardResponse(readerId, RESPONSE_ACK, encodeReaderList(sessions));
+      return;
+    }
+
+    if (readerId >= MAX_READER_LANES) {
+      Log.Error(`smartcard: reader[${readerId}] exceeds MAX_READER_LANES (${MAX_READER_LANES}), rejecting`);
+      sendSmartcardResponse(readerId, RESPONSE_ERROR, new TextEncoder().encode("reader_id_out_of_range"));
+      return;
+    }
+
     let session = sessions.get(readerId);
     if (!session) {
       // Lane not yet initialized — create a placeholder; refresh() will late-bind the reader.
-      session = new SmartcardSession(null, readerId);
-      sessions.set(readerId, session);
+      session = registerSession(sessions, readerId, new SmartcardSession(null, readerId));
     }
 
     try {
       switch (command) {
-        case REQUEST_INITIALIZE: {
-          // Reply with the bound reader list so the bridge can size its active
-          // lane count off real discovery instead of falling back to a static
-          // --readers value. Payload format must match bridge.py's
-          // parse_reader_list: repeated [reader_id (1 byte)][name_len (1 byte)]
-          // [name (UTF-8)], one entry per bound lane. reader_id is explicit
-          // (rather than inferred from list position) so a gap in the lane
-          // map never truncates or misattributes an entry.
-          const encoder = new TextEncoder();
-          const chunks = [];
-          for (const [laneId, laneSession] of sessions) {
-            const boundName = laneSession.readerName;
-            if (boundName) {
-              const nameBytes = encoder.encode(boundName);
-              if (nameBytes.length > 255) {
-                // name_len is a single byte; a longer name would silently wrap
-                // and desync every entry after it, so drop this one instead.
-                Log.Warn(
-                  `smartcard: reader[${laneId}] name too long (${nameBytes.length} bytes) ` +
-                  "for REQUEST_INITIALIZE encoding, omitting from reader list"
-                );
-                continue;
-              }
-              chunks.push(new Uint8Array([laneId, nameBytes.length]), nameBytes);
-            }
-          }
-          const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-          const listPayload = new Uint8Array(totalLength);
-          let offset = 0;
-          for (const chunk of chunks) {
-            listPayload.set(chunk, offset);
-            offset += chunk.length;
-          }
-          sendSmartcardResponse(readerId, RESPONSE_ACK, listPayload);
+        case REQUEST_INITIALIZE:
+          // Legacy path: a v0/pre-discovery-lane bridge sending INITIALIZE on a
+          // real lane. Reply from current bindings without a live re-enumeration.
+          sendSmartcardResponse(readerId, RESPONSE_ACK, encodeReaderList(sessions));
           break;
-        }
 
         case REQUEST_STATUS:
           await session.refresh();

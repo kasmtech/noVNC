@@ -98,13 +98,13 @@
                 <h1 class="noVNC_logo">
                     <a href="https://www.kasmweb.com/kasmvnc" target="_blank"
                         title="KasmVNC Learn More">
-                        <img src="app/images/icons/kasm_logo.svg" alt="KasmVNC Learn More"/>
+                        <img data-control-panel-src="kasmLogo" alt="KasmVNC Learn More"/>
                     </a>
                 </h1>
 
                 <!-- Drag/Pan the viewport -->
                 <div class="noVNC_button_div noVNC_hidden noVNC_hide_on_disconnect" >
-                    <input type="image" alt="Drag" src="app/images/drag.svg"
+                    <input type="image" alt="Drag" data-control-panel-src="drag"
                         id="noVNC_view_drag_button" class="noVNC_button"
                         title="Move/Drag Viewport">
                     Drag Viewport
@@ -113,29 +113,29 @@
                 <!--noVNC Touch Device only buttons-->
                 <!-- Extra manual keys -->
                 <div class="noVNC_button_div noVNC_hide_on_disconnect" >
-                    <input type="image" alt="Extra keys" src="app/images/toggleextrakeys.svg"
+                    <input type="image" alt="Extra keys" data-control-panel-src="toggleExtraKeys"
                         id="noVNC_toggle_extra_keys_button" class="noVNC_button"
                         title="Show Extra Keys">
                     <div class="noVNC_vcenter">
                         <div id="noVNC_modifiers" class="noVNC_panel">
-                            <input type="image" alt="Keyboard" src="app/images/keyboard.svg"
+                            <input type="image" alt="Keyboard" data-control-panel-src="keyboard"
                                 id="noVNC_keyboard_button" class="noVNC_button" title="Show Keyboard">
-                            <input type="image" alt="Ctrl" src="app/images/ctrl.svg"
+                            <input type="image" alt="Ctrl" data-control-panel-src="ctrl"
                                 id="noVNC_toggle_ctrl_button" class="noVNC_button"
                                 title="Toggle Ctrl">
-                            <input type="image" alt="Alt" src="app/images/alt.svg"
+                            <input type="image" alt="Alt" data-control-panel-src="alt"
                                 id="noVNC_toggle_alt_button" class="noVNC_button"
                                 title="Toggle Alt">
-                            <input type="image" alt="Windows" src="app/images/windows.svg"
+                            <input type="image" alt="Windows" data-control-panel-src="windows"
                                 id="noVNC_toggle_windows_button" class="noVNC_button"
                                 title="Toggle Windows">
-                            <input type="image" alt="Tab" src="app/images/tab.svg"
+                            <input type="image" alt="Tab" data-control-panel-src="tab"
                                 id="noVNC_send_tab_button" class="noVNC_button"
                                 title="Send Tab">
-                            <input type="image" alt="Esc" src="app/images/esc.svg"
+                            <input type="image" alt="Esc" data-control-panel-src="esc"
                                 id="noVNC_send_esc_button" class="noVNC_button"
                                 title="Send Escape">
-                            <input type="image" alt="Ctrl+Alt+Del" src="app/images/ctrlaltdel.svg"
+                            <input type="image" alt="Ctrl+Alt+Del" data-control-panel-src="ctrlAltDel"
                                 id="noVNC_send_ctrl_alt_del_button" class="noVNC_button"
                                 title="Send Ctrl-Alt-Del">
                         </div>
@@ -145,14 +145,14 @@
 
                 <!-- Shutdown/Reboot -->
                 <div class="noVNC_button_div noVNC_hide_on_disconnect" >
-                    <input type="image" alt="Shutdown/Reboot" src="app/images/power.svg"
+                    <input type="image" alt="Shutdown/Reboot" data-control-panel-src="power"
                         id="noVNC_power_button" class="noVNC_button"
                         title="Shutdown/Reboot...">
 
                     <div class="noVNC_vcenter">
                         <div id="noVNC_power" class="noVNC_panel">
                             <div class="noVNC_heading">
-                                <img alt="" src="app/images/power.svg"> Power
+                                <img alt="" data-control-panel-src="power"> Power
                             </div>
                             <input type="button" id="noVNC_shutdown_button" value="Shutdown">
                             <input type="button" id="noVNC_reboot_button" value="Reboot">
@@ -164,14 +164,14 @@
 
                 <!-- Clipboard -->
                 <div class="noVNC_button_div noVNC_hide_on_disconnect" >
-                    <input type="image" alt="Clipboard" src="app/images/clipboard.svg"
+                    <input type="image" alt="Clipboard" data-control-panel-src="clipboard"
                         id="noVNC_clipboard_button" class="noVNC_button"
                         title="Clipboard">
                     Clipboard
                     <div class="noVNC_vcenter">
                         <div id="noVNC_clipboard" class="noVNC_panel">
                             <div class="noVNC_heading">
-                                <img alt="" src="app/images/clipboard.svg"> Clipboard
+                                <img alt="" data-control-panel-src="clipboard"> Clipboard
                             </div>
                             <textarea id="noVNC_clipboard_text" rows=5></textarea>
                             <br>
@@ -183,7 +183,7 @@
 
                 <!-- Toggle fullscreen -->
                 <div class="noVNC_button_div noVNC_hidden" >
-                    <input type="image" alt="Fullscreen" src="app/images/fullscreen.svg"
+                    <input type="image" alt="Fullscreen" data-control-panel-src="fullscreen"
                         id="noVNC_fullscreen_button" class="noVNC_button"
                         title="Fullscreen">
                     Fullscreen
@@ -191,7 +191,7 @@
 
                 <!-- Add Second Screen -->
                 <div class="noVNC_button_div noVNC_hidden" >
-                    <input type="image" alt="Fullscreen" src="app/images/desktop-regular.svg"
+                    <input type="image" alt="Fullscreen" data-control-panel-src="desktop"
                         id="noVNC_displays_button" class="noVNC_button"
                         style="margin: 10px 3px;"
                         title="Show Displays">
@@ -200,7 +200,7 @@
 
                 <!-- Toggle game mode -->
                 <div class="noVNC_button_div noVNC_hidden noVNC_hide_on_disconnect" >
-                    <input type="image" alt="Game Mode" src="app/images/gamepad.png"
+                    <input type="image" alt="Game Mode" data-control-panel-src="gamepad"
                         id="noVNC_game_mode_button" class="noVNC_button"
                         title="Game Pointer Mode">
                     Game Cursor Mode
@@ -208,14 +208,14 @@
 
                 <!-- Settings -->
                 <div class="noVNC_button_div" >
-                    <input type="image" alt="Settings" src="app/images/settings.svg"
+                    <input type="image" alt="Settings" data-control-panel-src="settings"
                         id="noVNC_settings_button" class="noVNC_button"
                         title="Settings">
                     <div class="noVNC_vcenter">
                         <div id="noVNC_settings" class="noVNC_panel">
                             <ul>
                                 <li class="noVNC_heading">
-                                    <img alt="" src="app/images/settings.svg"> Settings
+                                    <img alt="" data-control-panel-src="settings"> Settings
                                 </li>
                                 <li>
                                     <label class="switch"><input id="noVNC_setting_shared" type="checkbox">
@@ -587,7 +587,7 @@
 
                 <!-- Connection Controls -->
                 <div class="noVNC_button_div noVNC_hide_on_disconnect" >
-                    <input type="image" alt="Disconnect" src="app/images/disconnect.svg"
+                    <input type="image" alt="Disconnect" data-control-panel-src="disconnect"
                         id="noVNC_disconnect_button" class="noVNC_button"
                         title="Disconnect">
                     Disconnect
@@ -595,7 +595,7 @@
 
                 <!-- Connection Controls -->
                 <div class="noVNC_button_div noVNC_hide_on_connect" id="noVNC_connect_button_2">
-                    <input type="image" alt="Connect" src="app/images/connect.svg"
+                    <input type="image" alt="Connect" data-control-panel-src="connect"
                          class="noVNC_button"
                         title="Connect">
                     Connect
@@ -671,7 +671,7 @@
             autocomplete="off" spellcheck="false" tabindex="-1"></textarea>
     </div>
 
-    <audio id="noVNC_bell">
+    <audio id="noVNC_bell" preload="none">
         <source src="app/sounds/bell.oga" type="audio/ogg">
         <source src="app/sounds/bell.mp3" type="audio/mpeg">
     </audio>

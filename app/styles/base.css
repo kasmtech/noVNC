@@ -437,14 +437,14 @@ select:active {
   z-index: -1;
   cursor: pointer;
   border-radius: 5px;
-  background-image: url("../images/handle_bg.svg");
+  background-image: var(--noVNC-control-bar-handle-background, none);
   background-repeat: no-repeat;
   background-position: right;
 }
 #noVNC_control_bar_handle:after {
   content: "";
   transition: transform 0.5s ease-in-out;
-  background: url("../images/handle.svg");
+  background-image: var(--noVNC-control-bar-handle, none);
   background-repeat: no-repeat;
   background-position: center;
   position: absolute;
@@ -646,7 +646,7 @@ select:active {
 
 }
 .noVNC_expander::before {
-  content: url("../images/expander.svg");
+  content: var(--noVNC-control-bar-expander, "");
   display: inline-block;
   margin-right: 5px;
   transition: 0.2s ease-in-out;
@@ -937,7 +937,7 @@ select:active {
 
 .noVNC_logo {
   color:yellow;
-  font-family: 'Orbitron', 'OrbitronTTF', sans-serif;
+  font-family: var(--noVNC-control-panel-font-family, sans-serif);
   line-height:90%;
   text-shadow: 0.1em 0.1em 0 black;
   margin-bottom: 0px;
@@ -1012,38 +1012,38 @@ body {
 }
 
 .keyboard-controls .button.ctrl {
-  background-image: url("../images/ctrl.svg");
+  background-image: var(--noVNC-keyboard-control-ctrl, none);
   background-size: contain;
 }
 
 .keyboard-controls .button.alt {
-  background-image: url("../images/alt.svg");
+  background-image: var(--noVNC-keyboard-control-alt, none);
   background-size: contain;
 }
 
 .keyboard-controls .button.windows {
   background-size: contain;
-  background-image: url("../images/windows.svg");
+  background-image: var(--noVNC-keyboard-control-windows, none);
 }
 
 .keyboard-controls .button.tab {
   background-size: contain;
-  background-image: url("../images/tab.svg");
+  background-image: var(--noVNC-keyboard-control-tab, none);
 }
 
 .keyboard-controls .button.escape {
   background-size: contain;
-  background-image: url("../images/esc.svg");
+  background-image: var(--noVNC-keyboard-control-escape, none);
 }
 
 .keyboard-controls .button.ctrlaltdel {
   background-size: contain;
-  background-image: url("../images/ctrlaltdel.svg");
+  background-image: var(--noVNC-keyboard-control-ctrl-alt-del, none);
 }
 
 .keyboard-controls .button.keyboard {
   background-size: contain;
-  background-image: url("../images/keyboard.svg");
+  background-image: var(--noVNC-keyboard-control-keyboard, none);
 }
 
 .keyboard-controls .button.selected {

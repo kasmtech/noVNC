@@ -11,6 +11,7 @@ export const messages = {
     msgTypeLatencyMeasurement: 189,
     msgTypeTouchSupported: 189,
     msgTypeTouchEvent: 190,
+    msgTypeTextInputFocus: 191,
     msgTypeUserAddedToSession: 253,
     msgTypeUserRemovedFromSession: 254
 };

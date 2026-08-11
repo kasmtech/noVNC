@@ -616,6 +616,14 @@ export default class Display {
         return toSigned32bit(y / this._scale + this._screens[0].y);
     }
 
+    clientX(x) {
+        return (x - this._screens[0].x) * this._scale;
+    }
+
+    clientY(y) {
+        return (y - this._screens[0].y) * this._scale;
+    }
+
     resize(width, height) {
         this._fbWidth = width;
         this._fbHeight = height;

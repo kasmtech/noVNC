@@ -68,6 +68,11 @@ const UI = {
 
     statusTimeout: null,
     hideKeyboardTimeout: null,
+    textInputFocusHideTimeout: null,
+    textInputCaret: null,
+    textInputPanY: 0,
+    textInputViewportHandler: null,
+    textInputSuppressed: false,
     idleControlbarTimeout: null,
     closeControlbarTimeout: null,
 
@@ -1975,6 +1980,7 @@ const UI = {
         UI.rfb.addEventListener("sharedSessionUserJoin", UI.sharedSessionUserJoin);
         UI.rfb.addEventListener("sharedSessionUserLeft", UI.sharedSessionUserLeft);
         UI.rfb.addEventListener("imagemode", UI.switchToImageMode);
+        UI.rfb.addEventListener("textinputfocus", UI.onTextInputFocus);
         UI.rfb.addEventListener("videocodecschange", (e) => {
             Log.Info('Codec configurations received:', e.detail?.configurations);
             UI.initStreamModeSetting(e.detail?.codecs, e.detail?.configurations);
@@ -3441,6 +3447,76 @@ const UI = {
         }
     },
 
+    onTextInputFocus(event) {
+        Log.Debug("Server text input focus: " + (event.detail.focused ? "gained" : "lost") +
+            (isTouchDevice ? "" : " (ignored: not a touch device)") +
+            (UI.textInputSuppressed ? " (suppressed)" : ""));
+
+        if (!isTouchDevice)
+            return;
+
+        clearTimeout(UI.textInputFocusHideTimeout);
+        UI.textInputFocusHideTimeout = null;
+
+        if (event.detail.focused) {
+            if (UI.textInputSuppressed)
+                return;
+
+            UI.textInputCaret = event.detail.caret;
+            UI.showVirtualKeyboard();
+            UI.updateTextInputPan();
+
+            if (window.visualViewport && !UI.textInputViewportHandler) {
+                UI.textInputViewportHandler = () => UI.updateTextInputPan();
+                window.visualViewport.addEventListener('resize', UI.textInputViewportHandler);
+            }
+        } else {
+            UI.textInputSuppressed = false;
+
+            UI.textInputFocusHideTimeout = setTimeout(() => {
+                UI.textInputFocusHideTimeout = null;
+                UI.clearTextInputPan();
+                UI.hideVirtualKeyboard();
+            }, 400);
+        }
+    },
+
+    updateTextInputPan() {
+        if (!UI.rfb || !UI.textInputCaret)
+            return;
+
+        const caret = UI.textInputCaret;
+        const pos = UI.rfb.remoteToClientPos(caret.x, caret.y + caret.h);
+        if (!pos) return;
+
+        const visibleHeight = window.visualViewport ? window.visualViewport.height : document.documentElement.clientHeight;
+        const margin = 40;
+        const caretBottom = pos.y + UI.textInputPanY;
+        let pan = caretBottom + margin - visibleHeight;
+        if (pan < 0)
+            pan = 0;
+
+        UI.setTextInputPan(pan);
+    },
+
+    setTextInputPan(pan) {
+        UI.textInputPanY = pan;
+        const container = document.getElementById('noVNC_container');
+        container.style.transition = 'transform 0.2s ease-out';
+        container.style.transform = pan ? 'translateY(' + (-pan) + 'px)' : '';
+    },
+
+    clearTextInputPan() {
+        UI.textInputCaret = null;
+        if (UI.textInputPanY !== 0)
+            UI.setTextInputPan(0);
+
+        if (UI.textInputViewportHandler) {
+            window.visualViewport.removeEventListener('resize', UI.textInputViewportHandler);
+            UI.textInputViewportHandler = null;
+        }
+    },
+
     onfocusVirtualKeyboard(event) {
         document.getElementById('noVNC_keyboard_button')
             .classList.add("noVNC_selected");
@@ -3461,6 +3537,11 @@ const UI = {
         if (UI.rfb) {
             UI.rfb.focusOnClick = true;
         }
+
+        if (UI.textInputCaret !== null)
+            UI.textInputSuppressed = true;
+
+        UI.clearTextInputPan();
     },
 
     keepVirtualKeyboard(event) {

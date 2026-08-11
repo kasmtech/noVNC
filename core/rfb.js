@@ -2702,6 +2702,8 @@ export default class RFB extends EventTargetMixin {
         if (!this.isConnected || this._viewOnly || !this._isPrimaryDisplay)
             return;
 
+        Log.Debug(`Native touch event: ${ev.type}, touches: ${ev.changedTouches.length}, target: ${ev.target.tagName}`);
+
         ev.preventDefault();
 
         const changed = ev.changedTouches;
@@ -4118,6 +4120,9 @@ export default class RFB extends EventTargetMixin {
             case messages.msgTypeTouchSupported:
                 return this._handleTouchSupported();
 
+            case messages.msgTypeTextInputFocus:
+                return this._handleTextInputFocus();
+
             case messages.msgTypeVideoEncoders:
                 return this._handleServerVideoEncoders();
 
@@ -4352,6 +4357,41 @@ export default class RFB extends EventTargetMixin {
             Log.Info("Server supports touch; using phone-style touch gestures.");
 
         return result;
+    }
+
+    remoteToClientPos(x, y) {
+        if (!this._display || !this._canvas)
+            return null;
+
+        const rect = this._canvas.getBoundingClientRect();
+        return {
+            x: rect.left + this._display.clientX(x),
+            y: rect.top + this._display.clientY(y)
+        };
+    }
+
+    _handleTextInputFocus() {
+        if (this._sock.rQwait("TextInputFocus", 17, 1))
+            return false;
+
+        const focused = this._sock.rQshift8() !== 0;
+        const caret = {
+            x: this._sock.rQshift16(),
+            y: this._sock.rQshift16(),
+            w: this._sock.rQshift16(),
+            h: this._sock.rQshift16()
+        };
+        const field = {
+            x: this._sock.rQshift16(),
+            y: this._sock.rQshift16(),
+            w: this._sock.rQshift16(),
+            h: this._sock.rQshift16()
+        };
+
+        Log.Debug("Text input focus " + (focused ? "gained" : "lost"));
+        this.dispatchEvent(new CustomEvent("textinputfocus",
+            {detail: {focused, caret, field}}));
+        return true;
     }
 
     _handleDisconnectNotify() {

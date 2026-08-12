@@ -43,10 +43,11 @@ import RFB from "../core/rfb.js";
 import { MouseButtonMapper, XVNC_BUTTONS } from "../core/mousebuttonmapper.js";
 import * as WebUtil from "./webutil.js";
 import { uuidv4 } from '../core/util/strings.js';
+import BasicChart from '../core/chart.js';
 import {
     UI_SETTINGS_STREAM_MODE_QUALITY_SETTINGS_GROUPS,
     UI_SETTINGS_CONTROL_ID as UI_SETTINGS,
-    UI_FPS_CHART, FPS
+    FPS
 } from './constants.js';
 import {encodings} from "../core/encodings.js";
 import CodecDetector, {CODEC_VARIANT_NAMES, preferredCodecs} from "../core/codecs";
@@ -91,7 +92,10 @@ const UI = {
     currentDisplay: null,
     displayWindows: new Map([['primary', 'primary']]),
     registeredWindows: new Map([['primary', 'primary']]),
-    fpsChartTicks: [],
+    fpsChart: null,
+    bandwidthChart: null,
+    jitterChart: null,
+    rttChart: null,
 
     monitorDragOk: false,
     monitorStartX: 0,
@@ -330,6 +334,7 @@ const UI = {
         UI.initSetting('prefer_local_cursor', true);
         UI.initSetting('toggle_control_panel', false);
         UI.initSetting('enable_perf_stats', false);
+        UI.initSetting('enable_latency_stats', false);
         UI.initSetting('enable_threading', true);
         UI.initSetting('virtual_keyboard_visible', false);
         UI.initSetting('enable_ime', false);
@@ -624,6 +629,7 @@ const UI = {
         UI.addClickHandle('noVNC_settings_button', UI.toggleSettingsPanel);
 
         document.getElementById("noVNC_setting_enable_perf_stats").addEventListener('click', UI.showStats);
+        document.getElementById("noVNC_setting_enable_latency_stats").addEventListener('click', UI.toggleLatencyStats);
         document.getElementById("noVNC_setting_enable_threading").addEventListener('click', UI.threading);
         document.getElementById("noVNC_auto_placement").addEventListener('change', UI.setAutoPlacement);
 
@@ -850,16 +856,48 @@ const UI = {
 
         if (enable_stats) {
             document.getElementById("noVNC_connection_stats").style.visibility = "visible";
-            document.getElementById("noVNC_fps_chart").style.visibility = 'visible';
+            document.getElementById("noVNC_charts_container").classList.add('visible');
             UI.statsInterval = setInterval(function() {
                 if (UI.rfb !== undefined) {
                     UI.rfb.requestBottleneckStats();
                 }
-            }  , 5000);
+            }, 5000);
         } else {
             document.getElementById("noVNC_connection_stats").style.visibility = "hidden";
-            document.getElementById("noVNC_fps_chart").style.visibility = 'hidden';
+            document.getElementById("noVNC_charts_container").classList.remove('visible');
         }
+
+        /*
+        if (!WebUtil.isInsideKasmVDI()) {
+            const ids = ['noVNC_connection_stats', 'noVNC_charts_container'];
+            ids.forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.style.visibility = enable_stats ? 'visible' : 'hidden';
+                }
+            })
+        }
+
+        if (enable_stats) {
+            UI.statsInterval = setInterval(function () {
+                if (UI.rfb !== undefined) {
+                    UI.rfb.requestBottleneckStats();
+                }
+            }, 5000);
+        } else {
+            clearInterval(UI.statsInterval);
+            UI.statsInterval = null;
+        }
+         */
+    },
+
+    toggleLatencyStats() {
+        UI.saveSetting('enable_latency_stats');
+        if (!UI.rfb)
+            return;
+
+        const enabled = document.getElementById('noVNC_setting_enable_latency_stats').checked;
+        UI.rfb.enableInputLatencyMeasurement(enabled);
     },
 
     threading() {
@@ -1687,7 +1725,7 @@ const UI = {
     clipboardReceive(e) {
         if (UI.rfb.clipboardDown) {
            var curvalue = document.getElementById('noVNC_clipboard_text').value;
-           if (curvalue != e.detail.text) {
+           if (curvalue !== e.detail.text) {
                Log.Debug(">> UI.clipboardReceive: " + e.detail.text.substr(0, 40) + "...");
                document.getElementById('noVNC_clipboard_text').value = e.detail.text;
                Log.Debug("<< UI.clipboardReceive");
@@ -1695,70 +1733,104 @@ const UI = {
        }
     },
 
-    generateFpsChartPath() {
-      if (this.fpsChartTicks.length === 0) {
-            return '';
-        }
-
-        const stepX = UI_FPS_CHART.WIDTH / (UI_FPS_CHART.MAX_POINTS - 1);
-        const scaleY = UI_FPS_CHART.HEIGHT / UI_FPS_CHART.MAX_FPS_VALUE;
-
-        let d = `M 0 ${UI_FPS_CHART.HEIGHT}`;
-
-        for (let i = 0; i < UI.fpsChartTicks.length; i++) {
-            const x = i * stepX;
-            const y = UI_FPS_CHART.HEIGHT - UI.fpsChartTicks[i] * scaleY;
-            d += ` L ${x} ${y}`;
-        }
-
-
-        d += ` L ${(UI.fpsChartTicks.length - 1) * stepX} ${UI_FPS_CHART.HEIGHT} L 0 ${UI_FPS_CHART.HEIGHT} Z`;
-
-        return d;
-    },
-
-    updateFpsChart(fpsValue) {
-        UI.fpsChartTicks.push(fpsValue);
-
-        if (UI.fpsChartTicks.length > UI_FPS_CHART.MAX_POINTS) {
-            UI.fpsChartTicks.shift();
-        }
-        const path = document.getElementById('noVNC_fps_chart_path');
-        if (path) {
-            path.setAttribute('d', UI.generateFpsChartPath());
-        }
-
-        if (UI.fpsChartTicks.length > 0) {
-            const max = Math.max(...UI.fpsChartTicks);
-            const min = Math.min(...UI.fpsChartTicks);
-            const avg = UI.fpsChartTicks.reduce((a, b) => a + b, 0) / UI.fpsChartTicks.length;
-            document.getElementById('noVNC_fps_chart_max').textContent = `Max: ${max.toFixed(1)}`;
-            document.getElementById('noVNC_fps_chart_min').textContent = `Min: ${min.toFixed(1)}`;
-            document.getElementById('noVNC_fps_chart_avg').textContent = `Avg: ${avg.toFixed(1)}`;
-        }
-    },
-
     //received bottleneck stats
-    bottleneckStatsRecieve(e) {
-        if (UI.rfb) {
-            try {
-                let obj = JSON.parse(e.detail.text);
-                let fps = UI.rfb.statsFps;
+    bottleneckStatsReceive(e) {
+        if (!UI.rfb)
+            return;
+
+        try {
+            console.log(e.detail.text);
+            let obj = JSON.parse(e.detail.text);
+            let fps = UI.rfb.statsFps;
+            if (!WebUtil.isInsideKasmVDI()) {
                 document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
-                UI.updateFpsChart(Number(fps));
-                console.log(e.detail.text);
-            } catch (err) {
-                console.log('Invalid bottleneck stats recieved from server.')
+                if (UI.fpsChart) {
+                    UI.fpsChart.update(Number(fps));
+                }
+ } else {
+                UI.sendMessage("bottleneck_stats", {stats: obj, fps: fps, droppedFps: UI.rfb.statsDroppedFps});
+            }
+        } catch (err) {
+            console.log('Invalid bottleneck stats received from server.')
+        }
+    },
+
+    inputLatencyReceive(e) {
+        const d = e.detail;
+
+        if (WebUtil.isInsideKasmVDI()) {
+            UI.sendMessage('input_latency', {
+                latest: d.latest,
+                average: d.average,
+                min: d.min,
+                max: d.max,
+                p50: d.p50,
+                p95: d.p95,
+                p99: d.p99,
+                networkAvg: d.networkAvg,
+                networkP95: d.networkP95,
+                renderAvg: d.renderAvg,
+                renderP95: d.renderP95
+            });
+        } else {
+            const stats = document.getElementById("noVNC_connection_stats");
+            if (stats) {
+                const tag = " | Latency: " + d.latest.toFixed(1) + "ms (min " + d.min.toFixed(1) + "ms, p95 " + d.p95.toFixed(1) + "ms)";
+                if (stats.style.visibility === "visible") {
+                    stats.innerHTML = stats.innerHTML.replace(/ \| Latency:.*$/, '') + tag;
+                }
             }
         }
     },
 
-    popupMessage: function(msg, secs) {
-        if (!secs){
+    networkStatsReceive(e) {
+        if (!UI.rfb)
+            return;
+
+        try {
+            const [jitter, rtt, bandwidth] = JSON.parse(e.detail.text);
+
+            if (!WebUtil.isInsideKasmVDI()) {
+
+                const updateChart = (chart, value) => {
+                    if (chart && value !== undefined) {
+                        chart.update(Number(value));
+                    }
+                };
+
+                updateChart(UI.jitterChart, jitter);
+                updateChart(UI.rttChart, rtt);
+                updateChart(UI.bandwidthChart, bandwidth);
+            } else {
+                UI.sendMessage('network_stats', {jitter, rtt, bandwidth});
+            }
+            console.log(e.detail.text);
+        } catch (err) {
+            console.log('Invalid network stats received from server.')
+        }
+    },
+
+    systemStatsReceive(e) {
+        if (!UI.rfb)
+            return;
+
+        try {
+            if (WebUtil.isInsideKasmVDI()) {
+                const systemStats = JSON.parse(e.detail.text);
+                UI.sendMessage('system_stats', systemStats);
+            }
+            //console.log(e.detail.text);
+        } catch (err) {
+            console.log('Invalid system stats received from server.')
+        }
+    },
+
+    popupMessage: function (msg, secs) {
+        if (!secs) {
             secs = 500;
         }
-    // Quick popup to give feedback that selection was copied
-    setTimeout(UI.showOverlay.bind(this, msg, secs), 200);
+        // Quick popup to give feedback that selection was copied
+        setTimeout(UI.showOverlay.bind(this, msg, secs), 200);
     },
 
     clipboardClear() {
@@ -1799,6 +1871,9 @@ const UI = {
         UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
         UI.rfb.enableHiDpi = UI.getSetting('enable_hidpi');
         UI.rfb.threading = UI.getSetting('enable_threading');
+        if (UI.getSetting('enable_latency_stats')) {
+            UI.rfb.enableInputLatencyMeasurement(true);
+        }
         // UI.rfb.hwEncoderProfile = parseInt(UI.getSetting(UI_SETTINGS.HW_PROFILE));
         UI.rfb.gop = parseInt(UI.getSetting(UI_SETTINGS.GOP));
         UI.rfb.videoStreamQuality = parseInt(UI.getSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY));
@@ -1884,7 +1959,10 @@ const UI = {
         UI.rfb.addEventListener("securityfailure", UI.securityFailed);
         UI.rfb.addEventListener("capabilities", UI.updatePowerButton);
         UI.rfb.addEventListener("clipboard", UI.clipboardReceive);
-        UI.rfb.addEventListener("bottleneck_stats", UI.bottleneckStatsRecieve);
+        UI.rfb.addEventListener("bottleneck_stats", UI.bottleneckStatsReceive);
+        UI.rfb.addEventListener("network_stats", UI.networkStatsReceive);
+        UI.rfb.addEventListener("system_stats", UI.systemStatsReceive);
+        UI.rfb.addEventListener("inputlatency", UI.inputLatencyReceive);
         UI.rfb.addEventListener("bell", UI.bell);
         UI.rfb.addEventListener("desktopname", UI.updateDesktopName);
         UI.rfb.addEventListener("inputlock", UI.inputLockChanged);
@@ -1964,6 +2042,11 @@ const UI = {
             document.getElementById('noVNC_status').style.visibility = "visible";
         }
 
+        UI.fpsChart = new BasicChart('noVNC_fps_chart_path', 'FPS', 60, 120);
+        UI.bandwidthChart = new BasicChart('noVNC_bandwidth_path', 'Bandwidth', 60, 0);
+        UI.rttChart = new BasicChart('noVNC_rtt_path', 'RTT', 60, 0);
+        UI.jitterChart = new BasicChart('noVNC_jitter_path', 'Jitter', 60, 0);
+
         //key events for KasmVNC control
         document.addEventListener('keyup', function (event) {
             if (event.ctrlKey && event.shiftKey) {
@@ -1985,6 +2068,11 @@ const UI = {
 
     disconnect() {
         UI.rfb.disconnect();
+
+        UI.fpsChart = null;
+        UI.bandwidthChart = null;
+        UI.rttChart = null;
+        UI.jitterChart = null;
 
         UI.connected = false;
 
@@ -2351,6 +2439,10 @@ const UI = {
                     UI.forceSetting('enable_perf_stats', event.data.value, false);
                     UI.showStats();
                     break;
+                case 'set_latency_stats':
+                    UI.forceSetting('enable_latency_stats', event.data.value, false);
+                    UI.toggleLatencyStats();
+                    break;
                 case 'set_idle_timeout':
                     //message value in seconds
                     const idle_timeout_min = Math.ceil(event.data.value / 60);
@@ -2523,6 +2615,9 @@ const UI = {
         UI.rfb.enableWebP = UI.getSetting('enable_webp');
         UI.rfb.enableHiDpi = UI.getSetting('enable_hidpi');
         UI.rfb.threading = UI.getSetting('enable_threading');
+        if (UI.getSetting('enable_latency_stats')) {
+            UI.rfb.enableInputLatencyMeasurement(true);
+        }
 
         if (UI.rfb.resizeSession) {
             UI.rfb.forcedResolutionX = null;

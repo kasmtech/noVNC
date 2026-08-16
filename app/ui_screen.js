@@ -6,6 +6,12 @@ import { MouseButtonMapper, XVNC_BUTTONS } from "../core/mousebuttonmapper.js";
 import * as Log from '../core/util/logging.js';
 import {showNotification} from "../core/util/notifications";
 
+const SETTING_RANGES = {
+    video_area: { min: 1, max: 100 },
+    video_time: { min: 0, max: 60 },
+    video_out_time: { min: 1, max: 100 },
+};
+
 const UI = {
     connected: false,
     screenID: null,
@@ -130,6 +136,7 @@ const UI = {
         if ((val === 'undefined' || val === null) && default_value !== 'undefined' && default_value !== null) {
             val = default_value;
         }
+        val = UI.clampSetting(name, val);
         if (typeof val !== 'undefined' && val !== null && isBool) {
             if (val.toString().toLowerCase() in {'0': 1, 'no': 1, 'false': 1}) {
                 val = false;
@@ -138,6 +145,20 @@ const UI = {
             }
         }
         return val;
+    },
+
+    clampSetting(name, value) {
+        const range = SETTING_RANGES[name];
+        if (range === undefined || value === null || typeof value === 'undefined') {
+            return value;
+        }
+
+        let numberValue = parseInt(value);
+        if (!Number.isInteger(numberValue)) {
+            numberValue = range.min;
+        }
+
+        return Math.min(Math.max(numberValue, range.min), range.max);
     },
 
     connect() {
@@ -418,6 +439,7 @@ const UI = {
         if (val === null) {
             val = WebUtil.readSetting(name, defVal);
         }
+        val = UI.clampSetting(name, val);
         WebUtil.setSetting(name, val);
         return val;
     },

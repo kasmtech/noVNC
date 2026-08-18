@@ -344,6 +344,7 @@ const UI = {
         UI.initSetting('virtual_keyboard_visible', false);
         UI.initSetting('enable_ime', false);
         UI.initSetting('touch_mode', 'native');
+        UI.initSetting('auto_keyboard', true);
         UI.initSetting('enable_webrtc', false);
         UI.initSetting('enable_hidpi', false);
         UI.initSetting('fallback_image_mode', false);
@@ -713,6 +714,7 @@ const UI = {
         UI.addSettingChangeHandler('virtual_keyboard_visible', UI.toggleKeyboardControls);
         UI.addSettingChangeHandler('enable_ime');
         UI.addSettingChangeHandler('enable_ime', UI.toggleIMEMode);
+        UI.addSettingChangeHandler('auto_keyboard');
         UI.addSettingChangeHandler('touch_mode');
         UI.addSettingChangeHandler('touch_mode', UI.updateTouchMode);
         UI.addSettingChangeHandler('enable_webrtc');
@@ -2399,6 +2401,19 @@ const UI = {
                         UI.hideKeyboardControls();
                     }
                     break;
+                case 'enable_auto_keyboard':
+                    UI.forceSetting('auto_keyboard', true, false);
+
+                    break;
+                case 'disable_auto_keyboard':
+                    UI.forceSetting('auto_keyboard', false, false);
+
+                    if (UI.textInputCaret) {
+                        UI.clearTextInputPan();
+                        UI.hideVirtualKeyboard();
+                    }
+
+                    break;
                 case 'enable_ime_mode':
                     if (!UI.getSetting('enable_ime')) {
                         UI.forceSetting('enable_ime', true, false);
@@ -3448,8 +3463,11 @@ const UI = {
     },
 
     onTextInputFocus(event) {
+        const autoKeyboardPopUp = UI.getSetting('auto_keyboard');
+
         Log.Debug("Server text input focus: " + (event.detail.focused ? "gained" : "lost") +
             (isTouchDevice ? "" : " (ignored: not a touch device)") +
+            (autoKeyboardPopUp ? "" : " (disabled)") +
             (UI.textInputSuppressed ? " (suppressed)" : ""));
 
         if (!isTouchDevice)
@@ -3459,7 +3477,7 @@ const UI = {
         UI.textInputFocusHideTimeout = null;
 
         if (event.detail.focused) {
-            if (UI.textInputSuppressed)
+            if (UI.textInputSuppressed || !autoKeyboardPopUp)
                 return;
 
             UI.textInputCaret = event.detail.caret;

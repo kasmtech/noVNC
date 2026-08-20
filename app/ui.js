@@ -3518,6 +3518,9 @@ const UI = {
         UI.textInputFocusHideTimeout = null;
 
         if (event.detail.focused) {
+            if (event.detail.tapped)
+                UI.textInputSuppressed = false;
+
             if (UI.textInputSuppressed || !autoKeyboardPopUp)
                 return;
 

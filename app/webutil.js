@@ -191,3 +191,14 @@ export function isInsideKasmVDI() {
         return true;
     }
 }
+
+// Origins allowed to exchange postMessage commands with this client
+export function getTrustedParentOrigins() {
+    const configured = getConfigVar('trusted_origin', '');
+    const origins = configured
+        .split(',')
+        .map(origin => origin.trim())
+        .filter(origin => origin.length > 0);
+
+    return origins.length > 0 ? origins : [window.location.origin];
+}

@@ -201,12 +201,21 @@ const UI = {
             autoconnect = false;
         }
 
+        UI.trustedOrigins = WebUtil.getTrustedParentOrigins();
+
+        UI.pinnedOrigin = null;
+
         window.parent.postMessage({
             action: "noVNC_initialized",
             value: null
         }, "*");
 
         window.addEventListener("message", (e) => {
+            if (!UI.isTrustedMessageEvent(e)) {
+                Log.Warn("Ignoring window message from untrusted origin: " + e.origin);
+                return;
+            }
+
             if (typeof e.data !== "object" || !e.data.action) {
                 return;
             }
@@ -780,10 +789,7 @@ const UI = {
         document.documentElement.classList.remove("noVNC_disconnected");
 
         const transitionElem = document.getElementById("noVNC_transition_text");
-        if (WebUtil.isInsideKasmVDI())
-        {
-            parent.postMessage({ action: 'connection_state', value: state}, '*' );
-        }
+        UI.sendMessage('connection_state', state);
 
         switch (state) {
             case 'init':
@@ -1197,9 +1203,7 @@ const UI = {
     openControlbar() {
         document.getElementById('noVNC_control_bar')
             .classList.add("noVNC_open");
-        if (WebUtil.isInsideKasmVDI()) {
-             parent.postMessage({ action: 'control_open', value: 'Control bar opened'}, '*' );
-        }
+        UI.sendMessage('control_open', 'Control bar opened');
     },
 
     closeControlbar() {
@@ -1209,9 +1213,7 @@ const UI = {
         if (UI.rfb) {
             UI.rfb.focus();
         }
-        if (WebUtil.isInsideKasmVDI()) {
-             parent.postMessage({ action: 'control_close', value: 'Control bar closed'}, '*' );
-        }
+        UI.sendMessage('control_close', 'Control bar closed');
     },
 
     toggleControlbar() {
@@ -2316,12 +2318,29 @@ const UI = {
     //send message to parent window
     sendMessage(name, value) {
         if (WebUtil.isInsideKasmVDI()) {
-            parent.postMessage({ action: name, value: value }, '*' );
+            const targetOrigin = UI.pinnedOrigin || UI.trustedOrigins[0];
+            parent.postMessage({ action: name, value: value }, targetOrigin);
         }
+    },
+
+    isTrustedMessageEvent(event) {
+        const trusted = (event.source === window.parent || event.source === window.opener) &&
+            UI.trustedOrigins.includes(event.origin);
+
+        if (trusted && !UI.pinnedOrigin) {
+            UI.pinnedOrigin = event.origin;
+        }
+
+        return trusted;
     },
 
     //receive message from parent window
     receiveMessage(event) {
+        if (!UI.isTrustedMessageEvent(event)) {
+            Log.Warn("Ignoring postMessage command from untrusted origin: " + event.origin);
+            return;
+        }
+
         if (event.data && event.data.action) {
             Log.Debug("Received message from parent window: " + event.data.action);
             switch (event.data.action) {
@@ -2458,7 +2477,7 @@ const UI = {
                     UI.enableHiDpi();
                     break;
                 case 'control_displays':
-                    parent.postMessage({ action: 'can_control_displays', value: true}, '*' );
+                    UI.sendMessage('can_control_displays', true);
                     break;
                 case 'enable_threading':
                     UI.forceSetting('enable_threading', event.data.value, false);
@@ -2514,7 +2533,7 @@ const UI = {
         }
 
         const detail = event.detail || {};
-        parent.postMessage({ action: 'disconnectrx', value: detail.reason}, '*' );
+        UI.sendMessage('disconnectrx', detail.reason);
         if (detail.serverNotice && detail.serverNotice.graceful) {
             setTimeout(() => window.location.replace('disconnected.html'), 3000);
         }
@@ -2522,7 +2541,7 @@ const UI = {
 
     toggleNav(){
         if (WebUtil.isInsideKasmVDI()) {
-            parent.postMessage({ action: 'togglenav', value: null}, '*' );
+            UI.sendMessage('togglenav', null);
         } else {
             UI.toggleControlbar();
             UI.keepControlbar();
@@ -2533,7 +2552,7 @@ const UI = {
     },
 
     clipboardRx(event) {
-        parent.postMessage({ action: 'clipboardrx', value: event.detail.text}, '*' ); //TODO fix star
+        UI.sendMessage('clipboardrx', event.detail.text);
     },
 
 /* ------^-------
@@ -2544,7 +2563,7 @@ const UI = {
 
     toggleFullscreen() {
         if (WebUtil.isInsideKasmVDI()) {
-             parent.postMessage({ action: 'fullscreen', value: 'Fullscreen clicked'}, '*' );
+             UI.sendMessage('fullscreen', 'Fullscreen clicked');
              return;
         }
         if (document.fullscreenElement || // alternative standard method

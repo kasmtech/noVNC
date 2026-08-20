@@ -4374,7 +4374,9 @@ export default class RFB extends EventTargetMixin {
         if (this._sock.rQwait("TextInputFocus", 17, 1))
             return false;
 
-        const focused = this._sock.rQshift8() !== 0;
+        const flags = this._sock.rQshift8();
+        const focused = (flags & 1) !== 0;
+        const tapped = (flags & 2) !== 0;
         const caret = {
             x: this._sock.rQshift16(),
             y: this._sock.rQshift16(),
@@ -4388,9 +4390,10 @@ export default class RFB extends EventTargetMixin {
             h: this._sock.rQshift16()
         };
 
-        Log.Debug("Text input focus " + (focused ? "gained" : "lost"));
+        Log.Debug("Text input focus " + (focused ? "gained" : "lost") +
+                  (tapped ? " (tapped)" : ""));
         this.dispatchEvent(new CustomEvent("textinputfocus",
-            {detail: {focused, caret, field}}));
+            {detail: {focused, tapped, caret, field}}));
         return true;
     }
 

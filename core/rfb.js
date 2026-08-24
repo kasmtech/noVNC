@@ -34,7 +34,7 @@ import {
     FRAME_RATE_MIN,
     frameRateToPseudoEncoding,
     isValidFrameRate,
-} from "./frame-rate.js";
+} from "./util/frame-rate.js";
 import { messages } from "./messages.js";
 import { MouseButtonMapper, xvncButtonToMask } from "./mousebuttonmapper.js";
 

@@ -1,4 +1,4 @@
-import { encodings } from "./encodings.js";
+import { encodings } from "../encodings.js";
 
 export const FRAME_RATE_MIN = 10;
 export const FRAME_RATE_MAX = 120;

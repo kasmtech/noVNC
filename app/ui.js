@@ -50,7 +50,7 @@ import {
     FPS
 } from './constants.js';
 import {encodings} from "../core/encodings.js";
-import { normalizeFrameRate } from "../core/frame-rate.js";
+import { normalizeFrameRate } from "../core/util/frame-rate.js";
 import CodecDetector, {CODEC_VARIANT_NAMES, preferredCodecs} from "../core/codecs";
 import { perfLogger } from '../core/util/performance-logger.js';
 

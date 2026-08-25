@@ -29,6 +29,12 @@ import DES from "./des.js";
 import KeyTable from "./input/keysym.js";
 import XtScancode from "./input/xtscancodes.js";
 import { encodings } from "./encodings.js";
+import {
+    FRAME_RATE_MAX,
+    FRAME_RATE_MIN,
+    frameRateToPseudoEncoding,
+    isValidFrameRate,
+} from "./util/frame-rate.js";
 import { messages } from "./messages.js";
 import { MouseButtonMapper, xvncButtonToMask } from "./mousebuttonmapper.js";
 
@@ -640,8 +646,8 @@ export default class RFB extends EventTargetMixin {
 
     get frameRate() { return this._frameRate; }
     set frameRate(value) {
-        if (!Number.isInteger(value) || value < 1 || value > 120) {
-            Log.Error("frame rate must be an integer between 1 and 120");
+        if (!isValidFrameRate(value)) {
+            Log.Error(`frame rate must be an integer between ${FRAME_RATE_MIN} and ${FRAME_RATE_MAX}`);
             return;
         }
 
@@ -3463,7 +3469,7 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingVideoTimeLevel0 + this.videoTime);
         encs.push(encodings.pseudoEncodingVideoOutTimeLevel1 + this.videoOutTime - 1);
         encs.push(encodings.pseudoEncodingVideoScalingLevel0 + this.videoScaling);
-        encs.push(encodings.pseudoEncodingFrameRateLevel10 + this.frameRate - 10);
+        encs.push(frameRateToPseudoEncoding(this.frameRate));
         encs.push(encodings.pseudoEncodingMaxVideoResolution);
 
         // Order is important: first options, then streaming mode

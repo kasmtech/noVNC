@@ -30,8 +30,8 @@ export const encodings = {
     pseudoEncodingCompressLevel9: -247,
     pseudoEncodingCompressLevel0: -256,
 
-    pseudoEncodingFrameRateLevel10: -2048,
-    pseudoEncodingFrameRateLevel60: -1998,
+    pseudoEncodingFrameRateLevel10: -4096,
+    pseudoEncodingFrameRateLevel120: -3986,
     pseudoEncodingMaxVideoResolution: -1997,
     pseudoEncodingVideoScalingLevel0: -1996,
     pseudoEncodingVideoScalingLevel9: -1987,

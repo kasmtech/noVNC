@@ -107,6 +107,24 @@ const UI = {
     },
     codecDetector: null,
     forcedCodecs: [],
+    controlPanelAssetsModule: null,
+
+    getControlPanelAssetsModule() {
+        if (!UI.controlPanelAssetsModule) {
+            UI.controlPanelAssetsModule = import('./control-panel-assets.js');
+        }
+        return UI.controlPanelAssetsModule;
+    },
+
+    loadControlPanelAssets() {
+        return UI.getControlPanelAssetsModule()
+            .then(module => module.applyControlPanelAssets());
+    },
+
+    loadKeyboardControlAssets() {
+        return UI.getControlPanelAssetsModule()
+            .then(module => module.applyKeyboardControlAssets());
+    },
 
     prime: async () => {
         await WebUtil.initSettings();
@@ -136,29 +154,19 @@ const UI = {
             return;
         }
 
+        if (!WebUtil.isInsideKasmVDI() || WebUtil.getConfigVar('show_control_bar')) {
+            UI.loadControlPanelAssets()
+                .catch(err => Log.Error(`Couldn't load control panel assets: ${err}`));
+        } else {
+            document.getElementById('noVNC_control_bar_anchor').style.display = 'none';
+        }
+
         // Initialize settings then apply quality presents
         UI.initSettings();
         UI.updateQuality();
 
         // Translate the DOM
         l10n.translateDOM();
-
-        fetch('./package.json')
-            .then((response) => {
-                if (!response.ok) {
-                    throw Error("" + response.status + " " + response.statusText);
-                }
-                return response.json();
-            })
-            .then((packageInfo) => {
-                Array.from(document.getElementsByClassName('noVNC_version')).forEach(el => el.innerText = packageInfo.version);
-            })
-            .catch((err) => {
-                Log.Error("Couldn't fetch package.json: " + err);
-                Array.from(document.getElementsByClassName('noVNC_version_wrapper'))
-                    .concat(Array.from(document.getElementsByClassName('noVNC_version_separator')))
-                    .forEach(el => el.style.display = 'none');
-            });
 
         // Adapt the interface for touch screen devices
         if (isTouchDevice) {
@@ -3374,6 +3382,8 @@ const UI = {
     },
 
     showKeyboardControls() {
+        UI.loadKeyboardControlAssets()
+            .catch(err => Log.Error(`Couldn't load keyboard control assets: ${err}`));
         document.getElementById('noVNC_keyboard_control').classList.add("is-visible");
     },
 

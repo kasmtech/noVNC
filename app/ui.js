@@ -216,6 +216,10 @@ const UI = {
         }, "*");
 
         window.addEventListener("message", (e) => {
+            if (e.source !== window.parent) {
+                return;
+            }
+
             if (typeof e.data !== "object" || !e.data.action) {
                 return;
             }
@@ -2356,6 +2360,10 @@ const UI = {
 
     //receive message from parent window
     receiveMessage(event) {
+        if (event.source !== window.parent) {
+            return;
+        }
+
         if (event.data && event.data.action) {
             Log.Debug("Received message from parent window: " + event.data.action);
             switch (event.data.action) {

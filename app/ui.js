@@ -793,10 +793,7 @@ const UI = {
         document.documentElement.classList.remove("noVNC_disconnected");
 
         const transitionElem = document.getElementById("noVNC_transition_text");
-        if (WebUtil.isInsideKasmVDI())
-        {
-            parent.postMessage({ action: 'connection_state', value: state}, '*' );
-        }
+        UI.sendMessage('connection_state', state);
 
         switch (state) {
             case 'init':
@@ -1210,9 +1207,7 @@ const UI = {
     openControlbar() {
         document.getElementById('noVNC_control_bar')
             .classList.add("noVNC_open");
-        if (WebUtil.isInsideKasmVDI()) {
-             parent.postMessage({ action: 'control_open', value: 'Control bar opened'}, '*' );
-        }
+        UI.sendMessage('control_open', 'Control bar opened');
     },
 
     closeControlbar() {
@@ -1222,9 +1217,7 @@ const UI = {
         if (UI.rfb) {
             UI.rfb.focus();
         }
-        if (WebUtil.isInsideKasmVDI()) {
-             parent.postMessage({ action: 'control_close', value: 'Control bar closed'}, '*' );
-        }
+        UI.sendMessage('control_close', 'Control bar closed');
     },
 
     toggleControlbar() {
@@ -2179,7 +2172,7 @@ const UI = {
         }
 
         UI.kasmIdleTimeoutSent = true;
-        parent.postMessage({ action: 'idle_session_timeout', value: 'Idle session timeout exceeded'}, '*' );
+        UI.sendMessage('idle_session_timeout', 'Idle session timeout exceeded');
 
         // in some cases the intra-frame message could be blocked, fall back to navigating to a disconnect page.
         setTimeout(function() {
@@ -2500,7 +2493,7 @@ const UI = {
                     UI.enableHiDpi();
                     break;
                 case 'control_displays':
-                    parent.postMessage({ action: 'can_control_displays', value: true}, '*' );
+                    UI.sendMessage('can_control_displays', true);
                     break;
                 case 'enable_threading':
                     UI.forceSetting('enable_threading', event.data.value, false);
@@ -2556,7 +2549,7 @@ const UI = {
         }
 
         const detail = event.detail || {};
-        parent.postMessage({ action: 'disconnectrx', value: detail.reason}, '*' );
+        UI.sendMessage('disconnectrx', detail.reason);
         if (detail.serverNotice && detail.serverNotice.graceful) {
             setTimeout(() => window.location.replace('disconnected.html'), 3000);
         }
@@ -2564,7 +2557,7 @@ const UI = {
 
     toggleNav(){
         if (WebUtil.isInsideKasmVDI()) {
-            parent.postMessage({ action: 'togglenav', value: null}, '*' );
+            UI.sendMessage('togglenav', null);
         } else {
             UI.toggleControlbar();
             UI.keepControlbar();
@@ -2575,7 +2568,7 @@ const UI = {
     },
 
     clipboardRx(event) {
-        parent.postMessage({ action: 'clipboardrx', value: event.detail.text}, '*' ); //TODO fix star
+        UI.sendMessage('clipboardrx', event.detail.text);
     },
 
 /* ------^-------
@@ -2586,7 +2579,7 @@ const UI = {
 
     toggleFullscreen() {
         if (WebUtil.isInsideKasmVDI()) {
-             parent.postMessage({ action: 'fullscreen', value: 'Fullscreen clicked'}, '*' );
+             UI.sendMessage('fullscreen', 'Fullscreen clicked');
              return;
         }
         if (document.fullscreenElement || // alternative standard method

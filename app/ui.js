@@ -1777,7 +1777,7 @@ const UI = {
             let obj = JSON.parse(e.detail.text);
             let fps = UI.rfb.statsFps;
             if (!WebUtil.isInsideKasmVDI()) {
-                document.getElementById("noVNC_connection_stats").innerHTML = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
+                document.getElementById("noVNC_connection_stats").textContent = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
                 if (UI.fpsChart) {
                     UI.fpsChart.update(Number(fps));
                 }

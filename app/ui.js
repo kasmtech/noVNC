@@ -969,13 +969,11 @@ const UI = {
 
         const isImageMode = mode === encodings.pseudoEncodingStreamingModeJpegWebp;
         if (!isImageMode) {
-            // videoCodecConfigurations may not be populated yet (see the
-            // 'setvideoquality' case below for why) -- the ?. before [mode] only
-            // guards UI.rfb being null, not videoCodecConfigurations itself.
-            const config = configuration || UI.rfb?.videoCodecConfigurations?.[mode];
+            const videoCodecConfigurations = UI.rfb?.videoCodecConfigurations;
+            const config = configuration || videoCodecConfigurations?.[mode];
 
             if (WebUtil.isInsideKasmVDI()) {
-                const settingValue = UI.rfb?.videoCodecConfigurations?.[mode]?.presets;
+                const settingValue = videoCodecConfigurations?.[mode]?.presets;
                 if (settingValue) {
                     const quality = parseInt(WebUtil.readSetting('video_quality'));
                     const curQualityValue = parseInt(UI.getSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY));
@@ -2382,18 +2380,8 @@ const UI = {
                     const streamMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE));
                     const isJpegWebp = streamMode === encodings.pseudoEncodingStreamingModeJpegWebp;
                     const settingKey = isJpegWebp ? 'video_quality' : UI_SETTINGS.VIDEO_STREAM_QUALITY;
-                    // videoCodecConfigurations is populated from the server's VideoEncoders
-                    // message, which can arrive after "connected" -- a parent frame that
-                    // replays this message as soon as it sees "connected" (as kasmweb does)
-                    // can race it. Skip forcing the setting rather than throw when the
-                    // codec's preset table isn't populated yet: this doesn't leave a stale
-                    // value, since applyStreamMode()'s isInsideKasmVDI() branch re-derives
-                    // and applies the correct codec-specific quality the moment
-                    // videoCodecConfigurations populates (videocodecschange ->
-                    // initStreamModeSetting -> applyStreamMode), from the 'video_quality'
-                    // setting already seeded from the URL param at page load.
-                    const presets = isJpegWebp ? null : UI.rfb?.videoCodecConfigurations?.[streamMode]?.presets;
-                    const settingValue = isJpegWebp ? value : (Array.isArray(presets) ? presets[value] : undefined);
+                    const presets = UI.rfb?.videoCodecConfigurations?.[streamMode]?.presets;
+                    const settingValue = isJpegWebp ? value : presets?.[value];
 
                     if (settingValue !== undefined) {
                         UI.forceSetting(settingKey, settingValue, false);

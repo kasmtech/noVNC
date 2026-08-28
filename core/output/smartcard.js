@@ -15,6 +15,37 @@ const fromHex = (data = "") => {
   return new Uint8Array(data.match(/.{1,2}/g).map((b) => parseInt(b, 16)));
 };
 
+// dwEventState flag bits (PC/SC SCARD_STATE_*). The low word carries the flags
+// below; the high word is a per-reader event counter that increments on every
+// state transition, independent of the flags.
+const READER_STATE_FLAGS = [
+  [0x0002, "SCARD_STATE_CHANGED"],
+  [0x0004, "SCARD_STATE_UNKNOWN"],
+  [0x0008, "SCARD_STATE_UNAVAILABLE"],
+  [0x0010, "SCARD_STATE_EMPTY"],
+  [0x0020, "SCARD_STATE_PRESENT"],
+  [0x0040, "SCARD_STATE_ATRMATCH"],
+  [0x0080, "SCARD_STATE_EXCLUSIVE"],
+  [0x0100, "SCARD_STATE_INUSE"],
+  [0x0200, "SCARD_STATE_MUTE"],
+  [0x0400, "SCARD_STATE_UNPOWERED"],
+];
+
+const decodeReaderState = (state) => {
+  const value = typeof state === "string" ? parseInt(state, 16) : state;
+  const flags = value & 0xffff;
+  const eventCount = (value >>> 16) & 0xffff;
+  const names = READER_STATE_FLAGS.filter(([bit]) => flags & bit).map(([, name]) => name);
+
+  return {
+    value,
+    eventCount,
+    names,
+    present: Boolean(flags & 0x0020),
+    claimed: Boolean(flags & 0x0100),
+  };
+};
+
 // smartcard relay packet constants
 const REQUEST_STATUS = 0x01;
 const REQUEST_POWER_ON = 0x02;
@@ -86,7 +117,22 @@ const parseRelayPacket = (data) => {
   return { command, readerId, payload: data.slice(7, 7 + payloadLength) };
 };
 
-const KASM_SMARTCARD_EXTENSION_ID = "cjkohjfgidilbllbjkdhpoeonjanpomo";
+const KASM_SMARTCARD_EXTENSION_ID = "obhhhhhfhnmfoonndahjcjpkndkeompc";
+
+// Phase 1: transaction lease. A burst of APDUs (e.g. select-applet, verify-PIN,
+// read-object, sign) shares one SCardBeginTransaction/SCardEndTransaction pair
+// instead of one per APDU, closing the window in which a contending endpoint
+// process can grab and reset the card between them. Idle release lets the
+// endpoint's own smart card stack back in between bursts; the hard cap bounds
+// how long we can starve it even under continuous traffic.
+//
+// Not tunable from container-side middleware chattiness alone: the idle value
+// must also exceed the worst observed per-APDU round-trip latency on the
+// slowest supported topology (e.g. a WAN RDP session), or the lease expires
+// mid-gap on a slow link with no misbehaving endpoint process involved at all.
+// See smartcard-contention-fix-plan.md Phase 1.
+const TRANSACTION_IDLE_RELEASE_MS = 1000;
+const TRANSACTION_HARD_CAP_MS = 5000;
 
 // SmartcardSession is bound to one specific reader name.
 // readerId is the lane index (0..N-1) used for self-healing reader discovery.
@@ -105,6 +151,44 @@ class SmartcardSession {
     // see what the other lanes already hold. Defaults to "no peers" for a probe
     // session that isn't in any map.
     this.getPeerSessions = () => [];
+    this.lastEventCount = null;
+    this.lastContentionWarnAt = 0;
+    this.transactionHeld = false;
+    this.transactionAcquiredAt = null;
+    this.transactionIdleTimer = null;
+    this.transactionHardCapTimer = null;
+  }
+
+  // Warns when the reader reports the card claimed while we hold no handle on
+  // it -- the condition that precedes another endpoint process resetting the
+  // card underneath us. Contention is a steady-state condition, not an event
+  // (refresh() polls continuously), so this is rate-limited to keep the log
+  // that is meant to clarify the failure from being buried by it.
+  _noteReaderState(eventState, atr) {
+    if (eventState === undefined || eventState === null) return;
+
+    const state = decodeReaderState(eventState);
+    const previousCount = this.lastEventCount;
+    this.lastEventCount = state.eventCount;
+
+    if (!state.present || !state.claimed || this.cardHandle) return;
+
+    const now = Date.now();
+    if (now - this.lastContentionWarnAt < 30000) return;
+    this.lastContentionWarnAt = now;
+
+    const churn =
+      previousCount !== null && state.eventCount > previousCount
+        ? `, ${state.eventCount - previousCount} reader events since last poll`
+        : "";
+
+    Log.Warn(
+      `smartcard: reader[${this.readerId}] "${this.readerName}" reports ` +
+      `${state.names.join(" | ")} (0x${state.value.toString(16)}) but this session holds no ` +
+      `handle on it${churn}. Another application on this computer is using the card -- if it ` +
+      "resets the card between APDUs, PIN verification will be discarded and signing will " +
+      `fail with 6982. ATR=${atr || "(none)"}`
+    );
   }
 
   isReaderNameBoundElsewhere(readerName) {
@@ -147,8 +231,9 @@ class SmartcardSession {
       }
 
       if (this.readerName) {
-        this.cardAtr = await this._getStatusChange(refreshContext, this.readerName)
-          .then(({ atr }) => atr);
+        const { atr, eventState } = await this._getStatusChange(refreshContext, this.readerName);
+        this.cardAtr = atr;
+        this._noteReaderState(eventState, atr);
       } else {
         this.cardAtr = null;
       }
@@ -186,6 +271,10 @@ class SmartcardSession {
   }
 
   async powerOff() {
+    // Release any held transaction lease before disconnecting -- PC/SC expects
+    // the transaction ended before the handle it was taken on goes away.
+    await this._releaseTransactionLease();
+
     // The local handle/context fields MUST be cleared even if the PC/SC calls
     // fail — which they routinely do once the reader is physically gone
     // (_disconnect rejects with SCARD_E_* ). Leaving cardHandle set makes a later
@@ -205,19 +294,157 @@ class SmartcardSession {
   }
 
   async transmit(apdu) {
-    try {
-      await this._beginTransaction();
-    } catch (error) {}
+    await this._acquireTransactionLease();
 
     try {
       this.lastTransmitAt = Date.now();
-      return await this._transmit(apdu);
+      const response = await this._transmit(apdu);
+      this._armTransactionIdleTimer();
+      return response;
     } catch (error) {
       this.lastTransmitAt = null;
+
+      if ((error.message || "").toLowerCase() === SCARD_W_RESET_CARD) {
+        return await this._recoverFromReset(apdu);
+      }
+
+      // Phase 1: any other transmit error means the burst this lease was held
+      // for is over -- release rather than let idle/hard-cap timers hold it on
+      // a card session that has failed for an unrelated reason.
+      await this._releaseTransactionLease();
       throw error;
-    } finally {
-      await this._endTransaction();
     }
+  }
+
+  // Phase 2: SCARD_W_RESET_CARD means another process on the endpoint reset the
+  // card between our APDUs. A reconnect re-syncs our handle to the card's actual
+  // state and buys one retry -- it does NOT restore PIN-verified state, the
+  // container-side middleware still has to re-select the applet and re-prompt
+  // for the PIN. The win is a named, diagnosable failure instead of an opaque
+  // 6982 from every APDU after the reset. The "card_reset:" prefix is a marker
+  // the bridge (virtual-smartcard-bridge/src/bridge.py) matches on to classify
+  // this as transient rather than tearing down the whole vpcd connection.
+  async _recoverFromReset(apdu) {
+    Log.Warn(
+      `smartcard: reader[${this.readerId}] "${this.readerName}" transmit failed: the card ` +
+      "was reset by something other than this session mid-operation. Any PIN-verified " +
+      "state has been discarded; the card application must be re-selected and the PIN " +
+      "re-entered. Reconnecting and retrying once."
+    );
+
+    // The transaction this lease held died with the reset -- there is nothing
+    // left to end. Forget it rather than calling _endTransaction() on a
+    // transaction the card itself already invalidated.
+    this._forgetTransactionLease();
+
+    try {
+      this.activeProtocol = await this._reconnect();
+    } catch (reconnectError) {
+      throw new Error(`card_reset: reconnect failed after card reset (${reconnectError.message})`);
+    }
+
+    try {
+      await this._acquireTransactionLease();
+      this.lastTransmitAt = Date.now();
+      const response = await this._transmit(apdu);
+      this._armTransactionIdleTimer();
+      return response;
+    } catch (retryError) {
+      this.lastTransmitAt = null;
+      await this._releaseTransactionLease();
+      throw new Error(`card_reset: transmit failed again after reconnect (${retryError.message})`);
+    }
+  }
+
+  async _acquireTransactionLease() {
+    if (this.transactionHeld) {
+      this._armTransactionIdleTimer();
+      return;
+    }
+
+    try {
+      await this._beginTransaction();
+    } catch (error) {
+      // Matches the pre-lease behavior: SCardBeginTransaction can fail for
+      // reasons that shouldn't block the transmit itself (e.g. the container's
+      // pcsc-lite already treats the call as implicitly transactional). Do not
+      // mark the lease held, or release() would end a transaction we never
+      // actually began.
+      Log.Debug(
+        `smartcard: reader[${this.readerId}] "${this.readerName}" begin_transaction failed, ` +
+        `proceeding without a lease: ${error.message}`
+      );
+      return;
+    }
+
+    this.transactionHeld = true;
+    this.transactionAcquiredAt = Date.now();
+    Log.Debug(`smartcard: reader[${this.readerId}] "${this.readerName}" transaction lease acquired`);
+
+    this._armTransactionIdleTimer();
+    this.transactionHardCapTimer = setTimeout(() => {
+      Log.Debug(
+        `smartcard: reader[${this.readerId}] "${this.readerName}" transaction lease hit its ` +
+        `${TRANSACTION_HARD_CAP_MS}ms hard cap, releasing`
+      );
+      this._releaseTransactionLease();
+    }, TRANSACTION_HARD_CAP_MS);
+  }
+
+  _armTransactionIdleTimer() {
+    if (!this.transactionHeld) return;
+    if (this.transactionIdleTimer) clearTimeout(this.transactionIdleTimer);
+    this.transactionIdleTimer = setTimeout(() => {
+      Log.Debug(
+        `smartcard: reader[${this.readerId}] "${this.readerName}" transaction lease idle for ` +
+        `${TRANSACTION_IDLE_RELEASE_MS}ms, releasing`
+      );
+      this._releaseTransactionLease();
+    }, TRANSACTION_IDLE_RELEASE_MS);
+  }
+
+  // Ends the underlying transaction and clears lease bookkeeping. Safe to call
+  // whether or not a lease is currently held.
+  async _releaseTransactionLease(disposition = 0) {
+    if (this.transactionIdleTimer) {
+      clearTimeout(this.transactionIdleTimer);
+      this.transactionIdleTimer = null;
+    }
+    if (this.transactionHardCapTimer) {
+      clearTimeout(this.transactionHardCapTimer);
+      this.transactionHardCapTimer = null;
+    }
+    if (!this.transactionHeld) return;
+
+    this.transactionHeld = false;
+    this.transactionAcquiredAt = null;
+
+    try {
+      await this._endTransaction(disposition);
+      Log.Debug(`smartcard: reader[${this.readerId}] "${this.readerName}" transaction lease released`);
+    } catch (error) {
+      Log.Warn(
+        `smartcard: reader[${this.readerId}] "${this.readerName}" transaction lease release ` +
+        `failed: ${error.message}`
+      );
+    }
+  }
+
+  // Clears lease bookkeeping WITHOUT calling _endTransaction -- for the case
+  // where the underlying transaction is already gone (a card reset, or the
+  // reader/lane being torn down out from under it) and ending it would just be
+  // a doomed PC/SC call against a dead handle.
+  _forgetTransactionLease() {
+    if (this.transactionIdleTimer) {
+      clearTimeout(this.transactionIdleTimer);
+      this.transactionIdleTimer = null;
+    }
+    if (this.transactionHardCapTimer) {
+      clearTimeout(this.transactionHardCapTimer);
+      this.transactionHardCapTimer = null;
+    }
+    this.transactionHeld = false;
+    this.transactionAcquiredAt = null;
   }
 
   async _establishContext() {
@@ -257,6 +484,15 @@ class SmartcardSession {
 
   async _disconnect(context, cardHandle) {
     return await this._callExtension("disconnect", context, cardHandle, 0).then(([status]) => status);
+  }
+
+  // shareMode=2 (SCARD_SHARE_SHARED), protocol=3 (T0|T1) match _connect() above.
+  // initialization=0 (SCARD_LEAVE_CARD): the card was already reset by whatever
+  // we're recovering from, so there's no reason to reset it again ourselves.
+  async _reconnect() {
+    return await this._callExtension("reconnect", this.context, this.cardHandle, 2, 3, 0).then(
+      ([status, cardContext, cardHandle, activeProtocol]) => activeProtocol
+    );
   }
 
   async _beginTransaction() {
@@ -328,6 +564,10 @@ const SCARD_E_NO_READERS_AVAILABLE = "0x8010002e";
 
 const isNoReadersError = (error) =>
   (((error && error.message) || "").toLowerCase() === SCARD_E_NO_READERS_AVAILABLE);
+
+// SCARD_W_RESET_CARD, same case-insensitive reasoning as SCARD_E_NO_READERS_AVAILABLE
+// above. Used by transmit() to name the root cause instead of surfacing a bare 6982.
+const SCARD_W_RESET_CARD = "0x80100068";
 
 // Add a session to the lane map, wiring up the peer lookup its late-bind guard
 // needs. All session inserts must go through this.
@@ -434,6 +674,9 @@ const reconcileSessions = (sessions, readerNames) => {
       session.context = null;
       session.cardHandle = null;
       session.activeProtocol = null;
+      // The transaction (if any) belonged to the now-orphaned handle above; there
+      // is nothing left to end it against, so forget rather than release.
+      session._forgetTransactionLease();
       // Best-effort release of the now-orphaned handle/context, detached from the
       // session so its outcome can't touch the (possibly rebound) session state.
       if (staleContext && staleHandle) {

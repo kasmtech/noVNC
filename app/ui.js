@@ -969,10 +969,11 @@ const UI = {
 
         const isImageMode = mode === encodings.pseudoEncodingStreamingModeJpegWebp;
         if (!isImageMode) {
-            const config = configuration || UI.rfb?.videoCodecConfigurations[mode];
+            const videoCodecConfigurations = UI.rfb?.videoCodecConfigurations;
+            const config = configuration || videoCodecConfigurations?.[mode];
 
             if (WebUtil.isInsideKasmVDI()) {
-                const settingValue = UI.rfb?.videoCodecConfigurations[mode].presets;
+                const settingValue = videoCodecConfigurations?.[mode]?.presets;
                 if (settingValue) {
                     const quality = parseInt(WebUtil.readSetting('video_quality'));
                     const curQualityValue = parseInt(UI.getSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY));
@@ -2379,9 +2380,12 @@ const UI = {
                     const streamMode = parseInt(UI.getSetting(UI_SETTINGS.STREAM_MODE));
                     const isJpegWebp = streamMode === encodings.pseudoEncodingStreamingModeJpegWebp;
                     const settingKey = isJpegWebp ? 'video_quality' : UI_SETTINGS.VIDEO_STREAM_QUALITY;
-                    const settingValue = isJpegWebp ? value : UI.rfb.videoCodecConfigurations[streamMode].presets[value];
+                    const presets = UI.rfb?.videoCodecConfigurations?.[streamMode]?.presets;
+                    const settingValue = isJpegWebp ? value : presets?.[value];
 
-                    UI.forceSetting(settingKey, settingValue, false);
+                    if (settingValue !== undefined) {
+                        UI.forceSetting(settingKey, settingValue, false);
+                    }
 
                     if (event.data.frameRate !== undefined) {
                         //apply preset mode values, but don't apply to connection

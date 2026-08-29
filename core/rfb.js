@@ -3660,27 +3660,32 @@ export default class RFB extends EventTargetMixin {
                 let streamInflator = new Inflator();
                 let textData = null;
 
-                streamInflator.setInput(zlibStream);
-                for (let i = 0; i <= 15; i++) {
-                    let format = 1 << i;
+                try {
+                    streamInflator.setInput(zlibStream);
+                    for (let i = 0; i <= 15; i++) {
+                        let format = 1 << i;
 
-                    if (formats & format) {
+                        if (formats & format) {
 
-                        let size = 0x00;
-                        let sizeArray = streamInflator.inflate(4);
+                            let size = 0x00;
+                            let sizeArray = streamInflator.inflate(4);
 
-                        size |= (sizeArray[0] << 24);
-                        size |= (sizeArray[1] << 16);
-                        size |= (sizeArray[2] << 8);
-                        size |= (sizeArray[3]);
-                        let chunk = streamInflator.inflate(size);
+                            size |= (sizeArray[0] << 24);
+                            size |= (sizeArray[1] << 16);
+                            size |= (sizeArray[2] << 8);
+                            size |= (sizeArray[3]);
+                            let chunk = streamInflator.inflate(size);
 
-                        if (format === extendedClipboardFormatText) {
-                            textData = chunk;
+                            if (format === extendedClipboardFormatText) {
+                                textData = chunk;
+                            }
                         }
                     }
+                    streamInflator.setInput(null);
+                } catch (err) {
+                    streamInflator.setInput(null);
+                    return this._fail("Error decoding data: " + err);
                 }
-                streamInflator.setInput(null);
 
                 if (textData !== null) {
                     let tmpText = "";

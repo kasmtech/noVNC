@@ -31,6 +31,12 @@ import DES from "./des.js";
 import KeyTable from "./input/keysym.js";
 import XtScancode from "./input/xtscancodes.js";
 import { encodings } from "./encodings.js";
+import {
+    FRAME_RATE_MAX,
+    FRAME_RATE_MIN,
+    frameRateToPseudoEncoding,
+    isValidFrameRate,
+} from "./util/frame-rate.js";
 import { messages } from "./messages.js";
 import { MouseButtonMapper, xvncButtonToMask } from "./mousebuttonmapper.js";
 
@@ -172,6 +178,15 @@ export default class RFB extends EventTargetMixin {
 
         this._trackFrameStats = false;
 
+        // Client-side input-to-photon latency measurement
+        this._inputLatencyEnabled = false;
+        this._pendingInputs = [];
+        this._latencyStats = [];
+        this._maxPendingInputs = 50;
+        this._nextMeasurementId = 1;
+        this._inflightMeasurementId = null;
+        this._pendingLatencyRender = null;
+
         this._clipboardText = null;
         this._clipboardServerCapabilitiesActions = {};
         this._clipboardServerCapabilitiesFormats = {};
@@ -300,6 +315,7 @@ export default class RFB extends EventTargetMixin {
             throw exc;
         }
         this._display.onflush = this._onFlush.bind(this);
+        this._display.onFrameRendered = this._onFrameRendered.bind(this);
 
         // populate decoder array with objects
         this._decoders[encodings.encodingRaw] = new RawDecoder();
@@ -351,7 +367,6 @@ export default class RFB extends EventTargetMixin {
     }
 
     // ===== PROPERTIES =====
-
     get connectionID() { return this._connectionID; }
 
     get translateShortcuts() { return this._keyboard.translateShortcuts; }
@@ -632,8 +647,8 @@ export default class RFB extends EventTargetMixin {
 
     get frameRate() { return this._frameRate; }
     set frameRate(value) {
-        if (!Number.isInteger(value) || value < 1 || value > 120) {
-            Log.Error("frame rate must be an integer between 1 and 120");
+        if (!isValidFrameRate(value)) {
+            Log.Error(`frame rate must be an integer between ${FRAME_RATE_MIN} and ${FRAME_RATE_MAX}`);
             return;
         }
 
@@ -1041,6 +1056,10 @@ export default class RFB extends EventTargetMixin {
             return;
         }
 
+        if (down && this._inputLatencyEnabled) {
+            this._trackInputEvent('keydown', 0, 0);
+        }
+
         const scancode = XtScancode[code];
 
         if (this._qemuExtKeyEventSupported && scancode) {
@@ -1204,7 +1223,9 @@ export default class RFB extends EventTargetMixin {
 
     requestBottleneckStats() {
         if (this._isPrimaryDisplay) {
-            RFB.messages.requestStats(this._sock);
+            RFB.messages.requestStats(this._sock, messages.msgTypeRequestStats);
+            RFB.messages.requestStats(this._sock, messages.msgTypeNetworkStats);
+            RFB.messages.requestStats(this._sock, messages.msgTypeSystemStats);
         }
     }
 
@@ -2361,6 +2382,11 @@ export default class RFB extends EventTargetMixin {
 
         if (down) {
             this._mouseButtonMask |= bmask;
+
+            // Track input for latency measurement (client-side only)
+            if (this._inputLatencyEnabled) {
+                this._trackInputEvent('mousedown', x, y);
+            }
         } else {
             this._mouseButtonMask &= ~bmask;
         }
@@ -2483,6 +2509,118 @@ export default class RFB extends EventTargetMixin {
         if (this._viewOnly) { return; }
         if (!this._isPrimaryDisplay) { return; }
         RFB.messages.directMouseEvent(this._sock, dx, dy, buttonMask, scrollDX, scrollDY);
+    }
+
+    _trackInputEvent(eventType, x, y) {
+        const now = performance.now();
+        const measurementId = this._nextMeasurementId++;
+
+        if (this._nextMeasurementId > 0xFFFFFFFF) {
+            this._nextMeasurementId = 1;
+        }
+
+        // Drop entries older than 2 seconds — they will never be matched
+        while (this._pendingInputs.length > 0 &&
+               (now - this._pendingInputs[0].timestamp) > 2000) {
+            this._pendingInputs.shift();
+        }
+
+        this._pendingInputs.push({
+            timestamp: now,
+            type: eventType,
+            x: x,
+            y: y,
+            measurementId: measurementId
+        });
+
+        // Only send one measurement request at a time. If a previous
+        // request is still in flight, skip sending — the server uses a
+        // single slot so it would overwrite the old ID anyway, and the
+        // near-instant response for an ID that arrived mid-frame-update
+        // produces false low-latency readings.
+        if (this._rfbConnectionState === 'connected' &&
+            this._inflightMeasurementId === null) {
+            this._inflightMeasurementId = measurementId;
+            RFB.messages.latencyMeasurementRequest(this._sock, measurementId);
+        }
+    }
+
+    _recordLatencyMeasurement(measurement) {
+        this._latencyStats.push(measurement);
+
+        // Keep only last 50 measurements for responsive averages
+        while (this._latencyStats.length > 50) {
+            this._latencyStats.shift();
+        }
+
+        // Calculate and emit statistics
+        if (this._latencyStats.length >= 3) {
+            const totalStats = this._calculateStats(this._latencyStats.map(m => m.totalLatency));
+            const networkStats = this._calculateStats(this._latencyStats.map(m => m.networkLatency));
+            const renderStats = this._calculateStats(this._latencyStats.map(m => m.clientRenderTime));
+
+            Log.Debug(`[latency stats] samples=${this._latencyStats.length} total avg=${totalStats.avg.toFixed(1)}ms p50=${totalStats.p50.toFixed(1)}ms p95=${totalStats.p95.toFixed(1)}ms network avg=${networkStats.avg.toFixed(1)}ms render avg=${renderStats.avg.toFixed(1)}ms`);
+
+            // Emit event for UI
+            this.dispatchEvent(new CustomEvent('inputlatency', {
+                detail: {
+                    latest: measurement.totalLatency,
+                    average: totalStats.avg,
+                    min: totalStats.min,
+                    max: totalStats.max,
+                    p50: totalStats.p50,
+                    p95: totalStats.p95,
+                    p99: totalStats.p99,
+                    networkAvg: networkStats.avg,
+                    networkP95: networkStats.p95,
+                    renderAvg: renderStats.avg,
+                    renderP95: renderStats.p95,
+                    samples: this._latencyStats.length
+                }
+            }));
+
+            // Log periodically
+            if (this._latencyStats.length % 100 === 0)
+                Log.Info(`Input latency: total avg=${totalStats.avg.toFixed(1)}ms p95=${totalStats.p95.toFixed(1)}ms network avg=${networkStats.avg.toFixed(1)}ms render avg=${renderStats.avg.toFixed(1)}ms (${this._latencyStats.length} samples)`);
+        }
+    }
+
+    _calculateStats(values) {
+        const sorted = [...values].sort((a, b) => a - b);
+        const sum = values.reduce((a, b) => a + b, 0);
+        const n = sorted.length;
+        const percentile = (p) => sorted[Math.min(Math.ceil(n * p) - 1, n - 1)];
+
+        return {
+            avg: sum / n,
+            min: sorted[0],
+            max: sorted[n - 1],
+            p50: percentile(0.50),
+            p95: percentile(0.95),
+            p99: percentile(0.99)
+        };
+    }
+
+    // Public API for enabling/disabling latency measurement
+    enableInputLatencyMeasurement(enabled) {
+        this._inputLatencyEnabled = enabled;
+
+        if (!enabled) {
+            this._pendingInputs = [];
+            this._pendingLatencyRender = null;
+            this._inflightMeasurementId = null;
+        }
+
+        Log.Info(`Input latency measurement ${enabled ? 'enabled' : 'disabled'}`);
+    }
+
+    getInputLatencyStats() {
+        if (this._latencyStats.length === 0) {
+            return null;
+        }
+
+        const latencies = this._latencyStats.map(m => m.latency);
+        return this._calculateStats(latencies);
     }
 
     _handleWheel(ev) {
@@ -3329,7 +3467,7 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingVideoTimeLevel0 + this.videoTime);
         encs.push(encodings.pseudoEncodingVideoOutTimeLevel1 + this.videoOutTime - 1);
         encs.push(encodings.pseudoEncodingVideoScalingLevel0 + this.videoScaling);
-        encs.push(encodings.pseudoEncodingFrameRateLevel10 + this.frameRate - 10);
+        encs.push(frameRateToPseudoEncoding(this.frameRate));
         encs.push(encodings.pseudoEncodingMaxVideoResolution);
 
         // Order is important: first options, then streaming mode
@@ -3520,27 +3658,32 @@ export default class RFB extends EventTargetMixin {
                 let streamInflator = new Inflator();
                 let textData = null;
 
-                streamInflator.setInput(zlibStream);
-                for (let i = 0; i <= 15; i++) {
-                    let format = 1 << i;
+                try {
+                    streamInflator.setInput(zlibStream);
+                    for (let i = 0; i <= 15; i++) {
+                        let format = 1 << i;
 
-                    if (formats & format) {
+                        if (formats & format) {
 
-                        let size = 0x00;
-                        let sizeArray = streamInflator.inflate(4);
+                            let size = 0x00;
+                            let sizeArray = streamInflator.inflate(4);
 
-                        size |= (sizeArray[0] << 24);
-                        size |= (sizeArray[1] << 16);
-                        size |= (sizeArray[2] << 8);
-                        size |= (sizeArray[3]);
-                        let chunk = streamInflator.inflate(size);
+                            size |= (sizeArray[0] << 24);
+                            size |= (sizeArray[1] << 16);
+                            size |= (sizeArray[2] << 8);
+                            size |= (sizeArray[3]);
+                            let chunk = streamInflator.inflate(size);
 
-                        if (format === extendedClipboardFormatText) {
-                            textData = chunk;
+                            if (format === extendedClipboardFormatText) {
+                                textData = chunk;
+                            }
                         }
                     }
+                    streamInflator.setInput(null);
+                } catch (err) {
+                    streamInflator.setInput(null);
+                    return this._fail("Error decoding data: " + err);
                 }
-                streamInflator.setInput(null);
 
                 if (textData !== null) {
                     let tmpText = "";
@@ -3676,18 +3819,20 @@ export default class RFB extends EventTargetMixin {
         );
     }
 
-    _handle_server_stats_msg() {
+    _handleServerStatsMsg(stats) {
         this._sock.rQskipBytes(3);  // Padding
         const length = this._sock.rQshift32();
-        if (this._sock.rQwait("KASM bottleneck stats", length, 8)) { return false; }
+        if (this._sock.rQwait("KASM " + stats, length, 8)) {
+            return false;
+        }
 
         const text = this._sock.rQshiftStr(length);
 
-        Log.Debug("Received KASM bottleneck stats:");
-        Log.Debug(text);
+        Log.Debug("Received KASM '" + stats + "':");
+        // Log.Debug(text);
         this.dispatchEvent(new CustomEvent(
-            "bottleneck_stats",
-            { detail: { text: text } }));
+            stats,
+            {detail: {text: text}}));
 
         return true;
     }
@@ -3779,6 +3924,64 @@ export default class RFB extends EventTargetMixin {
         return true;
     }
 
+    _handleLatencyMeasurementResponse() {
+        if (this._sock.rQwait("LatencyMeasurement", 7, 1))
+            return false;
+
+        this._sock.rQskipBytes(3);
+        const measurementId = this._sock.rQshift32();
+
+        // Clear in-flight tracker so the next input can send a new request
+        if (this._inflightMeasurementId === measurementId) {
+            this._inflightMeasurementId = null;
+        }
+
+        const idx = this._pendingInputs.findIndex(
+            input => input.measurementId === measurementId
+        );
+
+        if (idx !== -1) {
+            const entry = this._pendingInputs[idx];
+            // Remove the matched entry and all older unmatched entries
+            this._pendingInputs.splice(0, idx + 1);
+
+            this._pendingLatencyRender = {
+                inputTimestamp: entry.timestamp,
+                echoTimestamp: performance.now(),
+                type: entry.type,
+                measurementId: measurementId
+            };
+        }
+
+        return true;
+    }
+
+    _onFrameRendered() {
+        if (!this._pendingLatencyRender)
+            return;
+
+        const now = performance.now();
+        const pending = this._pendingLatencyRender;
+        this._pendingLatencyRender = null;
+
+        if (now - pending.echoTimestamp > 1000)
+            return;
+
+        const totalLatency = now - pending.inputTimestamp;
+        const clientRenderTime = now - pending.echoTimestamp;
+        const networkLatency = totalLatency - clientRenderTime;
+
+        Log.Debug(`[latency] id=${pending.measurementId} type=${pending.type} total=${totalLatency.toFixed(1)}ms network=${networkLatency.toFixed(1)}ms render=${clientRenderTime.toFixed(1)}ms`);
+        this._recordLatencyMeasurement({
+            totalLatency,
+            clientRenderTime,
+            networkLatency,
+            type: pending.type,
+            timestamp: now,
+            measurementId: pending.measurementId
+        });
+    }
+
     _normalMsg() {
         let msgType;
         if (this._FBU.rects > 0) {
@@ -3830,13 +4033,16 @@ export default class RFB extends EventTargetMixin {
                 }
                 return true;
 
-            case 178: // KASM bottleneck stats
-                return this._handle_server_stats_msg();
+            case messages.msgTypeRequestStats: // KASM bottleneck stats
+                return this._handleServerStatsMsg("bottleneck_stats");
 
-            case 179: // KASM requesting frame stats
+            case messages.msgTypeFrameStats: // KASM requesting frame stats
                 this._trackFrameStats = true;
                 return true;
-
+            case messages.msgTypeNetworkStats:
+                return this._handleServerStatsMsg("network_stats");
+            case messages.msgTypeSystemStats:
+                return this._handleServerStatsMsg("system_stats");
             case 180: // KASM binary clipboard
                 return this._handleBinaryClipboard();
 
@@ -3853,6 +4059,9 @@ export default class RFB extends EventTargetMixin {
 
             case messages.msgTypeForceGameMode:
                 return this._handleForceGameMode();
+
+            case messages.msgTypeLatencyMeasurement:
+                return this._handleLatencyMeasurementResponse();
 
             case messages.msgTypeVideoEncoders:
                 return this._handleServerVideoEncoders();
@@ -4718,6 +4927,24 @@ RFB.messages = {
         sock.flush();
     },
 
+    latencyMeasurementRequest(sock, measurementId) {
+        const buff = sock._sQ;
+        const offset = sock._sQlen;
+
+        buff[offset] = messages.msgTypeLatencyMeasurement;
+        buff[offset + 1] = 0;
+        buff[offset + 2] = 0;
+        buff[offset + 3] = 0;
+
+        buff[offset + 4] = (measurementId >> 24) & 0xff;
+        buff[offset + 5] = (measurementId >> 16) & 0xff;
+        buff[offset + 6] = (measurementId >> 8) & 0xff;
+        buff[offset + 7] = measurementId & 0xff;
+
+        sock._sQlen += 8;
+        sock.flush();
+    },
+
     // Used to build Notify and Request data.
     _buildExtendedClipboardFlags(actions, formats) {
         let data = new Uint8Array(4);
@@ -5054,13 +5281,12 @@ RFB.messages = {
         sock.flush();
     },
 
-    requestStats(sock) {
+    requestStats(sock, msgType) {
         const buff = sock._sQ;
+        if (buff == null) return;
+
         const offset = sock._sQlen;
-
-        if (buff == null) { return; }
-
-        buff[offset] = 178; // msg-type
+        buff[offset] = msgType; // msg-type
 
         buff[offset + 1] = 0; // padding
         buff[offset + 2] = 0; // padding

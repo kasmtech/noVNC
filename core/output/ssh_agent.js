@@ -1,18 +1,9 @@
 import * as Log from "../../core/util/logging.js";
 
-// ssh_agent relay packet constants.
-// Unlike fido2/smartcard (single implicit device, one request outstanding at
-// a time), SSH-agent forwarding must multiplex multiple concurrent guest
-// connections (e.g. two terminals both running git at once) over the one
-// relay channel, so every packet carries a connectionId assigned by the
-// guest-side ssh_agent_bridge.py daemon - see that file's module docstring
-// for the full architecture.
 const EVENT_DATA = 0x01;   // one complete raw SSH-agent-protocol frame (bidirectional)
 const EVENT_CLOSE = 0x02;  // tear down this connection (bidirectional)
 const EVENT_ERROR = 0x03;  // client's local agent is unreachable (client -> guest only)
 
-// Same version-marker convention as fido2.js/smartcard.js's v1 header:
-// [0x10][connectionId (4, BE)][event (1)][length (4, BE)][payload]
 const PROTOCOL_VERSION_V1 = 0x10;
 
 const eventToString = (event) => {
@@ -23,7 +14,6 @@ const eventToString = (event) => {
     }[event] || `0x${event.toString(16).toUpperCase()}`;
 };
 
-// header layout: [version(1)][connectionId(4, BE)][event(1)][length(4, BE)] = 10 bytes
 const createRelayPacket = (connectionId, event, payload = new Uint8Array(0)) => {
     const packet = new Uint8Array(10 + payload.length);
     packet[0] = PROTOCOL_VERSION_V1;
@@ -41,9 +31,6 @@ const createRelayPacket = (connectionId, event, payload = new Uint8Array(0)) => 
     return packet;
 };
 
-// parseRelayPacket: the container-side ssh_agent_bridge sends DATA/CLOSE
-// events for guest-initiated connections; this side may also send CLOSE/
-// ERROR back for connections it can't service.
 const parseRelayPacket = (data) => {
     if (!data || data.length < 10 || data[0] !== PROTOCOL_VERSION_V1) {
         throw new Error("relay_packet_invalid");
@@ -73,9 +60,6 @@ const base64ToBuffer = (b64) => {
 
 const KASM_SSH_AGENT_EXTENSION_ID = "obhhhhhfhnmfoonndahjcjpkndkeompc";
 
-// Forwards one ssh_agent_forward call to the client's real browser extension
-// (kasm-device-extension), which routes it to the native host's
-// ssh_agent_data/ssh_agent_close commands. Mirrors fido2.js's callExtension.
 const callExtension = (connectionId, event, payload) => {
     return new Promise((resolve, reject) => {
         const message = {

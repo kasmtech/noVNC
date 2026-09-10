@@ -1,20 +1,11 @@
 import * as Log from "../../core/util/logging.js";
 
-// fido2 relay packet constants.
-// Unlike smartcard.js, the payload here is a UTF-8 JSON blob carrying a
-// structured WebAuthn-level request/response (rpId, clientDataHash, etc.),
-// not raw APDU bytes - see smart-card-cpp-native-client's ctap_functions.cpp
-// for why (libfido2 handles CTAP2 PIN/UV token derivation, so the client
-// never has to speak raw CTAPHID frames itself).
 const REQUEST_MAKE_CREDENTIAL = 0x01;
 const REQUEST_GET_ASSERTION = 0x02;
 const REQUEST_LIST_DEVICES = 0x03;
 const RESPONSE_ACK = 0x80;
 const RESPONSE_ERROR = 0x81;
 
-// Same version-marker convention as smartcard.js's v1 header, so a future
-// legacy-less-capable bridge/client pairing can still be told apart:
-// [0x10][command (1)][device_id (1)][U32 length (4)][payload]
 const PROTOCOL_VERSION_V1 = 0x10;
 
 const commandToString = (command) => {
@@ -27,7 +18,6 @@ const commandToString = (command) => {
     }[command] || `0x${command.toString(16).toUpperCase()}`;
 };
 
-// createRelayPacket: fido2.js only sends responses (RESPONSE_ACK / RESPONSE_ERROR).
 const createRelayPacket = (command, deviceId, payload = new Uint8Array(0)) => {
     if (command !== RESPONSE_ACK && command !== RESPONSE_ERROR) {
         throw new Error("invalid_relay_response");
@@ -45,7 +35,6 @@ const createRelayPacket = (command, deviceId, payload = new Uint8Array(0)) => {
     return packet;
 };
 
-// parseRelayPacket: the container-side fido2 bridge sends requests.
 const parseRelayPacket = (data) => {
     if (!data || data.length < 7 || data[0] !== PROTOCOL_VERSION_V1) {
         throw new Error("relay_packet_invalid");
@@ -64,12 +53,7 @@ const decodeJson = (payload) => (payload.length === 0 ? {} : JSON.parse(new Text
 
 const KASM_FIDO2_EXTENSION_ID = "obhhhhhfhnmfoonndahjcjpkndkeompc";
 
-// Forwards a request to the client's real browser extension
-// (kasm-smartcard-extension), which routes ctap_* commands to the native
-// host's libfido2-backed CTAP handling. Mirrors smartcard.js's
-// SmartcardSession._callExtension, but the payload here is a single
-// structured params object rather than positional hex/int args (see
-// background.js's isCtapCommand branch in onMessageExternal).
+
 const callExtension = (type, params) => {
     return new Promise((resolve, reject) => {
         const message = {

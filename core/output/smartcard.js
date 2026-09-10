@@ -313,17 +313,8 @@ class SmartcardSession {
 // user is sent off troubleshooting the extension instead of plugging in a reader.
 let extensionResponsive = false;
 
-// A rejection carrying a PC/SC status code (e.g. "0x8010002E" =
-// SCARD_E_NO_READERS_AVAILABLE) means the native host DID answer — the extension is
-// working, there just isn't a reader attached. Only a transport-level failure
-// (chrome.runtime.lastError: extension missing, disabled, or native host not
-// installed) means it is genuinely unreachable.
 const isPcscStatusError = (error) => /^0x[0-9a-f]{8}$/i.test((error && error.message) || "");
 
-// SCARD_E_NO_READERS_AVAILABLE. Compared case-INSENSITIVELY on purpose: the native
-// host formats the code uppercase ("0x8010002E"), but it reaches us via the
-// extension's asHex() (BigInt.toString(16)), which lowercases it — a case-sensitive
-// match here would silently never fire.
 const SCARD_E_NO_READERS_AVAILABLE = "0x8010002e";
 
 const isNoReadersError = (error) =>
@@ -337,10 +328,6 @@ const registerSession = (sessions, laneId, session) => {
   return session;
 };
 
-// Live PC/SC reader enumeration — establish a throwaway context, list readers,
-// release it. Used both for the one-time startup warm start and for every
-// REQUEST_INITIALIZE discovery request, so discovery always reflects reality
-// instead of replaying whatever was seen at page load.
 const enumerateReaders = async () => {
   const probe = new SmartcardSession(null);
   let ctx;
@@ -378,11 +365,6 @@ const enumerateReaders = async () => {
   }
 };
 
-// Discover the current reader list and build a session Map:
-// lane i → the i-th reader from list_readers, capped at MAX_READER_LANES.
-// Empty lanes (no reader bound) are left out of the map; lane 0 always exists for compat.
-// This is a one-time warm start only — ongoing discovery is driven by
-// reconcileSessions() on every REQUEST_INITIALIZE.
 const initializeSessions = async () => {
   const sessions = new Map();
   let readers = [];
@@ -399,8 +381,9 @@ const initializeSessions = async () => {
     await session.refresh().catch(() => {});
   }
 
-  // Always provide lane 0 for backward compat with v0 (legacy single-reader) bridges.
-  // readerId is set so refresh() can late-bind the reader if discovery failed at startup.
+  // Always provide lane 0: a bridge may address lane 0 before discovery has bound
+  // any reader to it. readerId is set so refresh() can late-bind the reader if
+  // discovery failed at startup.
   if (!sessions.has(0)) {
     registerSession(sessions, 0, new SmartcardSession(null, 0));
   }
@@ -434,8 +417,7 @@ const reconcileSessions = (sessions, readerNames) => {
       session.context = null;
       session.cardHandle = null;
       session.activeProtocol = null;
-      // Best-effort release of the now-orphaned handle/context, detached from the
-      // session so its outcome can't touch the (possibly rebound) session state.
+
       if (staleContext && staleHandle) {
         session._disconnect(staleContext, staleHandle)
           .catch(() => {})
@@ -579,8 +561,6 @@ export default async (rfb) => {
         const readerNames = await enumerateReaders();
         reconcileSessions(sessions, readerNames);
       } catch (error) {
-        // A native-host hiccup must not flap live lanes — keep the existing
-        // bindings and reply with whatever the session map currently holds.
         Log.Warn(`smartcard: discovery enumeration failed, keeping existing bindings: ${error.message}`);
       }
       broadcastStatus(sessions);
@@ -603,8 +583,10 @@ export default async (rfb) => {
     try {
       switch (command) {
         case REQUEST_INITIALIZE:
-          // Legacy path: a v0/pre-discovery-lane bridge sending INITIALIZE on a
-          // real lane. Reply from current bindings without a live re-enumeration.
+          // A v1 bridge predating the discovery lane sends INITIALIZE on a real
+          // lane. Reply from current bindings without a live re-enumeration.
+          // (True v0 bridges never reach here — parseRelayPacket rejects them on
+          // the version byte.)
           sendSmartcardResponse(readerId, RESPONSE_ACK, encodeReaderList(sessions));
           break;
 

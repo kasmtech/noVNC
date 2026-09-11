@@ -483,17 +483,17 @@ export default class Display {
                 this._portRelayWorker.port.start();
                 this._portRelayWorker.port.onmessage = (e) => {
                     if (e.data.type === 'port') {
-                        const screen = this._screens[e.data.screenIndex];
+                        const screen = this._screens.find(s => s.screenID === e.data.screenID);
                         if (screen) {
                             screen.encodedFramePort = e.data.port;
-                            Log.Info(`[PRIMARY] encodedFramePort established for screen ${e.data.screenIndex}`);
+                            Log.Info(`[PRIMARY] encodedFramePort established for screen ${screen.screenIndex}`);
                         }
                     }
                 };
             }
             this._portRelayWorker.port.postMessage({
                 type: 'primary_ready',
-                screenIndex: new_screen.screenIndex
+                screenID: new_screen.screenID
             });
 
             return new_screen.screenIndex;
@@ -524,7 +524,6 @@ export default class Display {
                 this.screens[i].screenIndex = i;
                 if (i > 0) {
                     this._screens[i].channel?.postMessage({ eventType: "registered", screenIndex: i });
-                    this._portRelayWorker?.port.postMessage({ type: 'primary_ready', screenIndex: i });
                 }
             }
             return removed;
@@ -1058,7 +1057,7 @@ export default class Display {
                             Log.Info(`[SECONDARY] encodedFramePort established`);
                         }
                     };
-                    relayWorker.port.postMessage({type: 'secondary_ready', screenIndex});
+                    relayWorker.port.postMessage({type: 'secondary_ready', screenID: this.screenID});
                 }
                 break;
 

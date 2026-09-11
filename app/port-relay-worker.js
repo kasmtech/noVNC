@@ -3,32 +3,29 @@
  * between the primary display and a secondary display window.
  *
  * Protocol:
- *   Primary  → worker: { type: 'primary_ready',   screenIndex: N }
- *   Secondary → worker: { type: 'secondary_ready', screenIndex: N }
+ *   Primary   --> worker: { type: 'primary_ready',   screenID: <uuid> }
+ *   Secondary --> worker: { type: 'secondary_ready', screenID: <uuid> }
  *
- *   Worker → primary:   { type: 'port', screenIndex: N, port: MessagePort }
- *   Worker → secondary: { type: 'port', port: MessagePort }
+ *   Worker --> primary:   { type: 'port', screenID: <uuid>, port: MessagePort }
+ *   Worker --> secondary: { type: 'port', port: MessagePort }
  *
- * Once both sides have registered for the same screenIndex the worker creates
- * a MessageChannel and transfers one port to each side, then deletes the room
- * entry — it is no longer in the data path after handoff.
  */
 
-const rooms = new Map(); // screenIndex → { primaryPort?, secondaryPort? }
+const rooms = new Map(); // screenID --> { primaryPort?, secondaryPort? }
 
 self.onconnect = function (e) {
     const port = e.ports[0];
     port.start();
 
     port.onmessage = function (ev) {
-        const {type, screenIndex} = ev.data;
-        if (typeof screenIndex !== 'number')
+        const {type, screenID} = ev.data;
+        if (screenID === undefined || screenID === '')
             return;
 
-        if (!rooms.has(screenIndex))
-            rooms.set(screenIndex, {});
+        if (!rooms.has(screenID))
+            rooms.set(screenID, {});
 
-        const room = rooms.get(screenIndex);
+        const room = rooms.get(screenID);
 
         if (type === 'primary_ready') {
             room.primaryPort = port;
@@ -40,9 +37,9 @@ self.onconnect = function (e) {
 
         if (room.primaryPort && room.secondaryPort) {
             const {port1, port2} = new MessageChannel();
-            room.primaryPort.postMessage({type: 'port', screenIndex, port: port1}, [port1]);
+            room.primaryPort.postMessage({type: 'port', screenID, port: port1}, [port1]);
             room.secondaryPort.postMessage({type: 'port', port: port2}, [port2]);
-            rooms.delete(screenIndex);
+            rooms.delete(screenID);
         }
     };
 };

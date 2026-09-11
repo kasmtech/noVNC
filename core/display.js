@@ -18,6 +18,12 @@ import {Canvas2DRenderer} from "./renderers/Canvas2DRenderer";
 import {WebGLRenderer} from "./renderers/WebGLRenderer";
 import { perfLogger } from './util/performance-logger.js';
 
+export const MAX_FB_DIMENSION = 8192;
+
+export function clampDimension(value) {
+    return Math.min(Math.max(0, Math.floor(value)), MAX_FB_DIMENSION);
+}
+
 export default class Display {
     constructor(target, rfb, isPrimaryDisplay, videoRenderingMode = 'canvas2d') {
         Log.Debug(">> Display.constructor");
@@ -617,6 +623,9 @@ export default class Display {
     }
 
     resize(width, height) {
+        width = clampDimension(width);
+        height = clampDimension(height);
+
         this._fbWidth = width;
         this._fbHeight = height;
 

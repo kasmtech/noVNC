@@ -78,6 +78,7 @@ export const encodings = {
     pseudoEncodingTreatLosslessLevel0: -1003,
     pseudoEncodingTreatLosslessLevel10: -993,
     pseudoEncodingPreferBandwidth: -992,
+    pseudoEncodingWebRTCCongestionControl: -990,
     pseudoEncodingDynamicQualityMinLevel0: -991,
     pseudoEncodingDynamicQualityMinLevel9: -982,
     pseudoEncodingDynamicQualityMaxLevel0: -981,

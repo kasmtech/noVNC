@@ -1365,7 +1365,9 @@ export default class RFB extends EventTargetMixin {
         // Make our elements part of the page
         this._target.appendChild(this._screen);
 
-        this._gestures.attach(this._canvas);
+        if (this._touchMode !== 'native') {
+            this._gestures.attach(this._canvas);
+        }
 
         this._cursor.attach(this._canvas);
         this._refreshCursor();
@@ -1603,8 +1605,14 @@ export default class RFB extends EventTargetMixin {
 
     _updateHiddenKeyboard(event) {
         // On iOS 15 the navigation bar is at the bottom so we need to account for it
+        const input = document.getElementById('noVNC_keyboardinput');
         const y = Math.max(0, event.pageY - 50);
-        document.querySelector("#noVNC_keyboardinput").style.top = `${y}px`;
+        input.style.top = `${y}px`;
+        input.style.left = `${event.pageX}px`;
+
+        requestAnimationFrame(() => {
+            input.style.pointerEvents = 'none';
+        });
     }
 
     _handleFocusChange(event) {
@@ -1662,6 +1670,11 @@ export default class RFB extends EventTargetMixin {
         }
 
         if (!this.focusOnClick) {
+            return;
+        }
+
+        if (isIOS() && this._touchMode === 'native' &&
+            (event.type === 'touchstart' || event.type === 'touchend')) {
             return;
         }
 
@@ -2704,7 +2717,26 @@ export default class RFB extends EventTargetMixin {
 
         Log.Debug(`Native touch event: ${ev.type}, touches: ${ev.changedTouches.length}, target: ${ev.target.tagName}`);
 
-        ev.preventDefault();
+        if (isIOS() && this.focusOnClick) {
+            if (ev.type === 'touchstart') {
+                const touch = ev.changedTouches[0];
+                if (touch) {
+                    this._iosTouchPos = { x: touch.pageX, y: touch.pageY };
+                }
+            } else if (ev.type === 'touchend' && this._iosTouchPos) {
+                const input = document.getElementById('noVNC_keyboardinput');
+                input.style.left = `${this._iosTouchPos.x}px`;
+                input.style.top = `${this._iosTouchPos.y}px`;
+                input.focus();
+                this._iosTouchPos = null;
+            }
+            if (ev.type === 'touchmove') {
+                ev.preventDefault();
+                this._iosTouchPos = null;
+            }
+        } else {
+            ev.preventDefault();
+        }
 
         const changed = ev.changedTouches;
         for (let i = 0; i < changed.length; i++) {

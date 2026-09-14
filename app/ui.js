@@ -1106,7 +1106,7 @@ const UI = {
 
         if (preferredMatch.length > 0) {
             if (result === encodings.pseudoEncodingStreamingModeJpegWebp) {
-                result = Math.min(...preferredMatch);
+                result = preferredMatch[0];
             }
         }
 

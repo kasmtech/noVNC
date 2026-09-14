@@ -928,15 +928,24 @@ select:active {
 }
 
 #noVNC_keyboardinput {
-  width: 0px;
-  height: 0px;
-  background-color: #fff0;
-  color: rgba(5, 5, 5, 0);
+  width: 1px;
+  height: 1px;
+  background-color: transparent;
+  color: transparent;
   border: 0;
+  padding: 0;
+  margin: 0;
+  outline: none;
+  resize: none;
+  overflow: hidden;
   position: absolute;
   left: 35%;
   top: 40%;
-  z-index: -1;
+  z-index: 10;
+  opacity: 0;
+  font-size: 16px;
+  caret-color: transparent;
+  pointer-events: none;
 }
 
 /*Default noVNC logo.*/

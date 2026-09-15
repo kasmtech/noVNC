@@ -715,6 +715,7 @@ const UI = {
         UI.addSettingChangeHandler('enable_ime');
         UI.addSettingChangeHandler('enable_ime', UI.toggleIMEMode);
         UI.addSettingChangeHandler('auto_keyboard');
+        UI.addSettingChangeHandler('auto_keyboard', UI.updateAutoKeyboard);
         UI.addSettingChangeHandler('touch_mode');
         UI.addSettingChangeHandler('touch_mode', UI.updateTouchMode);
         UI.addSettingChangeHandler('enable_webrtc');
@@ -2003,6 +2004,8 @@ const UI = {
         UI.rfb.clipboardDown = UI.getSetting('clipboard_down');
         UI.rfb.clipboardSeamless = UI.getSetting('clipboard_seamless');
         UI.rfb.keyboard.enableIME = UI.getSetting('enable_ime');
+        UI.rfb.touchMode = UI.getSetting('touch_mode');
+        UI.rfb.autoKeyboard = UI.getSetting('auto_keyboard');
         UI.rfb.clipboardBinary = supportsBinaryClipboard() && UI.rfb.clipboardSeamless;
         UI.rfb.enableWebRTC = UI.getSetting('enable_webrtc');
         UI.rfb.mouseButtonMapper = UI.initMouseButtonMapper();
@@ -2403,10 +2406,12 @@ const UI = {
                     break;
                 case 'enable_auto_keyboard':
                     UI.forceSetting('auto_keyboard', true, false);
+                    UI.updateAutoKeyboard();
 
                     break;
                 case 'disable_auto_keyboard':
                     UI.forceSetting('auto_keyboard', false, false);
+                    UI.updateAutoKeyboard();
 
                     if (UI.textInputCaret) {
                         UI.clearTextInputPan();
@@ -3376,6 +3381,11 @@ const UI = {
         }
     },
 
+    updateAutoKeyboard() {
+        if (UI.rfb)
+            UI.rfb.autoKeyboard = UI.getSetting('auto_keyboard');
+    },
+
     toggleWebRTC() {
         if (UI.rfb) {
             if (typeof RTCPeerConnection === 'undefined') {
@@ -3484,7 +3494,10 @@ const UI = {
                 return;
 
             UI.textInputCaret = event.detail.caret;
-            UI.showVirtualKeyboard();
+
+            if (!(isIOS() && UI.getSetting('touch_mode') === 'native'))
+                UI.showVirtualKeyboard();
+
             UI.updateTextInputPan();
 
             if (window.visualViewport && !UI.textInputViewportHandler) {

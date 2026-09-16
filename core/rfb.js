@@ -58,6 +58,12 @@ const GESTURE_SCRLSENS = 50;
 const DOUBLE_TAP_TIMEOUT = 1000;
 const DOUBLE_TAP_THRESHOLD = 50;
 
+// iOS only allows the software keyboard to be opened synchronously from a
+// user gesture. Keep a server-confirmed text field for one subsequent tap,
+// while tolerating the same small amount of finger movement as the server.
+const IOS_TAP_SLOP = 15;
+const IOS_TEXT_FIELD_CACHE_TIMEOUT = 2000;
+
 // Extended clipboard pseudo-encoding formats
 const extendedClipboardFormatText   = 1;
 /*eslint-disable no-unused-vars */
@@ -188,6 +194,13 @@ export default class RFB extends EventTargetMixin {
         this._touchMode = 'native';
         this._textInputFocused = false;
         this._iosTouchPos = null;
+        this._iosTextInputField = null;
+        this._iosNativeTouchActive = false;
+        this._iosAllowTouchClick = false;
+        this._iosPendingClick = null;
+        this._iosSuppressMouseUntil = 0;
+        this._iosTapStart = null;
+        this._iosLastTap = null;
 
         // Internal objects
         this._sock = null;              // Websock object
@@ -261,6 +274,9 @@ export default class RFB extends EventTargetMixin {
             handlePointerLockChange: this._handlePointerLockChange.bind(this),
             handlePointerLockError: this._handlePointerLockError.bind(this),
             handleWheel: this._handleWheel.bind(this),
+            invalidateIOSTextField: (ev) => {
+                if (ev.target !== this._canvas) this._clearIOSTextField();
+            },
             handleGesture: this._handleGesture.bind(this),
             handleNativeTouch: this._handleNativeTouch.bind(this),
             handleFocusChange: this._handleFocusChange.bind(this),
@@ -788,6 +804,12 @@ export default class RFB extends EventTargetMixin {
     set touchMode(value) {
         if (value !== this._touchMode) {
             this._touchMode = value;
+            this._iosTouchPos = null;
+            this._iosTextInputField = null;
+            this._iosNativeTouchActive = false;
+            this._clearIOSTextField();
+            this._iosAllowTouchClick = false;
+            this._iosSuppressMouseUntil = 0;
             this._updateGestureHandler();
         }
     }
@@ -1397,6 +1419,7 @@ export default class RFB extends EventTargetMixin {
         // have to do anything.
         if (isIOS()) {
             this._canvas.addEventListener("touchend", this._eventHandlers.updateHiddenKeyboard);
+            document.addEventListener('touchstart', this._eventHandlers.invalidateIOSTextField, true);
         }
 
         // Mouse events
@@ -1555,6 +1578,8 @@ export default class RFB extends EventTargetMixin {
         this._canvas.removeEventListener("touchstart", this._eventHandlers.handleNativeTouch, true);
         this._canvas.removeEventListener("touchmove", this._eventHandlers.handleNativeTouch, true);
         this._canvas.removeEventListener("touchend", this._eventHandlers.handleNativeTouch, true);
+        document.removeEventListener('touchstart', this._eventHandlers.invalidateIOSTextField, true);
+        this._clearIOSTextField();
         this._canvas.removeEventListener("touchcancel", this._eventHandlers.handleNativeTouch, true);
         this._canvas.removeEventListener("wheel", this._eventHandlers.handleWheel);
         this._canvas.removeEventListener('mousedown', this._eventHandlers.handleMouse);
@@ -2223,6 +2248,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleKeyEvent(keysym, code, down) {
+        this._clearIOSTextField();
         this.sendKey(keysym, code, down);
     }
 
@@ -2243,6 +2269,16 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleMouse(ev) {
+        // Eligible iOS touches must generate a trusted click to open the keyboard.
+        // Consume their compatibility mouse sequence locally: native touch has
+        // already been sent to the server, and mousedown must not steal focus.
+        if (isIOS() && this._touchMode === 'native' &&
+            Date.now() < this._iosSuppressMouseUntil) {
+            ev.preventDefault();
+            ev.stopPropagation();
+            if (ev.type === 'click') this._handleIOSKeyboardClick(ev);
+            return;
+        }
         /*
          * We don't check connection status or viewOnly here as the
          * mouse events might be used to control the viewport
@@ -2650,6 +2686,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleWheel(ev) {
+        this._clearIOSTextField();
         if (!this.isConnected || this._viewOnly)  // View only, skip mouse events
             return;
 
@@ -2715,10 +2752,15 @@ export default class RFB extends EventTargetMixin {
 
         Log.Debug(`Native touch event: ${ev.type}, touches: ${ev.changedTouches.length}, target: ${ev.target.tagName}`);
 
-         ev.preventDefault();
-
         if (isIOS())
             this._trackIOSTap(ev);
+
+        // WebKit needs the final trusted click, not just DOM focus in touchend.
+        // Only a stationary second tap in a freshly reported field may produce
+        // that click; all other native gestures retain cancellation.
+        if (!isIOS() || !this._iosAllowTouchClick) ev.preventDefault();
+        if (this._iosAllowTouchClick) this._iosSuppressMouseUntil = Date.now() + 1000;
+        if (ev.type === 'touchend' || ev.type === 'touchcancel') this._iosAllowTouchClick = false;
 
         const changed = ev.changedTouches;
         for (let i = 0; i < changed.length; i++) {
@@ -2760,24 +2802,144 @@ export default class RFB extends EventTargetMixin {
 
     _trackIOSTap(ev) {
         switch (ev.type) {
-            case 'touchstart':
-                if (ev.touches.length === 1) {
-                    const touch = ev.changedTouches[0];
-                    this._iosTouchPos = {x: touch.pageX, y: touch.pageY};
-                } else {
+            case 'touchstart': {
+                this._iosNativeTouchActive = true;
+                this._iosPendingClick = null;
+                this._iosLastTap = null;
+                this._iosAllowTouchClick = false;
+                this._iosTapStart = ev.touches.length === 1 && ev.changedTouches.length === 1 ?
+                    {identifier: ev.changedTouches[0].identifier,
+                     clientX: ev.changedTouches[0].clientX, clientY: ev.changedTouches[0].clientY} : null;
+
+                // The cached field is a one-use token. Any subsequent touch
+                // consumes it, even if that touch turns into a scroll or lands
+                // somewhere else.
+                const field = this._iosTextInputField;
+                this._iosTextInputField = null;
+                this._iosTouchPos = null;
+
+                if (ev.touches.length !== 1 || ev.changedTouches.length !== 1 ||
+                    field === null ||
+                    Date.now() - field.cachedAt > IOS_TEXT_FIELD_CACHE_TIMEOUT) {
+                    break;
+                }
+
+                const touch = ev.changedTouches[0];
+                if (!this._isTouchInsideRemoteRect(touch, field))
+                    break;
+
+                this._iosTouchPos = {
+                    identifier: touch.identifier,
+                    clientX: touch.clientX,
+                    clientY: touch.clientY,
+                    field,
+                };
+                this._iosAllowTouchClick = this.autoKeyboard && this._textInputFocused;
+                break;
+            }
+            case 'touchmove': {
+                const first = this._iosTapStart;
+                const moving = first && this._findTouch(ev.touches, first.identifier);
+                if (ev.touches.length !== 1 || !moving ||
+                    Math.abs(moving.clientX - first.clientX) > IOS_TAP_SLOP ||
+                    Math.abs(moving.clientY - first.clientY) > IOS_TAP_SLOP) {
+                    this._iosTapStart = null;
+                    this._iosAllowTouchClick = false;
+                }
+                if (this._iosTouchPos === null || ev.touches.length !== 1) {
                     this._iosTouchPos = null;
+                    this._iosAllowTouchClick = false;
+                    break;
+                }
+
+                const touch = this._findTouch(ev.touches,
+                                              this._iosTouchPos.identifier);
+                if (touch === null || !this._isValidIOSTapTouch(touch)) {
+                    this._iosTouchPos = null;
+                    this._iosAllowTouchClick = false;
                 }
                 break;
-            case 'touchend':
-                if (this._iosTouchPos !== null && ev.touches.length === 0) {
-                    this._openIOSKeyboardAt(this._iosTouchPos);
+            }
+            case 'touchend': {
+                const start = this._iosTouchPos;
+                this._iosNativeTouchActive = ev.touches.length !== 0;
+                const first = this._iosTapStart;
+                const ended = first && this._findTouch(ev.changedTouches, first.identifier);
+                this._iosLastTap = ended && ev.touches.length === 0 &&
+                    Math.abs(ended.clientX - first.clientX) <= IOS_TAP_SLOP &&
+                    Math.abs(ended.clientY - first.clientY) <= IOS_TAP_SLOP ?
+                    {clientX: ended.clientX, clientY: ended.clientY, at: Date.now()} : null;
+                this._iosTapStart = null;
+
+                if (start === null || ev.touches.length !== 0) {
+                    this._iosTouchPos = null;
+                    this._iosAllowTouchClick = false;
+                    break;
                 }
+
+                const touch = this._findTouch(ev.changedTouches,
+                                              start.identifier);
+                const valid = touch !== null && this._isValidIOSTapTouch(touch);
                 this._iosTouchPos = null;
+                if (valid) {
+                    this._iosPendingClick = {clientX: touch.clientX, clientY: touch.clientY,
+                                             field: start.field, at: Date.now()};
+                } else {
+                    this._iosAllowTouchClick = false;
+                }
                 break;
-            default: // touchmove, touchcancel
+            }
+            default: // touchcancel and unexpected touch events
                 this._iosTouchPos = null;
+                this._iosNativeTouchActive = ev.touches.length !== 0;
+                this._clearIOSTextField();
+                this._iosAllowTouchClick = false;
                 break;
         }
+    }
+
+    _findTouch(touches, identifier) {
+        for (let i = 0; i < touches.length; i++) {
+            if (touches[i].identifier === identifier)
+                return touches[i];
+        }
+        return null;
+    }
+
+    _clearIOSTextField() {
+        this._iosTextInputField = null;
+        this._iosTouchPos = null;
+        this._iosPendingClick = null;
+        this._iosTapStart = null;
+        this._iosLastTap = null;
+    }
+
+    _handleIOSKeyboardClick(ev) {
+        const tap = this._iosPendingClick;
+        this._iosPendingClick = null;
+        if (!tap || !ev.isTrusted || ev.target !== this._canvas ||
+            this._iosNativeTouchActive || !this.isConnected || this._viewOnly ||
+            Date.now() - tap.at > 1000 ||
+            Math.abs(ev.clientX - tap.clientX) > IOS_TAP_SLOP ||
+            Math.abs(ev.clientY - tap.clientY) > IOS_TAP_SLOP ||
+            !this._isTouchInsideRemoteRect(ev, tap.field)) return;
+        this._openIOSKeyboardAt({x: ev.pageX, y: ev.pageY});
+    }
+
+    _isValidIOSTapTouch(touch) {
+        const start = this._iosTouchPos;
+        return start !== null &&
+               Math.abs(touch.clientX - start.clientX) <= IOS_TAP_SLOP &&
+               Math.abs(touch.clientY - start.clientY) <= IOS_TAP_SLOP &&
+               this._isTouchInsideRemoteRect(touch, start.field);
+    }
+
+    _isTouchInsideRemoteRect(touch, rect) {
+        const pos = clientToElement(touch.clientX, touch.clientY, this._canvas);
+        const x = this._display.absX(pos.x);
+        const y = this._display.absY(pos.y);
+        return x >= rect.x && x < rect.x + rect.w &&
+               y >= rect.y && y < rect.y + rect.h;
     }
 
     _openIOSKeyboardAt(pos) {
@@ -4454,6 +4616,15 @@ export default class RFB extends EventTargetMixin {
         Log.Debug("Text input focus " + (focused ? "gained" : "lost") +
                   (tapped ? " (tapped)" : ""));
         this._textInputFocused = focused;
+        const lastTap = this._iosLastTap;
+        this._iosTextInputField = focused && tapped && !this._iosNativeTouchActive && lastTap &&
+            Date.now() - lastTap.at <= 1000 && field.w > 0 && field.h > 0 &&
+            this._isTouchInsideRemoteRect(lastTap, field) ?
+            {...field, cachedAt: Date.now()} : null;
+        if (!focused) {
+            this._iosPendingClick = null;
+            this._iosTouchPos = null;
+        }
         this.dispatchEvent(new CustomEvent("textinputfocus",
             {detail: {focused, tapped, caret, field}}));
         return true;

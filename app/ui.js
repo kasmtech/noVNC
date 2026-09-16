@@ -469,6 +469,7 @@ const UI = {
         interact(".keyboard-controls .handle")
         .pointerEvents({ holdDuration: 350 })
         .on("hold", (e) => {
+            UI.keyboardHandleTapAt = null;
             const buttonsEl = document.querySelector(".keyboard-controls");
 
             const isOpen = buttonsEl.classList.contains("is-open");
@@ -480,7 +481,14 @@ const UI = {
 
         // keyboard showing
         interact(".keyboard-controls .handle").on("tap", (e) => {
-            if (e.dt < 150) {
+            // Keep drag/hold recognition, but focus only from the final click.
+            // A pointer-up/touchend focus can succeed without showing iOS's keyboard.
+            UI.keyboardHandleTapAt = e.dt < 350 ? Date.now() : null;
+        });
+        document.querySelector('.keyboard-controls .handle').addEventListener('click', (e) => {
+            const at = UI.keyboardHandleTapAt;
+            UI.keyboardHandleTapAt = null;
+            if (e.isTrusted && at !== null && at !== undefined && Date.now() - at < 1000) {
                 UI.toggleVirtualKeyboard();
             }
         });
@@ -538,6 +546,7 @@ const UI = {
     },
 
     addTouchSpecificHandlers() {
+        UI.trackIOSKeyboardViewport();
         document.getElementById("noVNC_keyboard_button")
             .addEventListener('click', UI.toggleVirtualKeyboard);
         document.getElementById("noVNC_keyboard_button")
@@ -3424,7 +3433,12 @@ const UI = {
     showVirtualKeyboard() {
         const input = document.getElementById('noVNC_keyboardinput');
 
-        if (document.activeElement == input || !UI.rfb) return;
+        if (!UI.rfb) return;
+        if (document.activeElement === input) {
+            if (!isIOS() || !UI.keyboardViewportState || UI.keyboardViewportState.visible) return;
+            // Dismissing the iOS keyboard need not blur its textarea.
+            input.blur();
+        }
 
         if (UI.getSetting('virtual_keyboard_visible')) {
             document.getElementById('noVNC_keyboard_control_handle')
@@ -3464,11 +3478,49 @@ const UI = {
     },
 
     toggleVirtualKeyboard() {
-        if (document.getElementById('noVNC_keyboard_button')
-            .classList.contains("noVNC_selected")) {
+        const visible = isIOS() && UI.keyboardViewportState ? UI.keyboardViewportState.visible :
+            document.getElementById('noVNC_keyboard_button').classList.contains("noVNC_selected");
+        if (visible) {
             UI.hideVirtualKeyboard();
         } else {
             UI.showVirtualKeyboard();
+        }
+    },
+
+    trackIOSKeyboardViewport() {
+        if (!isIOS() || UI.keyboardViewportState) return;
+        let viewport = window.visualViewport;
+        // Workspaces keeps the child viewport fixed when the keyboard opens.
+        // Read the outer viewport when same-origin; cross-origin embeds fall back.
+        try {
+            if (window.top.document && window.top.visualViewport) viewport = window.top.visualViewport;
+        } catch (err) { /* Cross-origin embed. */ }
+        if (!viewport) return;
+        UI.keyboardViewportState = {
+            baseline: viewport.height, width: viewport.width,
+            scale: viewport.scale, visible: false,
+        };
+        viewport.addEventListener('resize', () => UI.updateIOSKeyboardViewport(viewport));
+    },
+
+    updateIOSKeyboardViewport(viewport) {
+        const state = UI.keyboardViewportState;
+        // Rotation/zoom isn't evidence that a keyboard opened or closed.
+        if (Math.abs(viewport.width - state.width) > 40 || Math.abs(viewport.scale - state.scale) > 0.05) {
+            state.baseline = viewport.height;
+            state.width = viewport.width;
+            state.scale = viewport.scale;
+            state.visible = false;
+            return;
+        }
+        state.baseline = Math.max(state.baseline, viewport.height);
+        const wasVisible = state.visible;
+        state.visible = state.baseline - viewport.height > 120;
+        if (wasVisible && !state.visible) {
+            const input = document.getElementById('noVNC_keyboardinput');
+            if (document.activeElement === input) input.blur();
+            document.getElementById('noVNC_keyboard_button').classList.remove('noVNC_selected');
+            document.getElementById('noVNC_keyboard_control_handle').classList.remove('noVNC_selected');
         }
     },
 

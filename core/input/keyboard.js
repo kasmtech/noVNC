@@ -65,6 +65,11 @@ export default class Keyboard {
 
     get enableIME() { return this._enableIME; }
     set enableIME(val) {
+        if (!val && this._enableIME != val) {
+            this._imeStarted = false;
+            this._keyboardInputReset();
+        }
+
         this._enableIME = val;
         this.focus();
     }

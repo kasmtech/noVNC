@@ -2023,7 +2023,9 @@ const UI = {
         UI.rfb.clipboardUp = UI.getSetting('clipboard_up');
         UI.rfb.clipboardDown = UI.getSetting('clipboard_down');
         UI.rfb.clipboardSeamless = UI.getSetting('clipboard_seamless');
-        UI.rfb.keyboard.enableIME = UI.getSetting('enable_ime');
+        if (!WebUtil.isInsideKasmVDI()) {
+            UI.rfb.keyboard.enableIME = UI.getSetting('enable_ime');
+        }
         UI.rfb.clipboardBinary = supportsBinaryClipboard() && UI.rfb.clipboardSeamless;
         UI.rfb.enableWebRTC = UI.getSetting('enable_webrtc');
         UI.rfb.mouseButtonMapper = UI.initMouseButtonMapper();

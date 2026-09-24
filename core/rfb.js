@@ -2792,14 +2792,18 @@ export default class RFB extends EventTargetMixin {
                 this._pendingTapVerdict = null;
                 if (ev.touches.length === 1) {
                     const touch = ev.changedTouches[0];
-                    this._iosTouchPos = {x: touch.pageX, y: touch.pageY};
+                    this._iosTouchPos = {
+                        identifier: touch.identifier >>> 0,
+                        x: touch.pageX,
+                        y: touch.pageY,
+                    };
                     this._iosTouchStart = Date.now();
                 } else {
                     this._iosTouchPos = null;
                 }
                 break;
             case 'touchmove': {
-                 if (this._iosTouchPos === null) {
+                if (this._iosTouchPos === null) {
                     break;
                 }
                 const touch = ev.changedTouches[0];
@@ -2817,10 +2821,10 @@ export default class RFB extends EventTargetMixin {
                 const held = Date.now() - this._iosTouchStart;
                 if (this._iosTouchPos !== null && ev.touches.length === 0 &&
                     held <= IOS_TAP_MAX_MS) {
-                     const verdict = this._pendingTapVerdict;
+                    const verdict = this._pendingTapVerdict;
                     const editable = verdict !== null ? verdict.focused : this._textInputFocused;
                     Log.Debug("iOS tap: " + (verdict !== null ? "probe" : "last known") +
-                              " verdict, editable=" + editable);
+                        " verdict, editable=" + editable);
                     if (editable) {
                         this._openIOSKeyboardAt(this._iosTouchPos);
                     } else if (verdict !== null) {
@@ -2828,8 +2832,8 @@ export default class RFB extends EventTargetMixin {
                     }
                 } else {
                     Log.Debug("iOS tap: not a tap, held=" + held + " ms, moved=" +
-                              (this._iosTouchPos === null) + ", remaining touches=" +
-                              ev.touches.length);
+                        (this._iosTouchPos === null) + ", remaining touches=" +
+                        ev.touches.length);
                 }
                 this._pendingTapVerdict = null;
                 this._iosTouchPos = null;
@@ -4508,13 +4512,14 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleTextInputFocus() {
-        if (this._sock.rQwait("TextInputFocus", 17, 1))
+        if (this._sock.rQwait("TextInputFocus", 21, 1))
             return false;
 
         const flags = this._sock.rQshift8();
         const focused = (flags & 1) !== 0;
         const tapped = (flags & 2) !== 0;
         const probe = (flags & 4) !== 0;
+        const touchId = this._sock.rQshift32();
         const caret = {
             x: this._sock.rQshift16(),
             y: this._sock.rQshift16(),
@@ -4529,12 +4534,19 @@ export default class RFB extends EventTargetMixin {
         };
 
         Log.Debug("Text input focus " + (focused ? "gained" : "lost") +
-            (tapped ? " (tapped)" : "") + (probe ? " (probe)" : ""));
+            (tapped ? " (tapped)" : "") + (probe ? " (probe)" : "") +
+            (touchId !== 0 ? " touch=" + touchId : ""));
 
         if (probe) {
-            if (this._iosTouchPos !== null) {
-                this._pendingTapVerdict = {focused, caret, field};
+            if (this._iosTouchPos === null) {
+                return true;
             }
+            if (touchId !== this._iosTouchPos.identifier) {
+                Log.Debug("Ignoring probe for touch " + touchId +
+                          ", current contact is " + this._iosTouchPos.identifier);
+                return true;
+            }
+            this._pendingTapVerdict = {focused, caret, field};
             return true;
         }
 

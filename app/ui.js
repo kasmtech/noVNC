@@ -3536,7 +3536,7 @@ const UI = {
 
             UI.textInputCaret = event.detail.caret;
 
-            if (!(isIOS() && UI.getSetting('touch_mode') === 'native'))
+            if (!(isIOS() && UI.rfb.nativeTouchActive))
                 UI.showVirtualKeyboard();
 
             UI.updateTextInputPan();

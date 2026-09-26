@@ -23,6 +23,7 @@ import Keyboard from "./input/keyboard.js";
 import initializePrinterRelay from "./output/printer.js";
 import initializeSmartcardRelay from "./output/smartcard.js";
 import GestureHandler from "./input/gesturehandler.js";
+import IOSKeyboard from "./input/ioskeyboard.js";
 import Cursor from "./util/cursor.js";
 import Websock from "./websock.js";
 import DES from "./des.js";
@@ -63,13 +64,6 @@ const GESTURE_ZOOMSENS = 75;
 const GESTURE_SCRLSENS = 50;
 const DOUBLE_TAP_TIMEOUT = 1000;
 const DOUBLE_TAP_THRESHOLD = 50;
-
-// What still counts as a tap rather than a drag, for the iOS virtual
-// keyboard. These mirror VNC_TAP_SLOP / VNC_TAP_MAX_MS in the server's
-// tap tracker (unix/xserver/hw/vnc/Input.c) so both ends agree on which
-// contacts are taps. The slop is in CSS pixels here, not desktop pixels.
-const IOS_TAP_SLOP = 15;
-const IOS_TAP_MAX_MS = 600;
 
 // Extended clipboard pseudo-encoding formats
 const extendedClipboardFormatText   = 1;
@@ -203,12 +197,6 @@ export default class RFB extends EventTargetMixin {
         // touch-supported message. Until then (or if it never arrives) touch
         // input falls back to the gesture emulation regardless of touchMode.
         this._serverSupportsTouch = false;
-        this._textInputFocused = false;
-        // Provisional server verdict for the contact currently down (iOS
-        // native touch): set by a TextInputFocus probe, consumed at touchend.
-        this._pendingTapVerdict = null;
-        this._iosTouchPos = null;
-        this._iosTouchStart = 0;
 
         // Internal objects
         this._sock = null;              // Websock object
@@ -348,6 +336,13 @@ export default class RFB extends EventTargetMixin {
         this._touchInput = touchInput;
         this._keyboard = new Keyboard(this._canvas, touchInput, navigator.keyboard);
         this._keyboard.onkeyevent = this._handleKeyEvent.bind(this);
+        this._iosKeyboard = !isIOS() ? null : new IOSKeyboard(this._canvas, touchInput, {
+            toRemote: (clientX, clientY) => {
+                const pos = clientToElement(clientX, clientY, this._canvas);
+                return { x: this._display.absX(pos.x), y: this._display.absY(pos.y) };
+            },
+            enabled: () => this.autoKeyboard,
+        });
 
         this._gestures = new GestureHandler();
 
@@ -809,6 +804,7 @@ export default class RFB extends EventTargetMixin {
     set touchMode(value) {
         if (value !== this._touchMode) {
             this._touchMode = value;
+            this._iosKeyboard?.reset();
             this._updateGestureHandler();
         }
     }
@@ -1425,6 +1421,7 @@ export default class RFB extends EventTargetMixin {
         // have to do anything.
         if (isIOS()) {
             this._canvas.addEventListener("touchend", this._eventHandlers.updateHiddenKeyboard);
+            this._iosKeyboard.attach();
         }
 
         // Mouse events
@@ -1585,6 +1582,7 @@ export default class RFB extends EventTargetMixin {
         this._canvas.removeEventListener("touchend", this._eventHandlers.handleNativeTouch, true);
         this._canvas.removeEventListener("touchcancel", this._eventHandlers.handleNativeTouch, true);
         this._canvas.removeEventListener("wheel", this._eventHandlers.handleWheel);
+        this._iosKeyboard?.detach();
         this._canvas.removeEventListener('mousedown', this._eventHandlers.handleMouse);
         this._canvas.removeEventListener('mouseup', this._eventHandlers.handleMouse);
         this._canvas.removeEventListener('mousemove', this._eventHandlers.handleMouse);
@@ -1680,6 +1678,9 @@ export default class RFB extends EventTargetMixin {
     }
 
     _focusCanvas(event) {
+        // Do not let the touch-generated mousedown focus the IME before click.
+        if (this._iosKeyboard?.ownsMouse && this.nativeTouchActive &&
+            event.type === 'mousedown') return;
         // Hack:
         // On most mobile phones it's possible to play audio
         // only if it's triggered by user action. It's also
@@ -2253,6 +2254,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleKeyEvent(keysym, code, down) {
+        this._iosKeyboard?.reset();
         this.sendKey(keysym, code, down);
     }
 
@@ -2273,6 +2275,9 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleMouse(ev) {
+        if (this._iosKeyboard && this.nativeTouchActive && this._iosKeyboard.handleMouse(ev)) {
+            return;
+        }
         /*
          * We don't check connection status or viewOnly here as the
          * mouse events might be used to control the viewport
@@ -2680,6 +2685,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleWheel(ev) {
+        this._iosKeyboard?.reset();
         if (!this.isConnected || this._viewOnly)  // View only, skip mouse events
             return;
 
@@ -2745,10 +2751,9 @@ export default class RFB extends EventTargetMixin {
 
         Log.Debug(`Native touch event: ${ev.type}, touches: ${ev.changedTouches.length}, target: ${ev.target.tagName}`);
 
-        ev.preventDefault();
-
-        if (isIOS())
-            this._trackIOSTap(ev);
+        // A tap that may open the iOS keyboard is left uncancelled.
+        if (!this._iosKeyboard?.handleTouch(ev))
+            ev.preventDefault();
 
         const changed = ev.changedTouches;
         for (let i = 0; i < changed.length; i++) {
@@ -2783,88 +2788,6 @@ export default class RFB extends EventTargetMixin {
             this._gestures.detach();
         } else {
             this._gestures.attach(this._canvas);
-        }
-    }
-
-    _trackIOSTap(ev) {
-        switch (ev.type) {
-            case 'touchstart':
-                this._pendingTapVerdict = null;
-                if (ev.touches.length === 1) {
-                    const touch = ev.changedTouches[0];
-                    this._iosTouchPos = {
-                        identifier: touch.identifier >>> 0,
-                        x: touch.pageX,
-                        y: touch.pageY,
-                    };
-                    this._iosTouchStart = Date.now();
-                } else {
-                    this._iosTouchPos = null;
-                }
-                break;
-            case 'touchmove': {
-                if (this._iosTouchPos === null) {
-                    break;
-                }
-                const touch = ev.changedTouches[0];
-                if (touch === undefined) {
-                    break;
-                }
-                if (Math.abs(touch.pageX - this._iosTouchPos.x) > IOS_TAP_SLOP ||
-                    Math.abs(touch.pageY - this._iosTouchPos.y) > IOS_TAP_SLOP) {
-                    Log.Debug("iOS tap: cancelled, contact moved past the tap threshold");
-                    this._iosTouchPos = null;
-                }
-                break;
-            }
-            case 'touchend': {
-                const held = Date.now() - this._iosTouchStart;
-                if (this._iosTouchPos !== null && ev.touches.length === 0 &&
-                    held <= IOS_TAP_MAX_MS) {
-                    const verdict = this._pendingTapVerdict;
-                    const editable = verdict !== null ? verdict.focused : this._textInputFocused;
-                    Log.Debug("iOS tap: " + (verdict !== null ? "probe" : "last known") +
-                        " verdict, editable=" + editable);
-                    if (editable) {
-                        this._openIOSKeyboardAt(this._iosTouchPos);
-                    } else if (verdict !== null) {
-                        this._closeIOSKeyboard();
-                    }
-                } else {
-                    Log.Debug("iOS tap: not a tap, held=" + held + " ms, moved=" +
-                        (this._iosTouchPos === null) + ", remaining touches=" +
-                        ev.touches.length);
-                }
-                this._pendingTapVerdict = null;
-                this._iosTouchPos = null;
-                break;
-            }
-            default: // touchcancel
-                this._pendingTapVerdict = null;
-                this._iosTouchPos = null;
-                break;
-        }
-    }
-
-    _openIOSKeyboardAt(pos) {
-        if (!this.autoKeyboard) {
-            return;
-        }
-
-        const input = this._touchInput;
-        if (!input || document.activeElement === input) {
-            return;
-        }
-
-        input.style.left = `${pos.x}px`;
-        input.style.top = `${pos.y}px`;
-        input.focus();
-    }
-
-    _closeIOSKeyboard() {
-        const input = this._touchInput;
-        if (input && document.activeElement === input) {
-            input.blur();
         }
     }
 
@@ -4538,19 +4461,10 @@ export default class RFB extends EventTargetMixin {
             (touchId !== 0 ? " touch=" + touchId : ""));
 
         if (probe) {
-            if (this._iosTouchPos === null) {
-                return true;
-            }
-            if (touchId !== this._iosTouchPos.identifier) {
-                Log.Debug("Ignoring probe for touch " + touchId +
-                          ", current contact is " + this._iosTouchPos.identifier);
-                return true;
-            }
-            this._pendingTapVerdict = {focused, caret, field};
             return true;
         }
 
-        this._textInputFocused = focused;
+        this._iosKeyboard?.textInputFocus(focused, tapped, touchId, field);
         this.dispatchEvent(new CustomEvent("textinputfocus",
             {detail: {focused, tapped, caret, field}}));
         return true;

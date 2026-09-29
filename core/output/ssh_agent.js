@@ -1,4 +1,5 @@
 import * as Log from "../../core/util/logging.js";
+import { KASM_EXTENSION_ID } from "./kasm_extension.js";
 
 const EVENT_DATA = 0x01;   // one complete raw SSH-agent-protocol frame (bidirectional)
 const EVENT_CLOSE = 0x02;  // tear down this connection (bidirectional)
@@ -58,8 +59,6 @@ const base64ToBuffer = (b64) => {
     return bytes;
 };
 
-const KASM_SSH_AGENT_EXTENSION_ID = "obhhhhhfhnmfoonndahjcjpkndkeompc";
-
 const callExtension = (connectionId, event, payload) => {
     return new Promise((resolve, reject) => {
         const message = {
@@ -87,7 +86,7 @@ const callExtension = (connectionId, event, payload) => {
             }
         };
 
-        chrome.runtime.sendMessage(KASM_SSH_AGENT_EXTENSION_ID, message, onResponse);
+        chrome.runtime.sendMessage(KASM_EXTENSION_ID, message, onResponse);
     });
 };
 

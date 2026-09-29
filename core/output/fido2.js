@@ -1,8 +1,10 @@
 import * as Log from "../../core/util/logging.js";
+import { KASM_EXTENSION_ID } from "./kasm_extension.js";
 
 const REQUEST_MAKE_CREDENTIAL = 0x01;
 const REQUEST_GET_ASSERTION = 0x02;
 const REQUEST_LIST_DEVICES = 0x03;
+const REQUEST_CANCEL = 0x04;
 const RESPONSE_ACK = 0x80;
 const RESPONSE_ERROR = 0x81;
 
@@ -13,6 +15,7 @@ const commandToString = (command) => {
         [REQUEST_MAKE_CREDENTIAL]: "REQUEST_MAKE_CREDENTIAL",
         [REQUEST_GET_ASSERTION]: "REQUEST_GET_ASSERTION",
         [REQUEST_LIST_DEVICES]: "REQUEST_LIST_DEVICES",
+        [REQUEST_CANCEL]: "REQUEST_CANCEL",
         [RESPONSE_ACK]: "RESPONSE_ACK",
         [RESPONSE_ERROR]: "RESPONSE_ERROR",
     }[command] || `0x${command.toString(16).toUpperCase()}`;
@@ -51,14 +54,11 @@ const parseRelayPacket = (data) => {
 const encodeJson = (value) => new TextEncoder().encode(JSON.stringify(value ?? {}));
 const decodeJson = (payload) => (payload.length === 0 ? {} : JSON.parse(new TextDecoder().decode(payload)));
 
-const KASM_FIDO2_EXTENSION_ID = "obhhhhhfhnmfoonndahjcjpkndkeompc";
-
-
-const callExtension = (type, params) => {
+const callExtension = (type, params, completionId) => {
     return new Promise((resolve, reject) => {
         const message = {
             deviceId: "fido2-relay",
-            completionId: Date.now().toString() + Math.random().toString(36),
+            completionId: completionId || (Date.now().toString() + Math.random().toString(36)),
             type,
             args: params === undefined ? "" : JSON.stringify(params),
         };
@@ -77,12 +77,22 @@ const callExtension = (type, params) => {
             }
         };
 
-        chrome.runtime.sendMessage(KASM_FIDO2_EXTENSION_ID, message, onResponse);
+        chrome.runtime.sendMessage(KASM_EXTENSION_ID, message, onResponse);
     });
 };
 
 export default (rfb) => {
     Log.Debug("fido2.initializeFido2Relay");
+
+    // Relay packets carry no request id, so a cancel targets the ceremony in flight.
+    let activeCompletionId = null;
+
+    const cancelActive = () => {
+        if (!activeCompletionId) return;
+        callExtension("ctap_cancel", { targetCompletionId: activeCompletionId }).catch((err) => {
+            Log.Error(`fido2: ctap_cancel failed: ${err.message}`);
+        });
+    };
 
     const sendFido2Response = (deviceId, command, payload = new Uint8Array(0)) => {
         Log.Debug(
@@ -91,6 +101,10 @@ export default (rfb) => {
         const packet = createRelayPacket(command, deviceId, payload);
         rfb.sendUnixRelayData("fido2", packet);
     };
+
+    // The native PIN dialog outlives this session, and the relay may already be
+    // gone, so cancel through the extension directly.
+    rfb.addEventListener("disconnect", cancelActive);
 
     rfb.subscribeUnixRelay("fido2", async (data) => {
         let command, deviceId, payload;
@@ -105,19 +119,27 @@ export default (rfb) => {
             `fido2.request: device[${deviceId}] command=${commandToString(command)}, payloadLen=${payload.length}`
         );
 
+        if (command === REQUEST_CANCEL) {
+            cancelActive();
+            return;
+        }
+
+        const completionId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
         try {
             let result;
             switch (command) {
                 case REQUEST_LIST_DEVICES:
-                    result = await callExtension("ctap_list_devices");
+                    result = await callExtension("ctap_list_devices", undefined, completionId);
                     break;
 
                 case REQUEST_MAKE_CREDENTIAL:
-                    result = await callExtension("ctap_make_credential", decodeJson(payload));
+                    activeCompletionId = completionId;
+                    result = await callExtension("ctap_make_credential", decodeJson(payload), completionId);
                     break;
 
                 case REQUEST_GET_ASSERTION:
-                    result = await callExtension("ctap_get_assertion", decodeJson(payload));
+                    activeCompletionId = completionId;
+                    result = await callExtension("ctap_get_assertion", decodeJson(payload), completionId);
                     break;
 
                 default:
@@ -128,6 +150,8 @@ export default (rfb) => {
         } catch (error) {
             Log.Error(`fido2: device[${deviceId}]: ${error.message}`);
             sendFido2Response(deviceId, RESPONSE_ERROR, new TextEncoder().encode(error.message));
+        } finally {
+            if (activeCompletionId === completionId) activeCompletionId = null;
         }
     });
 };

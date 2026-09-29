@@ -1,4 +1,5 @@
 import * as Log from "../../core/util/logging.js";
+import { KASM_EXTENSION_ID } from "./kasm_extension.js";
 import * as WebUtil from "../../app/webutil.js";
 
 // utilities
@@ -68,8 +69,6 @@ const parseRelayPacket = (data) => {
     payload: data.slice(3, 3 + payloadLength),
   };
 };
-
-const KASM_SMARTCARD_EXTENSION_ID = "obhhhhhfhnmfoonndahjcjpkndkeompc";
 
 class SmartcardSession {
   constructor() {
@@ -255,7 +254,7 @@ class SmartcardSession {
         }
       };
 
-      chrome.runtime.sendMessage(KASM_SMARTCARD_EXTENSION_ID, message, onResponse);
+      chrome.runtime.sendMessage(KASM_EXTENSION_ID, message, onResponse);
     });
   }
 }

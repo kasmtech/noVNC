@@ -4125,7 +4125,7 @@ export default class RFB extends EventTargetMixin {
             case 183: // KASM unix relay data
                 return this._handleUnixRelay();
 
-            case WEBRTC_MSG_TYPE: // 190 — KASM WebRTC media signaling
+            case WEBRTC_MSG_TYPE: // 192 — KASM WebRTC media signaling
                 return this._handleWebRTCSignal();
             case messages.msgTypeServerDisconnect: // KASM disconnect notice
                 return this._handleDisconnectNotify();

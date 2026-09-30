@@ -1,5 +1,5 @@
 /*
- * KasmVNC WebRTC signaling — wraps msgTypeWebRTCSignal (190) frames
+ * KasmVNC WebRTC signaling — wraps msgTypeWebRTCSignal (192) frames
  * over the existing WebSocket. Body schema (multi-screen):
  *     [u8 kind][u8 screenId][u16 len][bytes payload]
  *
@@ -28,11 +28,11 @@
 
 import * as Log from '../util/logging.js';
 
-// 187/188 are reserved by the direct-drive-mouse/game-mode work
-// (msgTypeForceGameMode / msgTypeDirectMouseEvent) and 189 is a buffer,
-// so WebRTC signaling lives at 190. Keep in sync with msgTypeWebRTCSignal
+// 187-191 are claimed by master (msgTypeForceGameMode, DirectMouseEvent,
+// LatencyMeasurement, NetworkStats, SystemStats), so WebRTC signaling
+// lives at 192. Keep in sync with msgTypeWebRTCSignal
 // in common/rfb/msgTypes.h.
-export const WEBRTC_MSG_TYPE = 190;
+export const WEBRTC_MSG_TYPE = 192;
 export const WEBRTC_SESSION_SCREEN = 0xFF;
 
 export const WebRTCSignalKind = Object.freeze({
@@ -49,7 +49,7 @@ export const WebRTCSignalKind = Object.freeze({
 // Write a single msgTypeWebRTCSignal frame to the WebSocket. Standalone
 // (not a method) so the primary window can use it both for its own
 // transports and to forward a secondary window's relayed answer/ICE up
-// to the server. Body: [u8 190][u8 kind][u8 screenId][u16 len][payload].
+// to the server. Body: [u8 192][u8 kind][u8 screenId][u16 len][payload].
 export function writeWebRTCFrame(sock, kind, screenId, payload) {
     const utf8 = (typeof payload === 'string')
         ? new TextEncoder().encode(payload)

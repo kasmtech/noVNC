@@ -34,6 +34,9 @@ import * as Log from '../util/logging.js';
 // in common/rfb/msgTypes.h.
 export const WEBRTC_MSG_TYPE = 192;
 export const WEBRTC_SESSION_SCREEN = 0xFF;
+// Must match kMaxWebRTCSignalBytes in common/rfb/msgTypes.h; the server
+// rejects larger signals, so drop them here instead.
+export const WEBRTC_MAX_SIGNAL_BYTES = 16 * 1024;
 
 export const WebRTCSignalKind = Object.freeze({
     SdpOffer:      1,
@@ -54,7 +57,7 @@ export function writeWebRTCFrame(sock, kind, screenId, payload) {
     const utf8 = (typeof payload === 'string')
         ? new TextEncoder().encode(payload)
         : (payload || new Uint8Array(0));
-    if (utf8.length > 0xffff) {
+    if (utf8.length > WEBRTC_MAX_SIGNAL_BYTES) {
         Log.Error('WebRTC signal payload too large (' + utf8.length + 'B); dropped');
         return;
     }

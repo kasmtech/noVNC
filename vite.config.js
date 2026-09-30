@@ -18,7 +18,7 @@ export default defineConfig({
   ],
   build: {
     sourcemap: false,
-      minify: true,
+    minify: true,
     rollupOptions: {
       input: {
         main: './index.html',

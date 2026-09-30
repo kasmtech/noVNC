@@ -9,6 +9,8 @@
 import { inflateInit, inflate, inflateReset } from "pako/lib/zlib/inflate.js";
 import ZStream from "pako/lib/zlib/zstream.js";
 
+const MAX_INFLATE_SIZE = 256 * 1024 * 1024;
+
 export default class Inflate {
     constructor() {
         this.strm = new ZStream();
@@ -35,6 +37,10 @@ export default class Inflate {
     }
 
     inflate(expected) {
+        if (expected < 0 || expected > MAX_INFLATE_SIZE) {
+            throw new Error(`Inflation value ${expected} is not in the allowed range [0, ${MAX_INFLATE_SIZE}]`);
+        }
+
         // resize our output buffer if it's too small
         // (we could just use multiple chunks, but that would cause an extra
         // allocation each time to flatten the chunks)

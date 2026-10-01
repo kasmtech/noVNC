@@ -8,7 +8,13 @@ const REQUEST_CANCEL = 0x04;
 const RESPONSE_ACK = 0x80;
 const RESPONSE_ERROR = 0x81;
 
-const PROTOCOL_VERSION_V1 = 0x10;
+const PROTOCOL_VERSION_V2 = 0x11;
+// v2 header: [ver][cmd][deviceId][tag:u32][session:u16][len:u32], 13 bytes,
+// then payload. A response must echo the same tag as its request - KasmVNC's
+// XserverDesktop.cc now routes relay replies by tag instead of to whichever
+// sender happened to send last, so an unechoed/wrong tag misroutes the reply.
+// Hard cutover: v1 (no tag) is no longer sent or accepted.
+const V2_HEADER_SIZE = 13;
 
 const commandToString = (command) => {
     return {
@@ -21,46 +27,56 @@ const commandToString = (command) => {
     }[command] || `0x${command.toString(16).toUpperCase()}`;
 };
 
-const createRelayPacket = (command, deviceId, payload = new Uint8Array(0)) => {
+const createRelayPacket = (command, deviceId, tag, session, payload = new Uint8Array(0)) => {
     if (command !== RESPONSE_ACK && command !== RESPONSE_ERROR) {
         throw new Error("invalid_relay_response");
     }
-    const packet = new Uint8Array(7 + payload.length);
-    packet[0] = PROTOCOL_VERSION_V1;
+    const packet = new Uint8Array(V2_HEADER_SIZE + payload.length);
+    packet[0] = PROTOCOL_VERSION_V2;
     packet[1] = command;
     packet[2] = deviceId;
+    packet[3] = (tag >>> 24) & 0xff;
+    packet[4] = (tag >>> 16) & 0xff;
+    packet[5] = (tag >>> 8) & 0xff;
+    packet[6] = tag & 0xff;
+    packet[7] = (session >>> 8) & 0xff;
+    packet[8] = session & 0xff;
     const len = payload.length;
-    packet[3] = (len >>> 24) & 0xff;
-    packet[4] = (len >>> 16) & 0xff;
-    packet[5] = (len >>> 8) & 0xff;
-    packet[6] = len & 0xff;
-    packet.set(payload, 7);
+    packet[9] = (len >>> 24) & 0xff;
+    packet[10] = (len >>> 16) & 0xff;
+    packet[11] = (len >>> 8) & 0xff;
+    packet[12] = len & 0xff;
+    packet.set(payload, V2_HEADER_SIZE);
     return packet;
 };
 
 const parseRelayPacket = (data) => {
-    if (!data || data.length < 7 || data[0] !== PROTOCOL_VERSION_V1) {
+    if (!data || data.length < V2_HEADER_SIZE || data[0] !== PROTOCOL_VERSION_V2) {
         throw new Error("relay_packet_invalid");
     }
     const command = data[1];
     const deviceId = data[2];
-    const payloadLength = ((data[3] << 24) | (data[4] << 16) | (data[5] << 8) | data[6]) >>> 0;
-    if (data.length < 7 + payloadLength) {
+    const tag = ((data[3] << 24) | (data[4] << 16) | (data[5] << 8) | data[6]) >>> 0;
+    const session = (data[7] << 8) | data[8];
+    const payloadLength = ((data[9] << 24) | (data[10] << 16) | (data[11] << 8) | data[12]) >>> 0;
+    if (data.length < V2_HEADER_SIZE + payloadLength) {
         throw new Error("relay_packet_incomplete");
     }
-    return { command, deviceId, payload: data.slice(7, 7 + payloadLength) };
+    return { command, deviceId, tag, session, payload: data.slice(V2_HEADER_SIZE, V2_HEADER_SIZE + payloadLength) };
 };
 
 const encodeJson = (value) => new TextEncoder().encode(JSON.stringify(value ?? {}));
 const decodeJson = (payload) => (payload.length === 0 ? {} : JSON.parse(new TextDecoder().decode(payload)));
 
-const callExtension = (type, params, completionId) => {
+const callExtension = (type, params, completionId, sessionId) => {
     return new Promise((resolve, reject) => {
+        const paramsWithSession =
+            params !== undefined && sessionId !== undefined ? { ...params, sessionId } : params;
         const message = {
             deviceId: "fido2-relay",
             completionId: completionId || (Date.now().toString() + Math.random().toString(36)),
             type,
-            args: params === undefined ? "" : JSON.stringify(params),
+            args: paramsWithSession === undefined ? "" : JSON.stringify(paramsWithSession),
         };
 
         const onResponse = (response) => {
@@ -94,11 +110,11 @@ export default (rfb) => {
         });
     };
 
-    const sendFido2Response = (deviceId, command, payload = new Uint8Array(0)) => {
+    const sendFido2Response = (deviceId, tag, session, command, payload = new Uint8Array(0)) => {
         Log.Debug(
-            `fido2.response: device[${deviceId}] command=${commandToString(command)}, payloadLen=${payload.length}`
+            `fido2.response: device[${deviceId}] tag=${tag} command=${commandToString(command)}, payloadLen=${payload.length}`
         );
-        const packet = createRelayPacket(command, deviceId, payload);
+        const packet = createRelayPacket(command, deviceId, tag, session, payload);
         rfb.sendUnixRelayData("fido2", packet);
     };
 
@@ -107,16 +123,16 @@ export default (rfb) => {
     rfb.addEventListener("disconnect", cancelActive);
 
     rfb.subscribeUnixRelay("fido2", async (data) => {
-        let command, deviceId, payload;
+        let command, deviceId, tag, session, payload;
         try {
-            ({ command, deviceId, payload } = parseRelayPacket(data));
+            ({ command, deviceId, tag, session, payload } = parseRelayPacket(data));
         } catch (err) {
             Log.Error(`fido2: failed to parse relay packet: ${err.message}`);
             return;
         }
 
         Log.Debug(
-            `fido2.request: device[${deviceId}] command=${commandToString(command)}, payloadLen=${payload.length}`
+            `fido2.request: device[${deviceId}] tag=${tag} command=${commandToString(command)}, payloadLen=${payload.length}`
         );
 
         if (command === REQUEST_CANCEL) {
@@ -129,27 +145,27 @@ export default (rfb) => {
             let result;
             switch (command) {
                 case REQUEST_LIST_DEVICES:
-                    result = await callExtension("ctap_list_devices", undefined, completionId);
+                    result = await callExtension("ctap_list_devices", undefined, completionId, session);
                     break;
 
                 case REQUEST_MAKE_CREDENTIAL:
                     activeCompletionId = completionId;
-                    result = await callExtension("ctap_make_credential", decodeJson(payload), completionId);
+                    result = await callExtension("ctap_make_credential", decodeJson(payload), completionId, session);
                     break;
 
                 case REQUEST_GET_ASSERTION:
                     activeCompletionId = completionId;
-                    result = await callExtension("ctap_get_assertion", decodeJson(payload), completionId);
+                    result = await callExtension("ctap_get_assertion", decodeJson(payload), completionId, session);
                     break;
 
                 default:
                     throw new Error(`unknown_command: 0x${command.toString(16)}`);
             }
 
-            sendFido2Response(deviceId, RESPONSE_ACK, encodeJson(result));
+            sendFido2Response(deviceId, tag, session, RESPONSE_ACK, encodeJson(result));
         } catch (error) {
             Log.Error(`fido2: device[${deviceId}]: ${error.message}`);
-            sendFido2Response(deviceId, RESPONSE_ERROR, new TextEncoder().encode(error.message));
+            sendFido2Response(deviceId, tag, session, RESPONSE_ERROR, new TextEncoder().encode(error.message));
         } finally {
             if (activeCompletionId === completionId) activeCompletionId = null;
         }

@@ -5,6 +5,7 @@ const REQUEST_MAKE_CREDENTIAL = 0x01;
 const REQUEST_GET_ASSERTION = 0x02;
 const REQUEST_LIST_DEVICES = 0x03;
 const REQUEST_CANCEL = 0x04;
+const RELAY_PUSH = 0x05; // unsolicited, browser -> container; tag 0, never answered
 const RESPONSE_ACK = 0x80;
 const RESPONSE_ERROR = 0x81;
 
@@ -22,13 +23,14 @@ const commandToString = (command) => {
         [REQUEST_GET_ASSERTION]: "REQUEST_GET_ASSERTION",
         [REQUEST_LIST_DEVICES]: "REQUEST_LIST_DEVICES",
         [REQUEST_CANCEL]: "REQUEST_CANCEL",
+        [RELAY_PUSH]: "RELAY_PUSH",
         [RESPONSE_ACK]: "RESPONSE_ACK",
         [RESPONSE_ERROR]: "RESPONSE_ERROR",
     }[command] || `0x${command.toString(16).toUpperCase()}`;
 };
 
 const createRelayPacket = (command, deviceId, tag, session, payload = new Uint8Array(0)) => {
-    if (command !== RESPONSE_ACK && command !== RESPONSE_ERROR) {
+    if (command !== RESPONSE_ACK && command !== RESPONSE_ERROR && command !== RELAY_PUSH) {
         throw new Error("invalid_relay_response");
     }
     const packet = new Uint8Array(V2_HEADER_SIZE + payload.length);
@@ -97,6 +99,56 @@ const callExtension = (type, params, completionId, sessionId) => {
     });
 };
 
+const PUSH_PORT_NAME = "kasm-fido2-events";
+const PUSH_RECONNECT_MS = 5000;
+
+// Exported for tests: opens the extension's event port and calls onEvent for
+// each push. Reconnects (e.g. extension restarted or not yet installed) until
+// the returned stop() is called.
+export const subscribeExtensionEvents = (onEvent, { connect = (name) => chrome.runtime.connect(KASM_EXTENSION_ID, { name }), setTimer = setTimeout, clearTimer = clearTimeout } = {}) => {
+    let stopped = false;
+    let port = null;
+    let timer = null;
+
+    const open = () => {
+        if (stopped) return;
+        try {
+            port = connect(PUSH_PORT_NAME);
+        } catch (err) {
+            Log.Debug(`fido2: extension push port unavailable: ${err.message}`);
+            schedule();
+            return;
+        }
+        port.onMessage.addListener((message) => {
+            if (message && message.type === "push") onEvent(message);
+        });
+        port.onDisconnect.addListener(() => {
+            port = null;
+            schedule();
+        });
+    };
+
+    const schedule = () => {
+        if (stopped || timer !== null) return;
+        timer = setTimer(() => {
+            timer = null;
+            open();
+        }, PUSH_RECONNECT_MS);
+    };
+
+    open();
+
+    return () => {
+        stopped = true;
+        if (timer !== null) clearTimer(timer);
+        if (port) {
+            try { port.disconnect(); } catch (err) { /* already gone */ }
+        }
+    };
+};
+
+export { createRelayPacket, parseRelayPacket, RELAY_PUSH };
+
 export default (rfb) => {
     Log.Debug("fido2.initializeFido2Relay");
 
@@ -121,6 +173,16 @@ export default (rfb) => {
     // The native PIN dialog outlives this session, and the relay may already be
     // gone, so cancel through the extension directly.
     rfb.addEventListener("disconnect", cancelActive);
+
+    // Forwards extension push events (e.g. a security key being plugged in) to
+    // the container as an unsolicited relay packet. Same extension-presence
+    // behavior as the request path: if the extension isn't there, nothing is sent.
+    const stopPushSubscription = subscribeExtensionEvents((event) => {
+        const { type, ...body } = event;
+        const packet = createRelayPacket(RELAY_PUSH, 0, 0, 0, encodeJson(body));
+        rfb.sendUnixRelayData("fido2", packet);
+    });
+    rfb.addEventListener("disconnect", stopPushSubscription);
 
     rfb.subscribeUnixRelay("fido2", async (data) => {
         let command, deviceId, tag, session, payload;

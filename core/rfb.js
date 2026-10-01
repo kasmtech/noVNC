@@ -16,7 +16,7 @@ import { dragThreshold, supportsCursorURIs, isTouchDevice, isWindows, isMac, isI
 import { clientToElement } from './util/element.js';
 import { setCapture } from './util/events.js';
 import EventTargetMixin from './util/eventtarget.js';
-import Display from "./display.js";
+import Display, { MAX_FB_DIMENSION } from "./display.js";
 import Inflator from "./inflator.js";
 import Deflator from "./deflator.js";
 import Keyboard from "./input/keyboard.js";
@@ -3372,7 +3372,12 @@ export default class RFB extends EventTargetMixin {
 
         // we're past the point where we could backtrack, so it's safe to call this
         this._setDesktopName(name);
-        this._resize(width, height);
+
+        if (!this._resize(width, height)) {
+            return this._fail("Server sent unsupported framebuffer size: " +
+                width + "x" + height +
+                " (max " + MAX_FB_DIMENSION + ")");
+        }
 
         if (!this._viewOnly) { this._keyboard.grab(); }
 
@@ -4639,7 +4644,11 @@ export default class RFB extends EventTargetMixin {
                 this._sock.rQskipBytes(4);
             }
 
-            this._display.applyServerResolution(w, h, i);
+            if (this._validateDimensions(w, h))
+                this._display.applyServerResolution(w, h, i);
+            else
+                Log.Warn("Ignoring oversized screen " + sI + ": " + w + "x" + h);
+
             Log.Debug(`Server reported screen ${sI} with resolution ${w}x${h} at ${x}x${y}`);
         }
 
@@ -4738,7 +4747,18 @@ export default class RFB extends EventTargetMixin {
                                              this._fbWidth, this._fbHeight);
     }
 
+    _validateDimensions(width, height) {
+        return width > 0 && width <= MAX_FB_DIMENSION &&
+            height > 0 && height <= MAX_FB_DIMENSION;
+    }
+
     _resize(width, height) {
+        if (!this._validateDimensions(width, height)) {
+            Log.Warn("Rejecting resize to " + width + "x" + height +
+                " (max " + MAX_FB_DIMENSION + ")");
+            return false;
+        }
+
         this._fbWidth = width;
         this._fbHeight = height;
 
@@ -4749,6 +4769,8 @@ export default class RFB extends EventTargetMixin {
         this._updateScale();
 
         this._updateContinuousUpdates();
+
+        return true;
     }
 
     _xvpOp(ver, op) {

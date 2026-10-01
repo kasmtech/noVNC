@@ -4442,7 +4442,7 @@ export default class RFB extends EventTargetMixin {
         const focused = (flags & 1) !== 0;
         const tapped = (flags & 2) !== 0;
         const probe = (flags & 4) !== 0;
-        const touchId = this._sock.rQshift32();
+        const touchId = this._sock.rQshift32() >>> 0;
         const caret = {
             x: this._sock.rQshift16(),
             y: this._sock.rQshift16(),

@@ -173,11 +173,6 @@ export default class RFB extends EventTargetMixin {
         this._hiDpi = 'hiDpi' in options ? !!options.hiDpi : false;
         this._enableQOI = false;
         this._videoQuality = 2;
-        // Opt-in: drive WebRTC media bitrate via the server's congestion
-        // controller. Off by default — full-quality CQP until the user enables
-        // it. Only has effect while WebRTC is active. Sent to the server as the
-        // pseudoEncodingWebRTCCongestionControl pseudo-encoding.
-        this._webRTCCongestionControl = false;
         this._enableWebP = false;
 
         this._trackFrameStats = false;
@@ -424,16 +419,6 @@ export default class RFB extends EventTargetMixin {
     get preferBandwidth() { return this._preferBandwidth; }
     set preferBandwidth(val) {
         this._preferBandwidth = val;
-        this._pendingApplyEncodingChanges = true;
-    }
-
-    get webRTCCongestionControl() { return this._webRTCCongestionControl; }
-    set webRTCCongestionControl(val) {
-        val = !!val;
-        if (this._webRTCCongestionControl === val) {
-            return;
-        }
-        this._webRTCCongestionControl = val;
         this._pendingApplyEncodingChanges = true;
     }
 
@@ -943,8 +928,6 @@ export default class RFB extends EventTargetMixin {
         let toreDown = false;
         for (const [sid, slot] of Array.from(this._webrtcScreens)) {
             if (sid === keepScreenId) continue;
-            Log.Info('[WEBRTC-DIAG] secondary dropping stale transport screen ' +
-                sid + ' after reindex to ' + keepScreenId);
             if (slot.pending) { try { slot.pending.stop(); } catch (e) {} }
             if (slot.live)    { try { slot.live.stop(); }    catch (e) {} }
             this._webrtcScreens.delete(sid);
@@ -968,7 +951,6 @@ export default class RFB extends EventTargetMixin {
         if (sid == null) return;
         this._pendingWebRTCOfferRequest = null;
         if (this._webrtcScreens.has(sid)) return;   // already (re)building
-        Log.Info('[WEBRTC-DIAG] secondary requesting fresh offer for screen ' + sid);
         if (this._display && typeof this._display.relayWebRTCSignalUp === 'function') {
             this._display.relayWebRTCSignalUp(WebRTCSignalKind.RequestOffer, sid, '');
         }
@@ -3544,9 +3526,6 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingGOP1 + this.gop);
         encs.push(encodings.pseudoEncodingStreamingVideoQualityLevel0 + this.videoStreamQuality);
 
-        if (this._webRTCCongestionControl)
-            encs.push(encodings.pseudoEncodingWebRTCCongestionControl);
-
         encs.push(this.streamMode);
 
 	// preferBandwidth choses preset settings. Since we expose all the settings, let's not pass this
@@ -4292,9 +4271,6 @@ export default class RFB extends EventTargetMixin {
         if (kind === WebRTCSignalKind.SdpOffer) {
             if (!slot) { slot = { live: null, pending: null }; this._webrtcScreens.set(screenId, slot); }
             const pending = !!slot.live;
-            Log.Info('[WEBRTC-DIAG] building transport screen ' + screenId +
-                ' pending=' + pending + ' (window ' +
-                (this._isPrimaryDisplay ? 'primary' : 'secondary') + ')');
             const sig = makeSignaling(screenId);
             const transport = new WebRTCVideoTransport(this, screenId, sig,
                 { pending, iceServers: this._webrtcIceServers });
@@ -4330,8 +4306,6 @@ export default class RFB extends EventTargetMixin {
     // (see _forwardRelayedWebRTCToServer). On a fresh offer, relay the
     // session ICE-servers first so the secondary can configure its PC.
     _relayWebRTCSignalToScreen(screenId, kind, payload) {
-        Log.Info('[WEBRTC-DIAG] primary relaying kind=' + kind +
-            ' to secondary screen ' + screenId);
         if (!this._display || typeof this._display.relayWebRTCSignal !== 'function') return;
         if (kind === WebRTCSignalKind.SdpOffer) {
             this._display.relayWebRTCSignal(screenId, WebRTCSignalKind.IceServers,
@@ -4353,8 +4327,6 @@ export default class RFB extends EventTargetMixin {
     // primary over the encodedFramePort. Build/route this window's own
     // RTCPeerConnection; outbound answers/ICE go back over the relay port.
     _onRelayedWebRTCSignal(kind, screenId, payload) {
-        Log.Info('[WEBRTC-DIAG] secondary received relayed kind=' + kind +
-            ' screen=' + screenId);
         if (kind === WebRTCSignalKind.IceServers) {
             this._storeWebRTCIceServers(payload);
             return;
@@ -4405,12 +4377,7 @@ export default class RFB extends EventTargetMixin {
             // Otherwise the user sees a black <video> rectangle covering
             // whatever the canvas had during ICE/SDP negotiation.
             video.style.opacity = '0';
-            Log.Info('[WEBRTC-DIAG] mounting <video> screen ' + screenId +
-                ' (window ' + (this._isPrimaryDisplay ? 'primary' : 'secondary') +
-                ', pending=' + pending + ')');
             video.addEventListener('playing', () => {
-                Log.Info('[WEBRTC-DIAG] <video> PLAYING screen ' + screenId +
-                    ' (' + video.videoWidth + 'x' + video.videoHeight + ')');
                 video.style.opacity = '1';
                 if (pending) this._promotePendingWebRTCScreen(screenId, transport);
             }, { once: true });

@@ -164,8 +164,6 @@ export default class WebRTCVideoTransport {
         });
 
         this._pc.ontrack = (e) => {
-            Log.Info('[WEBRTC-DIAG] ontrack screen ' + this._screenId +
-                     ' (streams=' + (e.streams ? e.streams.length : 0) + ')');
             this._video.srcObject = e.streams && e.streams[0]
                 ? e.streams[0]
                 : new MediaStream([e.track]);
@@ -184,8 +182,6 @@ export default class WebRTCVideoTransport {
 
         this._pc.oniceconnectionstatechange = () => {
             const s = this._pc.iceConnectionState;
-            Log.Info('[WEBRTC-DIAG] screen ' + this._screenId +
-                     ' iceConnectionState=' + s);
             if (s === 'failed' || s === 'disconnected') {
                 if (!this._failureTimer) {
                     this._failureTimer = setTimeout(() => {
@@ -205,8 +201,6 @@ export default class WebRTCVideoTransport {
     }
 
     async _handleOffer(sdp) {
-        Log.Info('[WEBRTC-DIAG] offer received screen ' + this._screenId +
-                 ' (' + (sdp ? sdp.length : 0) + ' bytes)');
         if (!this._pc) {
             this._createPeerConnection();
             if (!this._pc) return;
@@ -234,7 +228,6 @@ export default class WebRTCVideoTransport {
                 return;
             }
             this._negotiated = true;
-            Log.Info('[WEBRTC-DIAG] answer sent screen ' + this._screenId);
             this._signaling.sendAnswer(sdpText);
         } catch (e) {
             Log.Error('SDP offer handling failed (screen ' +

@@ -4193,6 +4193,19 @@ export default class RFB extends EventTargetMixin {
             this._onWebRTCSessionFallback(payload);
             return;
         }
+        // The user turned WebRTC off (or we never advertised it): a late or
+        // re-sent offer must not bring it back. Decline and tell the server
+        // to drop the session so it stops re-offering.
+        if (kind === WebRTCSignalKind.SdpOffer &&
+            (!this._useUdp || !this._webrtcSessionActive)) {
+            Log.Info('Ignoring WebRTC offer for screen ' + screenId +
+                ' (WebRTC disabled)');
+            try {
+                this._sendWebRTCFrame(WebRTCSignalKind.Fallback,
+                    WEBRTC_SESSION_SCREEN, 'unsubscribe');
+            } catch (e) {}
+            return;
+        }
         // Per-screen signal. Handle locally if this (the primary) window
         // renders the screen; otherwise relay it to the secondary window
         // that does.
@@ -4208,7 +4221,8 @@ export default class RFB extends EventTargetMixin {
         this._webrtcIceServersRaw = payload || '';
         this._webrtcIceServers = this._webrtcIceServersRaw.split('\n')
             .map(s => s.trim()).filter(Boolean)
-            .map(raw => RFB._parseIceServer(raw));
+            .map(raw => RFB._parseIceServer(raw))
+            .filter(Boolean);
         Log.Debug('WebRTC ICE servers: ' + JSON.stringify(this._webrtcIceServers));
     }
 
@@ -4221,13 +4235,29 @@ export default class RFB extends EventTargetMixin {
     static _parseIceServer(raw) {
         const m = /^(turns?):(?:([^@/:]+):([^@/]*)@)(.+)$/i.exec(raw);
         if (!m) {
+            // TURN without full credentials (host only, or user@host): the
+            // RTCPeerConnection constructor throws InvalidAccessError for a
+            // turn(s): URL lacking username+credential, which would break
+            // every screen. Strip any userinfo and drop the server instead.
+            if (/^turns?:/i.test(raw)) {
+                Log.Warn('Ignoring TURN server without full credentials');
+                return null;
+            }
             return { urls: raw };
         }
-        return {
-            urls: m[1] + ':' + m[4],
-            username: decodeURIComponent(m[2]),
-            credential: decodeURIComponent(m[3]),
-        };
+        let username, credential;
+        try {
+            username = decodeURIComponent(m[2]);
+            credential = decodeURIComponent(m[3]);
+        } catch (e) {
+            Log.Warn('Ignoring TURN server with malformed credentials');
+            return null;
+        }
+        if (!username || !credential) {
+            Log.Warn('Ignoring TURN server without full credentials');
+            return null;
+        }
+        return { urls: m[1] + ':' + m[4], username, credential };
     }
 
     // The screenId this window renders over WebRTC. The primary renders
@@ -4280,6 +4310,16 @@ export default class RFB extends EventTargetMixin {
         // ICE / Close / Fallback for an existing transport. During a codec
         // switch route to pending (its offer is the one in flight).
         if (!slot) return;
+        // A renegotiate-* fallback only ever concerns the pending transport.
+        // If the client already dropped it (e.g. the browser rejected the new
+        // codec), the server's late timeout must not reach the live stream.
+        if (kind === WebRTCSignalKind.Fallback &&
+            typeof payload === 'string' && payload.startsWith('renegotiate-') &&
+            !slot.pending) {
+            Log.Info('Ignoring late ' + payload + ' for screen ' + screenId +
+                ' (no pending transport)');
+            return;
+        }
         const target = slot.pending || slot.live;
         if (target) target.signaling.deliver(kind, payload);
     }

@@ -23,6 +23,7 @@ import Keyboard from "./input/keyboard.js";
 import initializePrinterRelay from "./output/printer.js";
 import initializeSmartcardRelay from "./output/smartcard.js";
 import GestureHandler from "./input/gesturehandler.js";
+import IOSKeyboard from "./input/ioskeyboard.js";
 import Cursor from "./util/cursor.js";
 import Websock from "./websock.js";
 import DES from "./des.js";
@@ -191,6 +192,11 @@ export default class RFB extends EventTargetMixin {
         this._clipboardServerCapabilitiesFormats = {};
 
         this._threading = true;
+        this._touchMode = 'native';
+        // Set when the server answers our touch pseudo-encoding with the
+        // touch-supported message. Until then (or if it never arrives) touch
+        // input falls back to the gesture emulation regardless of touchMode.
+        this._serverSupportsTouch = false;
 
         // Internal objects
         this._sock = null;              // Websock object
@@ -265,6 +271,7 @@ export default class RFB extends EventTargetMixin {
             handlePointerLockError: this._handlePointerLockError.bind(this),
             handleWheel: this._handleWheel.bind(this),
             handleGesture: this._handleGesture.bind(this),
+            handleNativeTouch: this._handleNativeTouch.bind(this),
             handleFocusChange: this._handleFocusChange.bind(this),
             handleMouseOut: this._handleMouseOut.bind(this),
             handleVisibilityChange: this._handleVisibilityChange.bind(this),
@@ -326,8 +333,16 @@ export default class RFB extends EventTargetMixin {
         this._decoders[encodings.encodingTightPNG] = new TightPNGDecoder();
         this._decoders[encodings.encodingUDP] = new UDPDecoder();
 
+        this._touchInput = touchInput;
         this._keyboard = new Keyboard(this._canvas, touchInput, navigator.keyboard);
         this._keyboard.onkeyevent = this._handleKeyEvent.bind(this);
+        this._iosKeyboard = !isIOS() ? null : new IOSKeyboard(this._canvas, touchInput, {
+            toRemote: (clientX, clientY) => {
+                const pos = clientToElement(clientX, clientY, this._canvas);
+                return { x: this._display.absX(pos.x), y: this._display.absY(pos.y) };
+            },
+            enabled: () => this.autoKeyboard,
+        });
 
         this._gestures = new GestureHandler();
 
@@ -340,6 +355,7 @@ export default class RFB extends EventTargetMixin {
         // ===== PROPERTIES =====
         this.dragViewport = false;
         this.focusOnClick = true;
+        this.autoKeyboard = true;
         this.lastActiveAt = options.lastActiveAt || Date.now();
 
         this._viewOnly = false;
@@ -784,6 +800,20 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
+    get touchMode() { return this._touchMode; }
+    set touchMode(value) {
+        if (value !== this._touchMode) {
+            this._touchMode = value;
+            this._iosKeyboard?.reset();
+            this._updateGestureHandler();
+        }
+    }
+
+    // True only when the user asked for native touch AND the server accepts it.
+    get nativeTouchActive() {
+        return this._touchMode === 'native' && this._serverSupportsTouch;
+    }
+
     get hwEncoderProfile() { return this._hwEncoderProfile; }
     set hwEncoderProfile(value) {
         if (value !== this._hwEncoderProfile) {
@@ -1094,8 +1124,8 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    focus() {
-        this._keyboard.focus();
+    focus(options = {}) {
+        this._keyboard.focus(options);
     }
 
     blur() {
@@ -1336,6 +1366,8 @@ export default class RFB extends EventTargetMixin {
     _connect() {
         Log.Debug(">> RFB.connect");
 
+        this._serverSupportsTouch = false;
+
         if (this._url && this._isPrimaryDisplay) {
             try {
                 Log.Info(`connecting to ${this._url}`);
@@ -1362,7 +1394,7 @@ export default class RFB extends EventTargetMixin {
         // Make our elements part of the page
         this._target.appendChild(this._screen);
 
-        this._gestures.attach(this._canvas);
+        this._updateGestureHandler();
 
         this._cursor.attach(this._canvas);
         this._refreshCursor();
@@ -1389,6 +1421,7 @@ export default class RFB extends EventTargetMixin {
         // have to do anything.
         if (isIOS()) {
             this._canvas.addEventListener("touchend", this._eventHandlers.updateHiddenKeyboard);
+            this._iosKeyboard.attach();
         }
 
         // Mouse events
@@ -1417,6 +1450,11 @@ export default class RFB extends EventTargetMixin {
         this._canvas.addEventListener("gesturestart", this._eventHandlers.handleGesture);
         this._canvas.addEventListener("gesturemove", this._eventHandlers.handleGesture);
         this._canvas.addEventListener("gestureend", this._eventHandlers.handleGesture);
+
+        this._canvas.addEventListener("touchstart", this._eventHandlers.handleNativeTouch, true);
+        this._canvas.addEventListener("touchmove", this._eventHandlers.handleNativeTouch, true);
+        this._canvas.addEventListener("touchend", this._eventHandlers.handleNativeTouch, true);
+        this._canvas.addEventListener("touchcancel", this._eventHandlers.handleNativeTouch, true);
 
         this._resendClipboardNextUserDrivenEvent = true;
 
@@ -1539,7 +1577,12 @@ export default class RFB extends EventTargetMixin {
         this._canvas.removeEventListener("gesturestart", this._eventHandlers.handleGesture);
         this._canvas.removeEventListener("gesturemove", this._eventHandlers.handleGesture);
         this._canvas.removeEventListener("gestureend", this._eventHandlers.handleGesture);
+        this._canvas.removeEventListener("touchstart", this._eventHandlers.handleNativeTouch, true);
+        this._canvas.removeEventListener("touchmove", this._eventHandlers.handleNativeTouch, true);
+        this._canvas.removeEventListener("touchend", this._eventHandlers.handleNativeTouch, true);
+        this._canvas.removeEventListener("touchcancel", this._eventHandlers.handleNativeTouch, true);
         this._canvas.removeEventListener("wheel", this._eventHandlers.handleWheel);
+        this._iosKeyboard?.detach();
         this._canvas.removeEventListener('mousedown', this._eventHandlers.handleMouse);
         this._canvas.removeEventListener('mouseup', this._eventHandlers.handleMouse);
         this._canvas.removeEventListener('mousemove', this._eventHandlers.handleMouse);
@@ -1591,8 +1634,14 @@ export default class RFB extends EventTargetMixin {
 
     _updateHiddenKeyboard(event) {
         // On iOS 15 the navigation bar is at the bottom so we need to account for it
+        const input = document.getElementById('noVNC_keyboardinput');
         const y = Math.max(0, event.pageY - 50);
-        document.querySelector("#noVNC_keyboardinput").style.top = `${y}px`;
+        input.style.top = `${y}px`;
+        input.style.left = `${event.pageX}px`;
+
+        requestAnimationFrame(() => {
+            input.style.pointerEvents = 'none';
+        });
     }
 
     _handleFocusChange(event) {
@@ -1629,6 +1678,9 @@ export default class RFB extends EventTargetMixin {
     }
 
     _focusCanvas(event) {
+        // Do not let the touch-generated mousedown focus the IME before click.
+        if (this._iosKeyboard?.ownsMouse && this.nativeTouchActive &&
+            event.type === 'mousedown') return;
         // Hack:
         // On most mobile phones it's possible to play audio
         // only if it's triggered by user action. It's also
@@ -1653,8 +1705,10 @@ export default class RFB extends EventTargetMixin {
             return;
         }
 
-        this.focus();
+        const deferToTouchEnd = isIOS() && this.nativeTouchActive &&
+                                event.type === 'touchstart';
 
+        this.focus({virtualKeyboard: !deferToTouchEnd});
     }
 
     _setDesktopName(name) {
@@ -2200,6 +2254,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleKeyEvent(keysym, code, down) {
+        this._iosKeyboard?.reset();
         this.sendKey(keysym, code, down);
     }
 
@@ -2220,6 +2275,9 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleMouse(ev) {
+        if (this._iosKeyboard && this.nativeTouchActive && this._iosKeyboard.handleMouse(ev)) {
+            return;
+        }
         /*
          * We don't check connection status or viewOnly here as the
          * mouse events might be used to control the viewport
@@ -2482,9 +2540,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendMouse(x, y, mask) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; } // View only, skip mouse events
-        if (!this._isPrimaryDisplay) { return; }
+        if (!this.isConnected || this._viewOnly || !this._isPrimaryDisplay)
+            return;
 
         if (this._pointerLock && this._directMouseEnabled) {
             // Direct drive: button state changes only (movement is sent raw from _handleMouse)
@@ -2496,8 +2553,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendScroll(x, y, dX, dY) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; } // View only, skip mouse events
+        if (!this.isConnected || this._viewOnly)  // View only, skip mouse events
+            return;
 
         if (this._pointerLock && this._directMouseEnabled) {
             this._sendDirectMouse(0, 0, this._mouseButtonMask, dX, dY);
@@ -2509,9 +2566,9 @@ export default class RFB extends EventTargetMixin {
     }
 
     _sendDirectMouse(dx, dy, buttonMask, scrollDX, scrollDY) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; }
-        if (!this._isPrimaryDisplay) { return; }
+        if (!this.isConnected || this._viewOnly || !this._isPrimaryDisplay)
+            return;
+
         RFB.messages.directMouseEvent(this._sock, dx, dy, buttonMask, scrollDX, scrollDY);
     }
 
@@ -2628,8 +2685,9 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleWheel(ev) {
-        if (this._rfbConnectionState !== 'connected') { return; }
-        if (this._viewOnly) { return; } // View only, skip mouse events
+        this._iosKeyboard?.reset();
+        if (!this.isConnected || this._viewOnly)  // View only, skip mouse events
+            return;
 
         ev.stopPropagation();
         ev.preventDefault();
@@ -2681,6 +2739,56 @@ export default class RFB extends EventTargetMixin {
 
         const pointer = clientToElement(ev.clientX, ev.clientY, this._canvas);
         this._sendScroll(pointer.x, pointer.y, dX, dY);
+    }
+
+    _handleNativeTouch(ev) {
+        if (!this.nativeTouchActive) {
+            return;
+        }
+
+        if (!this.isConnected || this._viewOnly || !this._isPrimaryDisplay)
+            return;
+
+        Log.Debug(`Native touch event: ${ev.type}, touches: ${ev.changedTouches.length}, target: ${ev.target.tagName}`);
+
+        // A tap that may open the iOS keyboard is left uncancelled.
+        if (!this._iosKeyboard?.handleTouch(ev))
+            ev.preventDefault();
+
+        const changed = ev.changedTouches;
+        for (let i = 0; i < changed.length; i++) {
+            const touch = changed[i];
+            const pos = clientToElement(touch.clientX, touch.clientY, this._canvas);
+            const x = this._display.absX(pos.x);
+            const y = this._display.absY(pos.y);
+            // Browser touch identifiers can be large or negative; coerce to an
+            // unsigned 32-bit value to match the wire format.
+            const id = touch.identifier >>> 0;
+
+            let state;
+            if (ev.type === 'touchstart') {
+                state = 0; // begin
+            } else if (ev.type === 'touchmove') {
+                state = 1; // update
+            } else {
+                // touchend / touchcancel
+                state = 2; // end
+            }
+
+            this._sendTouch(id, state, x, y);
+        }
+    }
+
+    _sendTouch(id, state, x, y) {
+        RFB.messages.touchEvent(this._sock, id, state, x, y);
+    }
+
+    _updateGestureHandler() {
+        if (this.nativeTouchActive) {
+            this._gestures.detach();
+        } else {
+            this._gestures.attach(this._canvas);
+        }
     }
 
     _fakeMouseMove(ev, elementX, elementY) {
@@ -2738,6 +2846,10 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleGesture(ev) {
+        if (this.nativeTouchActive) {
+            return;
+        }
+
         let magnitude;
 
         let pos = clientToElement(ev.detail.clientX, ev.detail.clientY,
@@ -3454,6 +3566,8 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingExtendedClipboard);
         encs.push(encodings.pseudoEncodingKasmDisconnectNotify);
         encs.push(encodings.pseudoEncodingDirectMouse);
+        if (isTouchDevice)
+            encs.push(encodings.pseudoEncodingTouch);
         if (this._hasWebp())
             encs.push(encodings.pseudoEncodingWEBP);
         if (this._enableQOI)
@@ -4065,6 +4179,12 @@ export default class RFB extends EventTargetMixin {
             case messages.msgTypeLatencyMeasurement:
                 return this._handleLatencyMeasurementResponse();
 
+            case messages.msgTypeTouchSupported:
+                return this._handleTouchSupported();
+
+            case messages.msgTypeTextInputFocus:
+                return this._handleTextInputFocus();
+
             case messages.msgTypeVideoEncoders:
                 return this._handleServerVideoEncoders();
 
@@ -4282,12 +4402,71 @@ export default class RFB extends EventTargetMixin {
                 configurations: codecConfigurations
             }
         }));
+
+        return true;
     }
 
     _handleForceGameMode() {
         // No payload — the server is requesting that this client enter game mode.
         // Fire an event so the UI layer can engage pointer lock on the next user gesture.
         this.dispatchEvent(new CustomEvent("gamemodeforced"));
+        return true;
+    }
+
+    _handleTouchSupported() {
+        this._serverSupportsTouch = true;
+        if (isTouchDevice)
+            Log.Info("Server supports touch; " +
+                (this._touchMode === 'native' ? "using native touch events."
+                    : "touch mode setting keeps gesture emulation."));
+        this._updateGestureHandler();
+        return true;
+    }
+
+    remoteToClientPos(x, y) {
+        if (!this._display || !this._canvas)
+            return null;
+
+        const rect = this._canvas.getBoundingClientRect();
+        return {
+            x: rect.left + this._display.clientX(x),
+            y: rect.top + this._display.clientY(y)
+        };
+    }
+
+    _handleTextInputFocus() {
+        if (this._sock.rQwait("TextInputFocus", 21, 1))
+            return false;
+
+        const flags = this._sock.rQshift8();
+        const focused = (flags & 1) !== 0;
+        const tapped = (flags & 2) !== 0;
+        const probe = (flags & 4) !== 0;
+        const touchId = this._sock.rQshift32() >>> 0;
+        const caret = {
+            x: this._sock.rQshift16(),
+            y: this._sock.rQshift16(),
+            w: this._sock.rQshift16(),
+            h: this._sock.rQshift16()
+        };
+        const field = {
+            x: this._sock.rQshift16(),
+            y: this._sock.rQshift16(),
+            w: this._sock.rQshift16(),
+            h: this._sock.rQshift16()
+        };
+
+        Log.Debug("Text input focus " + (focused ? "gained" : "lost") +
+            (tapped ? " (tapped)" : "") + (probe ? " (probe)" : "") +
+            (touchId !== 0 ? " touch=" + touchId : ""));
+
+        if (probe) {
+            return true;
+        }
+
+        this._iosKeyboard?.textInputFocus(focused, tapped, touchId, field);
+        this.dispatchEvent(new CustomEvent("textinputfocus",
+            {detail: {focused, tapped, caret, field}}));
         return true;
     }
 
@@ -4914,6 +5093,26 @@ RFB.messages = {
         buff[offset + 7] = scrollDX & 0xff;
         buff[offset + 8] = (scrollDY >> 8) & 0xff;
         buff[offset + 9] = scrollDY & 0xff;
+
+        sock._sQlen += 10;
+        sock.flush();
+    },
+
+    touchEvent(sock, id, type, x, y) {
+        const buff = sock._sQ;
+        const offset = sock._sQlen;
+
+        // Wire format: type(1) + id(4, BE) + x(2, BE) + y(2, BE)
+        buff[offset]     = messages.msgTypeTouchEvent;
+        buff[offset + 1] = type & 0xff;
+        buff[offset + 2] = (id >>> 24) & 0xff;
+        buff[offset + 3] = (id >>> 16) & 0xff;
+        buff[offset + 4] = (id >>> 8) & 0xff;
+        buff[offset + 5] = id & 0xff;
+        buff[offset + 6] = (x >> 8) & 0xff;
+        buff[offset + 7] = x & 0xff;
+        buff[offset + 8] = (y >> 8) & 0xff;
+        buff[offset + 9] = y & 0xff;
 
         sock._sQlen += 10;
         sock.flush();

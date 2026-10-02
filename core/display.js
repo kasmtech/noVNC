@@ -166,15 +166,14 @@ export default class Display {
         this._primaryChannel = null;
         this._portRelayWorker = null;      // SharedWorker instance (primary only)
         this._encodedFramePort = null;     // MessagePort from primary (secondary only)
-        // Per-screenIndex queue of WebRTC signals to relay to a secondary
-        // window whose encodedFramePort isn't established yet (primary only).
+        // Signals for secondaries whose encodedFramePort isn't up yet (primary only).
         this._webrtcRelayQueue = new Map();
         this._localDecoder = null;         // VideoDecoder on secondary
         this._localDecoderCodec = null;
         this._localDecoderW = 0;
         this._localDecoderH = 0;
         this._localDecoderStreamMode = null;
-        this._localDecoderNeedKey = false; // wait for a key frame after (re)configure
+        this._localDecoderNeedKey = false; // drop deltas until a key frame
         this._localDecoderMeta = new Map(); // timestamp → {x, y, width, height, frameId}
         this._localDecoderTs = 0;
         this._rfb = rfb;
@@ -491,11 +490,8 @@ export default class Display {
                         const screen = this._screens[idx];
                         if (screen) {
                             screen.encodedFramePort = e.data.port;
-                            // Listen for the secondary window's relayed WebRTC
-                            // signals (its SDP answer / ICE) coming back so we
-                            // can forward them up the server WebSocket. Encoded
-                            // frames only flow primary->secondary, so this
-                            // receive path is WebRTC-signal-only.
+                            // Frames flow primary->secondary only; the return
+                            // path carries the secondary's WebRTC answer/ICE.
                             screen.encodedFramePort.onmessage = (ev) => {
                                 const w = ev.data && ev.data.webrtc;
                                 if (w && this._rfb &&
@@ -505,10 +501,7 @@ export default class Display {
                             };
                             screen.encodedFramePort.start();
                             Log.Info(`[PRIMARY] encodedFramePort established for screen ${idx}`);
-                            // Flush any WebRTC signals queued for this screen
-                            // before its relay port existed (offer can arrive
-                            // from the server before the SharedWorker handshake
-                            // completes — see doc/MULTI_MONITOR_WEBRTC_PLAN.md §10).
+                            // The server's offer can arrive before this handshake completes.
                             this._flushWebRTCRelayQueue(idx);
                         }
                     }
@@ -1066,12 +1059,9 @@ export default class Display {
                     const screenIndex = event.data.screenIndex;
                     const prevScreenIndex = this._screens[0].screenIndex;
                     this._screens[0].screenIndex = screenIndex;
-                    // A *change* of index (vs. the initial registration) means a
-                    // non-last monitor closed and the windows re-densified. Any
-                    // WebRTC transport this window still holds was built for its
-                    // old screenId; drop it now so its stale full-window <video>
-                    // overlay doesn't sit frozen over the new screen's WebSocket
-                    // video until the old PC's ICE grace expires.
+                    // An index change means a non-last monitor closed and windows
+                    // re-densified; drop the transport built for the old screenId so
+                    // its stale <video> overlay doesn't freeze over the new screen.
                     if (typeof prevScreenIndex === 'number' &&
                         prevScreenIndex !== screenIndex &&
                         this._rfb &&
@@ -1092,9 +1082,7 @@ export default class Display {
                             this._encodedFramePort.start();
                             this._encodedFramePort.onmessage = this._handleEncodedFrame.bind(this);
                             Log.Info(`[SECONDARY] encodedFramePort established`);
-                            // Now that the relay port for this (possibly new)
-                            // screen is up, fire any deferred re-offer request
-                            // queued by a reindex so the survivor recovers RTP.
+                            // Send any re-offer request deferred by a reindex.
                             if (this._rfb &&
                                 typeof this._rfb._maybeRequestPendingWebRTCOffer === 'function') {
                                 this._rfb._maybeRequestPendingWebRTCOffer();
@@ -1620,10 +1608,7 @@ export default class Display {
         });
     }
 
-    // Primary -> secondary: relay one WebRTC signal to the secondary
-    // window that renders screen `screenIndex`, over its dedicated
-    // encodedFramePort. Queues until that port is established (the server
-    // can offer a screen before the SharedWorker port handshake finishes).
+    // Primary -> secondary signal relay; queued until the port exists.
     relayWebRTCSignal(screenIndex, kind, screenId, payload) {
         const screen = this._screens[screenIndex];
         const msg = { webrtc: { kind, screenId, payload } };
@@ -1650,8 +1635,7 @@ export default class Display {
         this._webrtcRelayQueue.delete(screenIndex);
     }
 
-    // Secondary -> primary: send this window's WebRTC signal (SDP answer /
-    // ICE / fallback) up to the primary, which forwards it to the server.
+    // Secondary -> primary; the primary forwards to the server.
     relayWebRTCSignalUp(kind, screenId, payload) {
         if (!this._encodedFramePort) {
             Log.Warn('relayWebRTCSignalUp: no encodedFramePort yet (screen ' +
@@ -1666,10 +1650,7 @@ export default class Display {
     }
 
     _handleEncodedFrame(e) {
-        // The encodedFramePort is shared by the encoded-frame fast path and
-        // the per-screen WebRTC signaling relay. WebRTC signals are tagged
-        // with a `webrtc` envelope; hand them to rfb (the secondary builds
-        // its own RTCPeerConnection from relayed offers).
+        // The port also carries WebRTC signals, tagged with a `webrtc` envelope.
         if (e.data && e.data.webrtc) {
             const w = e.data.webrtc;
             if (this._rfb &&
@@ -1717,15 +1698,13 @@ export default class Display {
             this._localDecoderH = height;
             this._localDecoderStreamMode = streamMode;
             this._configureLocalDecoder(codec, width, height, streamMode);
-            // A freshly (re)configured VideoDecoder must be fed a key frame
-            // first; a delta throws and tears the decoder down. After a
-            // transport switch (WebRTC -> WebSocket) the first relayed frame
-            // is usually mid-GOP, so wait for the next key frame.
+            // A delta fed to a fresh VideoDecoder throws; after a WebRTC->WebSocket
+            // switch the first frame is usually mid-GOP.
             this._localDecoderNeedKey = true;
         }
 
         if (this._localDecoderNeedKey) {
-            if (!keyFrame) return;   // drop deltas until the GOP boundary
+            if (!keyFrame) return;
             this._localDecoderNeedKey = false;
         }
 

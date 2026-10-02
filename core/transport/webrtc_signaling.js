@@ -16,6 +16,8 @@
  *   5: Fallback signal  (bidirectional; per screen or session-level)
  *   6: Client capability advertisement (client -> server; session-level)
  *   7: Screen close     (server -> client; per screen — monitor removed)
+ *   8: Request offer    (client -> server; per screen)
+ *   9: Image request   (client -> server; WEBRTC_IMAGE_SCREEN)
  *
  * Each instance is bound to one screenId so a per-screen transport's
  * outbound signals carry the right id without the transport having to
@@ -34,6 +36,8 @@ import * as Log from '../util/logging.js';
 // in common/rfb/msgTypes.h.
 export const WEBRTC_MSG_TYPE = 192;
 export const WEBRTC_SESSION_SCREEN = 0xFF;
+// Image DataChannel connection (webrtc_image.js); matches kWebRTCImageScreen.
+export const WEBRTC_IMAGE_SCREEN = 0xFE;
 // Must match kMaxWebRTCSignalBytes in common/rfb/msgTypes.h; the server
 // rejects larger signals, so drop them here instead.
 export const WEBRTC_MAX_SIGNAL_BYTES = 16 * 1024;
@@ -47,6 +51,7 @@ export const WebRTCSignalKind = Object.freeze({
     ClientCapabilities: 6,
     Close:         7,
     RequestOffer:  8,
+    ImageRequest:  9,
 });
 
 // Write a single msgTypeWebRTCSignal frame to the WebSocket. Standalone

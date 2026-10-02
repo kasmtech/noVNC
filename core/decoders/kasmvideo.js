@@ -99,19 +99,10 @@ export default class KasmVideoDecoder {
     }
 
     _skipRect(x, y, width, height, _sock, display, _depth, frameId) {
-        // Under WebRTC media the server emits skip-rects in place of
-        // encoded video (the payload rides the RTCPeerConnection).
-        // Clearing the canvas here would paint the visible area black
-        // during the ~1-2s ICE/SDP handshake before the first WebRTC
-        // frame arrives. Leave the canvas alone in that mode so the
-        // user sees the last image-mode frame until the <video> takes
-        // over on its 'playing' event.
-        // Per-screen WebRTC (one PeerConnection per screen): a skip-rect
-        // is only emitted by the server for a screen it is streaming over
-        // WebRTC, so if any screen transport is still up (negotiating or
-        // connected) we leave the canvas alone and let the <video> overlay
-        // show through. A screen that has fallen back to WebSocket video
-        // emits real encoded rects, not skip-rects, so it isn't affected.
+        // Skip-rects mean the video rides WebRTC. Clearing would paint the canvas
+        // black during the ICE/SDP handshake, so keep the last frame until the
+        // <video> overlay takes over. Screens that fell back to WebSocket video
+        // emit real rects, not skip-rects.
         let webrtcActive = false;
         const screens = this._rfb && this._rfb._webrtcScreens;
         if (screens) {

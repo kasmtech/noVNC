@@ -44,9 +44,11 @@ import RREDecoder from "./decoders/rre.js";
 import HextileDecoder from "./decoders/hextile.js";
 import KasmVideoDecoder from "./decoders/kasmvideo.js";
 import WebRTCVideoTransport from "./transport/webrtc_video.js";
-import WebRTCSignaling, { WEBRTC_MSG_TYPE, WEBRTC_SESSION_SCREEN, WebRTCSignalKind, writeWebRTCFrame } from "./transport/webrtc_signaling.js";
+import WebRTCImageTransport from "./transport/webrtc_image.js";
+import WebRTCSignaling, { WEBRTC_MSG_TYPE, WEBRTC_SESSION_SCREEN, WEBRTC_IMAGE_SCREEN, WebRTCSignalKind, writeWebRTCFrame } from "./transport/webrtc_signaling.js";
 import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
+import UDPDecoder from "./decoders/udp.js";
 import {FPS, UI_SETTING_PROFILE_OPTIONS} from '../app/constants.js';
 
 // Server-initiated session fallbacks that are followed by a re-offer; see
@@ -55,6 +57,10 @@ import {FPS, UI_SETTING_PROFILE_OPTIONS} from '../app/constants.js';
 const WEBRTC_RECOVERABLE_FALLBACKS = new Set([
     'ice-timeout', 'offer-timeout', 'connect-timeout', 'handshake-timeout',
 ]);
+
+const IMAGE_CHANNEL_MAX_FAILURES = 3;
+const IMAGE_CHANNEL_OFFER_TIMEOUT_MS = 10000;
+const IMAGE_CHANNEL_REFRESH_COOLDOWN_MS = 500;
 
 // How many seconds to wait for a disconnect to finish
 const DISCONNECT_TIMEOUT = 3;
@@ -176,6 +182,14 @@ export default class RFB extends EventTargetMixin {
         this._webrtcSessionCodec = null;    // codecKey currently advertised
         this._webrtcIceServers = [];        // [{urls}] from the kind=4 signal
         this._webrtcIceServersRaw = '';     // raw newline list, for relaying
+
+        // Image-mode DataChannel (unreliable rect carrier, no RTP video).
+        this._imageChannel = null;
+        this._imageChannelActive = false;
+        this._imageRectsSeen = false;
+        this._imageChannelFailures = 0;
+        this._imageOfferTimer = null;
+        this._imageLastRefresh = 0;
 
         this._hiDpi = 'hiDpi' in options ? !!options.hiDpi : false;
         this._enableQOI = false;
@@ -331,6 +345,7 @@ export default class RFB extends EventTargetMixin {
         this._decoders[encodings.encodingKasmVideo] = new KasmVideoDecoder(this, this._display);
         this._decoders[encodings.encodingTight] = new TightDecoder(this._display);
         this._decoders[encodings.encodingTightPNG] = new TightPNGDecoder();
+        this._decoders[encodings.encodingUDP] = new UDPDecoder();
 
         this._keyboard = new Keyboard(this._canvas, touchInput, navigator.keyboard);
         this._keyboard.onkeyevent = this._handleKeyEvent.bind(this);
@@ -762,8 +777,8 @@ export default class RFB extends EventTargetMixin {
     get enableWebRTC() { return this._useUdp; }
     set enableWebRTC(value) {
         this._useUdp = value;
-        // Drives the WebRTC media path. If the server didn't build with
-        // ENABLE_WEBRTC_MEDIA, the kind=6 capability message gets bounced
+        // Drives the WebRTC media path. If the server can't negotiate
+        // WebRTC, the kind=6 capability message gets bounced
         // with a fallback signal and _webrtc tears itself down — no harm
         // done.
         this._applyWebRTCMediaState('toggle');
@@ -875,6 +890,8 @@ export default class RFB extends EventTargetMixin {
         const wantOn  = !!wantCodecs;
         const codecKey = wantCodecs ? wantCodecs.join(',') : '';
 
+        if (wantOn) this._stopImageChannel(true);
+
         if (wantOn && this.isConnected) {
             // Advertise (or re-advertise on a codec change). The server
             // replies with the ICE-servers list + one offer per active
@@ -909,6 +926,14 @@ export default class RFB extends EventTargetMixin {
             this._teardownAllWebRTCScreens();
             this._webrtcSessionActive = false;
             this._webrtcSessionCodec = null;
+        }
+
+        if (!wantOn) {
+            if (this._useUdp && this.isConnected) {
+                this._startImageChannel(reason);
+            } else {
+                this._stopImageChannel(true);
+            }
         }
     }
 
@@ -1617,6 +1642,7 @@ export default class RFB extends EventTargetMixin {
 
         this._keyboard.ungrab();
         this._gestures.detach();
+        this._stopImageChannel(false);
         if (this._isPrimaryDisplay) {
             this._sock.close();
         } else {
@@ -4152,6 +4178,170 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
+    // -------- Image-mode DataChannel --------
+
+    _makeImageSignaling() {
+        return new WebRTCSignaling(WEBRTC_IMAGE_SCREEN,
+            (k, sid, p) => this._sendWebRTCFrame(k, sid, p));
+    }
+
+    _startImageChannel(reason) {
+        if (this._imageChannel || this._imageChannelFailures >= IMAGE_CHANNEL_MAX_FAILURES) return;
+        Log.Info('Requesting image DataChannel (reason=' + reason + ')');
+        this._imageChannel = new WebRTCImageTransport(
+            this, this._makeImageSignaling(), this._webrtcIceServers,
+            (data, frameId) => this._handleUdpRect(data, frameId),
+            () => this._onImageChannelLoss());
+        this._imageOfferTimer = setTimeout(() => {
+            this._imageOfferTimer = null;
+            if (this._imageChannel && !this._imageChannel.isOpen) {
+                this._imageChannel._fail('offer-timeout');
+            }
+        }, IMAGE_CHANNEL_OFFER_TIMEOUT_MS);
+        try {
+            this._sendWebRTCFrame(WebRTCSignalKind.ImageRequest,
+                WEBRTC_IMAGE_SCREEN, '');
+        } catch (e) {
+            Log.Error('Image channel request failed: ' + e);
+            this._imageChannel._fail('request-failed', /*silent=*/true);
+        }
+    }
+
+    // notifyServer makes the server resume WebSocket rects.
+    _stopImageChannel(notifyServer) {
+        if (this._imageOfferTimer) {
+            clearTimeout(this._imageOfferTimer);
+            this._imageOfferTimer = null;
+        }
+        if (!this._imageChannel) return;
+        const wasActive = this._imageChannelActive;
+        try { this._imageChannel.stop(); } catch (e) {}
+        this._imageChannel = null;
+        this._imageChannelActive = false;
+        this._imageRectsSeen = false;
+        if (notifyServer && this.isConnected) {
+            try {
+                this._sendWebRTCFrame(WebRTCSignalKind.Fallback,
+                    WEBRTC_IMAGE_SCREEN, 'client-stop');
+            } catch (e) {}
+        }
+        if (wasActive) this._display.clear();
+    }
+
+    _handleImageSignal(kind, payload) {
+        if (!this._imageChannel) {
+            // Don't let a stray offer resurrect a dropped channel.
+            if (kind === WebRTCSignalKind.SdpOffer) {
+                try {
+                    this._sendWebRTCFrame(WebRTCSignalKind.Fallback,
+                        WEBRTC_IMAGE_SCREEN, 'client-stop');
+                } catch (e) {}
+            }
+            return;
+        }
+        if (kind === WebRTCSignalKind.SdpOffer) {
+            if (this._imageOfferTimer) {
+                clearTimeout(this._imageOfferTimer);
+                this._imageOfferTimer = null;
+            }
+            this._imageChannel.setIceServers(this._webrtcIceServers);
+        }
+        this._imageChannel.signaling.deliver(kind, payload);
+    }
+
+    _onImageChannelOpen() {
+        Log.Info('Image DataChannel established');
+        this._imageChannelActive = true;
+        this._imageChannelFailures = 0;
+    }
+
+    // The transport tore itself down; the server resumes WebSocket rects.
+    _onImageChannelFallback(transport, reason) {
+        if (transport !== this._imageChannel) return;
+        Log.Warn('Image DataChannel fallback (' + reason +
+            ') — rects now stream over the WebSocket');
+        if (this._imageOfferTimer) {
+            clearTimeout(this._imageOfferTimer);
+            this._imageOfferTimer = null;
+        }
+        const wasActive = this._imageChannelActive;
+        this._imageChannel = null;
+        this._imageChannelActive = false;
+        this._imageRectsSeen = false;
+        // A deliberate server refusal is not a transport failure.
+        if (reason !== 'server-video-active') this._imageChannelFailures++;
+        if (wasActive) {
+            this._display.clear();
+            this._requestFullRefresh();
+        }
+    }
+
+    // Lost pixels are never retransmitted; ask for a full frame, rate-limited
+    // because the refresh can itself lose pieces.
+    _onImageChannelLoss() {
+        const now = Date.now();
+        if (now - this._imageLastRefresh < IMAGE_CHANNEL_REFRESH_COOLDOWN_MS) return;
+        this._imageLastRefresh = now;
+        Log.Warn('Image DataChannel lost a message; requesting full refresh');
+        this._requestFullRefresh();
+    }
+
+    // One complete message: a rect (header + payload) or the LastRect marker.
+    _handleUdpRect(data, frame_id) {
+        if (data.length < 12) {
+            Log.Warn('Image channel message too short (' + data.length + ' bytes)');
+            return false;
+        }
+        if (!this._imageRectsSeen) {
+            // Drop queued WebSocket frames so frame ids start clean.
+            this._imageRectsSeen = true;
+            this._display.clear();
+        }
+
+        const frame = {
+            x: (data[0] << 8) + data[1],
+            y: (data[2] << 8) + data[3],
+            width: (data[4] << 8) + data[5],
+            height: (data[6] << 8) + data[7],
+            encoding: parseInt((data[8] << 24) + (data[9] << 16) +
+                               (data[10] << 8) + data[11], 10)
+        };
+
+        switch (frame.encoding) {
+            case encodings.pseudoEncodingLastRect:
+                // x carries the frame's rect count.
+                this._display.flip(frame_id, frame.x + 1);
+                if (this._display.pending())
+                    this._display.flush(false);
+                break;
+            case encodings.encodingTight:
+                try {
+                    this._decoders[encodings.encodingUDP].decodeRect(
+                        frame.x, frame.y, frame.width, frame.height,
+                        data, this._display, this._fbDepth, frame_id);
+                } catch (err) {
+                    this._fail("Error decoding rect: " + err);
+                    return false;
+                }
+                break;
+            case encodings.encodingCopyRect: {
+                if (data.length < 16) {
+                    Log.Error('CopyRect image-channel rect too short (' + data.length + ' bytes)');
+                    return false;
+                }
+                const srcX = (data[12] << 8) | data[13];
+                const srcY = (data[14] << 8) | data[15];
+                this._display.copyImage(srcX, srcY,
+                    frame.x, frame.y, frame.width, frame.height, frame_id);
+                break;
+            }
+            default:
+                Log.Error('Invalid rect encoding via image channel: ' + frame.encoding);
+                return false;
+        }
+        return true;
+    }
+
     // -------- WebRTC media (libdatachannel migration, Phase 1+) --------
 
     _handleWebRTCSignal() {
@@ -4168,6 +4358,10 @@ export default class RFB extends EventTargetMixin {
     }
 
     _dispatchWebRTCSignal(kind, screenId, payload) {
+        if (screenId === WEBRTC_IMAGE_SCREEN) {
+            this._handleImageSignal(kind, payload);
+            return;
+        }
         // Session-level ICE servers: stash (parsed for our own PCs, raw
         // for relaying to secondary windows before their offers).
         if (kind === WebRTCSignalKind.IceServers) {

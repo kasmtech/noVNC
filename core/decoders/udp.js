@@ -265,11 +265,10 @@ export default class UDPDecoder {
             }
         }
 
-        //TODO: get rid of me
         if (data.length !== len + i) {
-            console.log('Rect of size ' + len + ' with data size ' + data.length + ' index of ' + i);
+            Log.Debug('UDP rect length mismatch: header says ' + len +
+                      ', have ' + (data.length - i) + ' bytes');
         }
-        
 
         return data.slice(i);
     }

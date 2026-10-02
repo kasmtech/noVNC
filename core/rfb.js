@@ -49,6 +49,13 @@ import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
 import {FPS, UI_SETTING_PROFILE_OPTIONS} from '../app/constants.js';
 
+// Server-initiated session fallbacks that are followed by a re-offer; see
+// _onWebRTCSessionFallback. Must match the reasons VNCSConnectionST sends from
+// coordinatedWebRTCFallback / phaseReason.
+const WEBRTC_RECOVERABLE_FALLBACKS = new Set([
+    'ice-timeout', 'offer-timeout', 'connect-timeout', 'handshake-timeout',
+]);
+
 // How many seconds to wait for a disconnect to finish
 const DISCONNECT_TIMEOUT = 3;
 const DEFAULT_BACKGROUND = 'rgb(40, 40, 40)';
@@ -1575,8 +1582,8 @@ export default class RFB extends EventTargetMixin {
         // WebRTC media (libdatachannel) kickoff. The reconciler reads
         // _useUdp and _streamMode and starts the transport iff both are
         // in a WebRTC-eligible state (toggle on, codec is not image-mode).
-        // Server-side: enableWebRTCMedia off -> kind=6 gets bounced
-        // and _webrtc tears itself down.
+        // Server-side: a capability the server cannot honour is answered with
+        // a session-level Fallback and the client tears WebRTC down.
         setTimeout(function() { this._applyWebRTCMediaState('connect') }.bind(this), 3000);
 
         Log.Debug("<< RFB.connect");
@@ -4202,7 +4209,8 @@ export default class RFB extends EventTargetMixin {
             .map(s => s.trim()).filter(Boolean)
             .map(raw => RFB._parseIceServer(raw))
             .filter(Boolean);
-        Log.Debug('WebRTC ICE servers: ' + JSON.stringify(this._webrtcIceServers));
+        Log.Debug('WebRTC ICE servers: ' +
+            JSON.stringify(this._webrtcIceServers.map(s => s.urls)));
     }
 
     // Parse one server-sent ICE server URL into an RTCIceServer dict. STUN
@@ -4294,6 +4302,14 @@ export default class RFB extends EventTargetMixin {
             !slot.pending) {
             Log.Info('Ignoring late ' + payload + ' for screen ' + screenId +
                 ' (no pending transport)');
+            return;
+        }
+        // Close means the screen itself is gone: deliver it to the live
+        // transport as well, or its <video> overlay would stay up over a
+        // screen that no longer exists.
+        if (kind === WebRTCSignalKind.Close) {
+            if (slot.pending) slot.pending.signaling.deliver(kind, payload);
+            if (slot.live)    slot.live.signaling.deliver(kind, payload);
             return;
         }
         const target = slot.pending || slot.live;
@@ -4432,8 +4448,30 @@ export default class RFB extends EventTargetMixin {
         Log.Warn('WebRTC session fallback (' + reason + ') — image mode taking over');
         this._freezeFrameWebRTC();
         this._teardownAllWebRTCScreens();
+        // Secondary windows own their own PeerConnections; the primary
+        // returns before relaying session-level signals, so tell each one to
+        // drop its screen instead of leaving a stale <video> overlay up until
+        // its own ICE grace expires.
+        this._relaySessionFallbackToSecondaries(reason);
+        // Recoverable reasons: the server keeps the session subscribed and will
+        // re-offer (tickWebRTCReoffer). Stay "active" so that offer is accepted
+        // instead of being declined with an 'unsubscribe' that would turn
+        // WebRTC off for the rest of the session. Every other reason
+        // (retries-exhausted, no-server-codec, no-hw-codec-overlap, ...) ends
+        // the session.
+        if (WEBRTC_RECOVERABLE_FALLBACKS.has(String(reason))) return;
         this._webrtcSessionActive = false;
         this._webrtcSessionCodec = null;
+    }
+
+    _relaySessionFallbackToSecondaries(reason) {
+        if (!this._display || typeof this._display.relayWebRTCSignal !== 'function') return;
+        const n = this._display.screens ? this._display.screens.length : 0;
+        for (let idx = 1; idx < n; idx++) {
+            if (idx === this._localWebRTCScreenId()) continue;
+            this._display.relayWebRTCSignal(idx, WebRTCSignalKind.Fallback, idx,
+                'session-' + reason);
+        }
     }
 
     _handleSubscribeUnixRelay() {

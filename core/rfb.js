@@ -12,7 +12,7 @@ import { toUnsigned32bit, toSigned32bit } from './util/int.js';
 import * as Log from './util/logging.js';
 import { encodeUTF8, decodeUTF8, uuidv4 } from './util/strings.js';
 import { hashUInt8Array } from './util/int.js';
-import { dragThreshold, supportsCursorURIs, isTouchDevice, isWindows, isMac, isIOS, isDesktop } from './util/browser.js';
+import { dragThreshold, supportsCursorURIs, isTouchDevice, isWindows, isMac, isIOS, isDesktop, deviceClass } from './util/browser.js';
 import { clientToElement } from './util/element.js';
 import { setCapture } from './util/events.js';
 import EventTargetMixin from './util/eventtarget.js';
@@ -3568,6 +3568,11 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingDirectMouse);
         if (isTouchDevice)
             encs.push(encodings.pseudoEncodingTouch);
+        encs.push({ phone: encodings.pseudoEncodingDevicePhone,
+                    tablet: encodings.pseudoEncodingDeviceTablet }[deviceClass()] ||
+                  encodings.pseudoEncodingDeviceDesktop);
+        const dpr = Math.min(499, Math.max(100, Math.round((window.devicePixelRatio || 1) * 100)));
+        encs.push(encodings.pseudoEncodingDevicePixelRatio100 + dpr - 100);
         if (this._hasWebp())
             encs.push(encodings.pseudoEncodingWEBP);
         if (this._enableQOI)

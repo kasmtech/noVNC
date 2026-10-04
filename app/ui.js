@@ -35,7 +35,7 @@ import "core-js/stable";
 import "regenerator-runtime/runtime";
 import * as Log from '../core/util/logging.js';
 import _, { l10n } from './localization.js';
-import { isTouchDevice, isSafari, hasScrollbarGutter, dragThreshold, supportsBinaryClipboard, isFirefox, isWindows, isIOS, supportsPointerLock, supportsKeyboardLock }
+import { isTouchDevice, isSafari, hasScrollbarGutter, dragThreshold, supportsBinaryClipboard, isFirefox, isWindows, isIOS, supportsPointerLock, supportsKeyboardLock, deviceClass }
     from '../core/util/browser.js';
 import { setCapture, getPointerEvent } from '../core/util/events.js';
 import KeyTable from "../core/input/keysym.js";
@@ -359,7 +359,10 @@ const UI = {
         UI.initSetting('touch_mode', 'native');
         UI.initSetting('auto_keyboard', true);
         UI.initSetting('enable_webrtc', false);
-        UI.initSetting('enable_hidpi', false);
+        // Phones and tablets have 2-3 device pixels per CSS pixel; without
+        // native resolution the session runs at about half that and is
+        // stretched soft. A saved choice still wins.
+        UI.initSetting('enable_hidpi', deviceClass() !== 'desktop');
         UI.initSetting('fallback_image_mode', false);
 
         UI.initSetting(UI_SETTINGS.STREAM_MODE, encodings.pseudoEncodingStreamingModeJpegWebp);

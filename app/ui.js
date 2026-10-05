@@ -2023,9 +2023,7 @@ const UI = {
         UI.rfb.clipboardUp = UI.getSetting('clipboard_up');
         UI.rfb.clipboardDown = UI.getSetting('clipboard_down');
         UI.rfb.clipboardSeamless = UI.getSetting('clipboard_seamless');
-        if (!WebUtil.isInsideKasmVDI()) {
-            UI.rfb.keyboard.enableIME = UI.getSetting('enable_ime');
-        }
+        UI.rfb.keyboard.enableIME = UI.getSetting('enable_ime');
         UI.rfb.clipboardBinary = supportsBinaryClipboard() && UI.rfb.clipboardSeamless;
         UI.rfb.enableWebRTC = UI.getSetting('enable_webrtc');
         UI.rfb.mouseButtonMapper = UI.initMouseButtonMapper();
@@ -2432,16 +2430,12 @@ const UI = {
                     }
                     break;
                 case 'enable_ime_mode':
-                    if (!UI.getSetting('enable_ime')) {
-                        UI.forceSetting('enable_ime', true, false);
-                        UI.toggleIMEMode();
-                    }
+                    UI.forceSetting('enable_ime', true, false);
+                    UI.toggleIMEMode();
                     break;
                 case 'disable_ime_mode':
-                    if (UI.getSetting('enable_ime')) {
-                        UI.forceSetting('enable_ime', false, false);
-                        UI.toggleIMEMode();
-                    }
+                    UI.forceSetting('enable_ime', false, false);
+                    UI.toggleIMEMode();
                     break;
                 case 'open_displays_mode':
                     if (UI.rfb) {

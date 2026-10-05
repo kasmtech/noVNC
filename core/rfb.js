@@ -24,6 +24,7 @@ import initializePrinterRelay from "./output/printer.js";
 import initializeSmartcardRelay from "./output/smartcard.js";
 import GestureHandler from "./input/gesturehandler.js";
 import IOSKeyboard from "./input/ioskeyboard.js";
+import TextInputFocusGate from "./input/textinputfocusgate.js";
 import Cursor from "./util/cursor.js";
 import Websock from "./websock.js";
 import DES from "./des.js";
@@ -336,6 +337,9 @@ export default class RFB extends EventTargetMixin {
         this._touchInput = touchInput;
         this._keyboard = new Keyboard(this._canvas, touchInput, navigator.keyboard);
         this._keyboard.onkeyevent = this._handleKeyEvent.bind(this);
+        this._textInputFocusGate = new TextInputFocusGate((detail) => {
+            this.dispatchEvent(new CustomEvent("textinputfocus", { detail }));
+        });
         this._iosKeyboard = !isIOS() ? null : new IOSKeyboard(this._canvas, touchInput, {
             toRemote: (clientX, clientY) => {
                 const pos = clientToElement(clientX, clientY, this._canvas);
@@ -804,6 +808,7 @@ export default class RFB extends EventTargetMixin {
     set touchMode(value) {
         if (value !== this._touchMode) {
             this._touchMode = value;
+            this._textInputFocusGate.reset();
             this._iosKeyboard?.reset();
             this._updateGestureHandler();
         }
@@ -2777,6 +2782,8 @@ export default class RFB extends EventTargetMixin {
 
             this._sendTouch(id, state, x, y);
         }
+
+        this._textInputFocusGate.handleTouch(ev);
     }
 
     _sendTouch(id, state, x, y) {
@@ -4465,8 +4472,7 @@ export default class RFB extends EventTargetMixin {
         }
 
         this._iosKeyboard?.textInputFocus(focused, tapped, touchId, field);
-        this.dispatchEvent(new CustomEvent("textinputfocus",
-            {detail: {focused, tapped, caret, field}}));
+        this._textInputFocusGate.textInputFocus({focused, tapped, caret, field});
         return true;
     }
 

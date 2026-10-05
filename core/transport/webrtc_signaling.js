@@ -30,16 +30,9 @@
 
 import * as Log from '../util/logging.js';
 
-// 187-191 are claimed by master (msgTypeForceGameMode, DirectMouseEvent,
-// LatencyMeasurement, NetworkStats, SystemStats), so WebRTC signaling
-// lives at 192. Keep in sync with msgTypeWebRTCSignal
-// in common/rfb/msgTypes.h.
 export const WEBRTC_MSG_TYPE = 192;
 export const WEBRTC_SESSION_SCREEN = 0xFF;
-// Image DataChannel connection (webrtc_image.js); matches kWebRTCImageScreen.
 export const WEBRTC_IMAGE_SCREEN = 0xFE;
-// Must match kMaxWebRTCSignalBytes in common/rfb/msgTypes.h; the server
-// rejects larger signals, so drop them here instead.
 export const WEBRTC_MAX_SIGNAL_BYTES = 16 * 1024;
 
 export const WebRTCSignalKind = Object.freeze({
@@ -54,10 +47,6 @@ export const WebRTCSignalKind = Object.freeze({
     ImageRequest:  9,
 });
 
-// Write a single msgTypeWebRTCSignal frame to the WebSocket. Standalone
-// (not a method) so the primary window can use it both for its own
-// transports and to forward a secondary window's relayed answer/ICE up
-// to the server. Body: [u8 192][u8 kind][u8 screenId][u16 len][payload].
 export function writeWebRTCFrame(sock, kind, screenId, payload) {
     const utf8 = (typeof payload === 'string')
         ? new TextEncoder().encode(payload)
@@ -73,14 +62,9 @@ export function writeWebRTCFrame(sock, kind, screenId, payload) {
     header[3] = (utf8.length >> 8) & 0xff;
     header[4] =  utf8.length       & 0xff;
 
-    // Drain anything another writer left in the send queue so our header
-    // lands at a known offset and we have the full _sQbufferSize to chunk
-    // the body against.
     sock.flush();
     sock.send(header);
 
-    // Body. Websock._sQ is a fixed-size buffer (defaults to 10 KiB); SDP
-    // offers can exceed it, so chunk and let send()'s flush() drain each.
     const sQSize = sock._sQbufferSize;
     for (let off = 0; off < utf8.length; off += sQSize) {
         const end = Math.min(off + sQSize, utf8.length);
@@ -88,32 +72,21 @@ export function writeWebRTCFrame(sock, kind, screenId, payload) {
     }
 }
 
-// Per-screen signaling channel. Bound to one screenId and one outbound
-// sink. The sink is `(kind, screenId, payloadStr) => void`:
-//   - primary, screen it owns: sink writes to the WebSocket
-//     (writeWebRTCFrame(sock, ...)).
-//   - secondary window: sink posts {webrtcSignal:{kind,screenId,payload}}
-//     to its relay MessagePort; the primary forwards it to the socket.
-// Inbound signals are pushed in via deliver(kind, payload) by whoever
-// receives them (rfb.js socket reader on the primary, or the relay-port
-// onmessage handler on a secondary window).
 export default class WebRTCSignaling {
     constructor(screenId, sendFn) {
         this._screenId = screenId;
-        this._sendFn = sendFn;       // (kind, screenId, payloadStr) => void
-        this._onMessage = null;      // (kind, payload:string) -> void
+        this._sendFn = sendFn;
+        this._onMessage = null;
     }
 
     get screenId() { return this._screenId; }
 
     onMessage(cb) { this._onMessage = cb; }
 
-    // Inbound: dispatch a kind/payload pair to the bound transport.
     deliver(kind, payload) {
         if (this._onMessage) this._onMessage(kind, payload);
     }
 
-    // Outbound: send through the configured sink, tagging our screenId.
     send(kind, payload) {
         this._sendFn(kind, this._screenId, payload);
     }

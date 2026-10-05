@@ -51,9 +51,6 @@ import TightPNGDecoder from "./decoders/tightpng.js";
 import UDPDecoder from "./decoders/udp.js";
 import {FPS, UI_SETTING_PROFILE_OPTIONS} from '../app/constants.js';
 
-// Server-initiated session fallbacks that are followed by a re-offer; see
-// _onWebRTCSessionFallback. Must match the reasons VNCSConnectionST sends from
-// coordinatedWebRTCFallback / phaseReason.
 const WEBRTC_RECOVERABLE_FALLBACKS = new Set([
     'ice-timeout', 'offer-timeout', 'connect-timeout', 'handshake-timeout',
 ]);
@@ -174,16 +171,12 @@ export default class RFB extends EventTargetMixin {
         this._resendClipboardNextUserDrivenEvent = true;
         this._useUdp = true;
         this._webrtcScreens = new Map();
-        // Secondary-only: screenId this window must request a fresh offer for
-        // after a reindex, deferred until its relay port is up. null = none.
         this._pendingWebRTCOfferRequest = null;
-        // Session-level negotiation state (the codec is session-wide).
-        this._webrtcSessionActive = false;  // capability advertised to server
-        this._webrtcSessionCodec = null;    // codecKey currently advertised
-        this._webrtcIceServers = [];        // [{urls}] from the kind=4 signal
-        this._webrtcIceServersRaw = '';     // raw newline list, for relaying
+        this._webrtcSessionActive = false;
+        this._webrtcSessionCodec = null;
+        this._webrtcIceServers = [];
+        this._webrtcIceServersRaw = '';
 
-        // Image-mode DataChannel (unreliable rect carrier, no RTP video).
         this._imageChannel = null;
         this._imageChannelActive = false;
         this._imageRectsSeen = false;
@@ -777,10 +770,6 @@ export default class RFB extends EventTargetMixin {
     get enableWebRTC() { return this._useUdp; }
     set enableWebRTC(value) {
         this._useUdp = value;
-        // Drives the WebRTC media path. If the server can't negotiate
-        // WebRTC, the kind=6 capability message gets bounced
-        // with a fallback signal and _webrtc tears itself down — no harm
-        // done.
         this._applyWebRTCMediaState('toggle');
     }
 
@@ -863,7 +852,7 @@ export default class RFB extends EventTargetMixin {
             case E.pseudoEncodingStreamingModeHEVCVAAPI:
             case E.pseudoEncodingStreamingModeHEVCNVENC:
             case E.pseudoEncodingStreamingModeHEVCQSV:
-                return ['H265', 'H264'];   // fall back to H264 if browser refuses H265
+                return ['H265', 'H264'];
             case E.pseudoEncodingStreamingModeAV1:
             case E.pseudoEncodingStreamingModeAV1SW:
             case E.pseudoEncodingStreamingModeAV1VAAPI:
@@ -871,16 +860,11 @@ export default class RFB extends EventTargetMixin {
             case E.pseudoEncodingStreamingModeAV1QSV:
                 return ['AV1', 'H264'];
             default:
-                return null;   // image mode
+                return null;
         }
     }
 
     _applyWebRTCMediaState(reason) {
-        // Only the primary window advertises session capability; the
-        // server then sends one offer per screen. Screens that this
-        // window doesn't render are relayed to their secondary window
-        // (see _dispatchWebRTCSignal). Secondary windows never call this —
-        // they are purely reactive to relayed offers.
         if (!this._isPrimaryDisplay) return;
         if (typeof RTCPeerConnection === 'undefined') return;
 
@@ -893,10 +877,6 @@ export default class RFB extends EventTargetMixin {
         if (wantOn) this._stopImageChannel(true);
 
         if (wantOn && this.isConnected) {
-            // Advertise (or re-advertise on a codec change). The server
-            // replies with the ICE-servers list + one offer per active
-            // screen; a re-advertisement while screens are live triggers a
-            // server-side smooth codec switch (pending transports).
             if (!this._webrtcSessionActive || this._webrtcSessionCodec !== codecKey) {
                 Log.Info('Advertising WebRTC capability (codecs=' + codecKey +
                     ', reason=' + reason + ')');
@@ -913,9 +893,6 @@ export default class RFB extends EventTargetMixin {
             return;
         }
 
-        // Image-mode requested while WebRTC is active: freeze-frame the
-        // canvas, tell the server to drop the whole session, and tear
-        // down every screen's transport. Image mode shows through.
         if (!wantOn && this._webrtcSessionActive) {
             Log.Info('Disabling WebRTC media (reason=' + reason + ')');
             this._freezeFrameWebRTC();
@@ -937,8 +914,6 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    // Write one WebRTC signal frame to the server's WebSocket. The sink
-    // every local per-screen WebRTCSignaling uses.
     _sendWebRTCFrame(kind, screenId, payload) {
         writeWebRTCFrame(this._sock, kind, screenId, payload);
     }
@@ -965,32 +940,21 @@ export default class RFB extends EventTargetMixin {
             this._webrtcScreens.delete(sid);
             toreDown = true;
         }
-        // If this window was streaming over WebRTC for its previous screenId,
-        // it now needs a fresh offer for the screen it took over. The server
-        // can't detect the window swap (the slot's RandR id is unchanged), so
-        // request it explicitly — deferred until our relay port for the new
-        // screen is established (_maybeRequestPendingWebRTCOffer).
         if (toreDown && !this._webrtcScreens.has(keepScreenId)) {
             this._pendingWebRTCOfferRequest = keepScreenId;
         }
     }
 
-    // SECONDARY: our relay port for the new screen is up; if a reindex left
-    // us without a transport for it, ask the server to (re)offer it so the
-    // monitor recovers RTP instead of staying on WebSocket video.
     _maybeRequestPendingWebRTCOffer() {
         const sid = this._pendingWebRTCOfferRequest;
         if (sid == null) return;
         this._pendingWebRTCOfferRequest = null;
-        if (this._webrtcScreens.has(sid)) return;   // already (re)building
+        if (this._webrtcScreens.has(sid)) return;
         if (this._display && typeof this._display.relayWebRTCSignalUp === 'function') {
             this._display.relayWebRTCSignalUp(WebRTCSignalKind.RequestOffer, sid, '');
         }
     }
 
-    // Capture the last decoded frame from any live WebRTC <video> onto
-    // the canvas so the user sees a still image during the gap before the
-    // next mode's first paint, instead of an empty/black region.
     _freezeFrameWebRTC() {
         try {
             let video = null;
@@ -1010,8 +974,6 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    // Pending (codec-switch) transport for one screen failed before it
-    // could promote — drop just it, keep the live transport streaming.
     _abandonPendingWebRTCScreen(screenId, reason) {
         const slot = this._webrtcScreens.get(screenId);
         if (!slot || !slot.pending) return;
@@ -1604,11 +1566,6 @@ export default class RFB extends EventTargetMixin {
 
         this._resendClipboardNextUserDrivenEvent = true;
 
-        // WebRTC media (libdatachannel) kickoff. The reconciler reads
-        // _useUdp and _streamMode and starts the transport iff both are
-        // in a WebRTC-eligible state (toggle on, codec is not image-mode).
-        // Server-side: a capability the server cannot honour is answered with
-        // a session-level Fallback and the client tears WebRTC down.
         setTimeout(function() { this._applyWebRTCMediaState('connect') }.bind(this), 3000);
 
         Log.Debug("<< RFB.connect");
@@ -1643,6 +1600,7 @@ export default class RFB extends EventTargetMixin {
         this._keyboard.ungrab();
         this._gestures.detach();
         this._stopImageChannel(false);
+        this._teardownAllWebRTCScreens();
         if (this._isPrimaryDisplay) {
             this._sock.close();
         } else {
@@ -4137,7 +4095,7 @@ export default class RFB extends EventTargetMixin {
             case 183: // KASM unix relay data
                 return this._handleUnixRelay();
 
-            case WEBRTC_MSG_TYPE: // 192 — KASM WebRTC media signaling
+            case WEBRTC_MSG_TYPE:
                 return this._handleWebRTCSignal();
             case messages.msgTypeServerDisconnect: // KASM disconnect notice
                 return this._handleDisconnectNotify();
@@ -4178,8 +4136,6 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    // -------- Image-mode DataChannel --------
-
     _makeImageSignaling() {
         return new WebRTCSignaling(WEBRTC_IMAGE_SCREEN,
             (k, sid, p) => this._sendWebRTCFrame(k, sid, p));
@@ -4203,11 +4159,10 @@ export default class RFB extends EventTargetMixin {
                 WEBRTC_IMAGE_SCREEN, '');
         } catch (e) {
             Log.Error('Image channel request failed: ' + e);
-            this._imageChannel._fail('request-failed', /*silent=*/true);
+            this._imageChannel._fail('request-failed', true);
         }
     }
 
-    // notifyServer makes the server resume WebSocket rects.
     _stopImageChannel(notifyServer) {
         if (this._imageOfferTimer) {
             clearTimeout(this._imageOfferTimer);
@@ -4230,7 +4185,6 @@ export default class RFB extends EventTargetMixin {
 
     _handleImageSignal(kind, payload) {
         if (!this._imageChannel) {
-            // Don't let a stray offer resurrect a dropped channel.
             if (kind === WebRTCSignalKind.SdpOffer) {
                 try {
                     this._sendWebRTCFrame(WebRTCSignalKind.Fallback,
@@ -4255,7 +4209,6 @@ export default class RFB extends EventTargetMixin {
         this._imageChannelFailures = 0;
     }
 
-    // The transport tore itself down; the server resumes WebSocket rects.
     _onImageChannelFallback(transport, reason) {
         if (transport !== this._imageChannel) return;
         Log.Warn('Image DataChannel fallback (' + reason +
@@ -4268,7 +4221,6 @@ export default class RFB extends EventTargetMixin {
         this._imageChannel = null;
         this._imageChannelActive = false;
         this._imageRectsSeen = false;
-        // A deliberate server refusal is not a transport failure.
         if (reason !== 'server-video-active') this._imageChannelFailures++;
         if (wasActive) {
             this._display.clear();
@@ -4276,8 +4228,6 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    // Lost pixels are never retransmitted; ask for a full frame, rate-limited
-    // because the refresh can itself lose pieces.
     _onImageChannelLoss() {
         const now = Date.now();
         if (now - this._imageLastRefresh < IMAGE_CHANNEL_REFRESH_COOLDOWN_MS) return;
@@ -4286,14 +4236,12 @@ export default class RFB extends EventTargetMixin {
         this._requestFullRefresh();
     }
 
-    // One complete message: a rect (header + payload) or the LastRect marker.
     _handleUdpRect(data, frame_id) {
         if (data.length < 12) {
             Log.Warn('Image channel message too short (' + data.length + ' bytes)');
             return false;
         }
         if (!this._imageRectsSeen) {
-            // Drop queued WebSocket frames so frame ids start clean.
             this._imageRectsSeen = true;
             this._display.clear();
         }
@@ -4309,7 +4257,6 @@ export default class RFB extends EventTargetMixin {
 
         switch (frame.encoding) {
             case encodings.pseudoEncodingLastRect:
-                // x carries the frame's rect count.
                 this._display.flip(frame_id, frame.x + 1);
                 if (this._display.pending())
                     this._display.flush(false);
@@ -4342,10 +4289,7 @@ export default class RFB extends EventTargetMixin {
         return true;
     }
 
-    // -------- WebRTC media (libdatachannel migration, Phase 1+) --------
-
     _handleWebRTCSignal() {
-        // Body: [u8 kind][u8 screenId][u16 len][bytes payload]
         if (this._sock.rQwait('WebRTC sig header', 4, 1)) { return false; }
         const kind     = this._sock.rQshift8();
         const screenId = this._sock.rQshift8();
@@ -4362,20 +4306,14 @@ export default class RFB extends EventTargetMixin {
             this._handleImageSignal(kind, payload);
             return;
         }
-        // Session-level ICE servers: stash (parsed for our own PCs, raw
-        // for relaying to secondary windows before their offers).
         if (kind === WebRTCSignalKind.IceServers) {
             this._storeWebRTCIceServers(payload);
             return;
         }
-        // Session-level fallback: tear everything down, image mode wins.
         if (kind === WebRTCSignalKind.Fallback && screenId === WEBRTC_SESSION_SCREEN) {
             this._onWebRTCSessionFallback(payload);
             return;
         }
-        // The user turned WebRTC off (or we never advertised it): a late or
-        // re-sent offer must not bring it back. Decline and tell the server
-        // to drop the session so it stops re-offering.
         if (kind === WebRTCSignalKind.SdpOffer &&
             (!this._useUdp || !this._webrtcSessionActive)) {
             Log.Info('Ignoring WebRTC offer for screen ' + screenId +
@@ -4386,9 +4324,6 @@ export default class RFB extends EventTargetMixin {
             } catch (e) {}
             return;
         }
-        // Per-screen signal. Handle locally if this (the primary) window
-        // renders the screen; otherwise relay it to the secondary window
-        // that does.
         if (this._webrtcScreenIsLocal(screenId)) {
             this._routeWebRTCSignal(kind, screenId, payload,
                 (sid) => this._makeLocalSignaling(sid));
@@ -4407,19 +4342,9 @@ export default class RFB extends EventTargetMixin {
             JSON.stringify(this._webrtcIceServers.map(s => s.urls)));
     }
 
-    // Parse one server-sent ICE server URL into an RTCIceServer dict. STUN
-    // URLs pass through unchanged. TURN URLs carry credentials in the URL
-    // userinfo (turn:user:pass@host:port?...) — the W3C RTCIceServer API
-    // rejects userinfo in `urls`, so split it back out into the separate
-    // username/credential fields (percent-decoding, mirroring the
-    // urlEncodeCredential() done server-side in VNCSConnectionST).
     static _parseIceServer(raw) {
         const m = /^(turns?):(?:([^@/:]+):([^@/]*)@)(.+)$/i.exec(raw);
         if (!m) {
-            // TURN without full credentials (host only, or user@host): the
-            // RTCPeerConnection constructor throws InvalidAccessError for a
-            // turn(s): URL lacking username+credential, which would break
-            // every screen. Strip any userinfo and drop the server instead.
             if (/^turns?:/i.test(raw)) {
                 Log.Warn('Ignoring TURN server without full credentials');
                 return null;
@@ -4441,10 +4366,6 @@ export default class RFB extends EventTargetMixin {
         return { urls: m[1] + ':' + m[4], username, credential };
     }
 
-    // The screenId this window renders over WebRTC. The primary renders
-    // screen 0; a secondary window renders its own screenIndex. (Server
-    // screenId === display screenIndex — see setDesktopSize, which sends
-    // the screen's position index as its RFB id.)
     _localWebRTCScreenId() {
         if (this._isPrimaryDisplay) return 0;
         return (this._display && this._display.screenIndex) || 0;
@@ -4454,12 +4375,6 @@ export default class RFB extends EventTargetMixin {
         return screenId === this._localWebRTCScreenId();
     }
 
-    // Route a per-screen offer/ICE/Close/Fallback to this window's
-    // transport for that screen, creating one reactively on a fresh
-    // offer. A second offer for a live screen builds a `pending` transport
-    // that promotes on its first decoded frame (smooth codec switch).
-    // `makeSignaling(screenId)` produces the outbound channel — socket on
-    // the primary's own screen, relay port on a secondary window.
     _routeWebRTCSignal(kind, screenId, payload, makeSignaling) {
         if (typeof RTCPeerConnection === 'undefined') {
             if (kind === WebRTCSignalKind.SdpOffer) {
@@ -4482,15 +4397,10 @@ export default class RFB extends EventTargetMixin {
             } else {
                 slot.live = transport;
             }
-            sig.deliver(kind, payload);   // drive _handleOffer
+            sig.deliver(kind, payload);
             return;
         }
-        // ICE / Close / Fallback for an existing transport. During a codec
-        // switch route to pending (its offer is the one in flight).
         if (!slot) return;
-        // A renegotiate-* fallback only ever concerns the pending transport.
-        // If the client already dropped it (e.g. the browser rejected the new
-        // codec), the server's late timeout must not reach the live stream.
         if (kind === WebRTCSignalKind.Fallback &&
             typeof payload === 'string' && payload.startsWith('renegotiate-') &&
             !slot.pending) {
@@ -4498,9 +4408,6 @@ export default class RFB extends EventTargetMixin {
                 ' (no pending transport)');
             return;
         }
-        // Close means the screen itself is gone: deliver it to the live
-        // transport as well, or its <video> overlay would stay up over a
-        // screen that no longer exists.
         if (kind === WebRTCSignalKind.Close) {
             if (slot.pending) slot.pending.signaling.deliver(kind, payload);
             if (slot.live)    slot.live.signaling.deliver(kind, payload);
@@ -4510,11 +4417,6 @@ export default class RFB extends EventTargetMixin {
         if (target) target.signaling.deliver(kind, payload);
     }
 
-    // PRIMARY: relay a per-screen signal to the secondary window that
-    // renders this screen, over its encodedFramePort. The secondary builds
-    // its own RTCPeerConnection and answers back through the same port
-    // (see _forwardRelayedWebRTCToServer). On a fresh offer, relay the
-    // session ICE-servers first so the secondary can configure its PC.
     _relayWebRTCSignalToScreen(screenId, kind, payload) {
         if (!this._display || typeof this._display.relayWebRTCSignal !== 'function') return;
         if (kind === WebRTCSignalKind.SdpOffer) {
@@ -4525,17 +4427,12 @@ export default class RFB extends EventTargetMixin {
         this._display.relayWebRTCSignal(screenId, kind, screenId, payload);
     }
 
-    // PRIMARY: a secondary window relayed one of its WebRTC signals (SDP
-    // answer / ICE / fallback) back up; forward it to the server.
     _forwardRelayedWebRTCToServer(kind, screenId, payload) {
         try { this._sendWebRTCFrame(kind, screenId, payload); } catch (e) {
             Log.Warn('Forwarding relayed WebRTC signal to server failed: ' + e);
         }
     }
 
-    // SECONDARY: a WebRTC signal for this window's screen arrived from the
-    // primary over the encodedFramePort. Build/route this window's own
-    // RTCPeerConnection; outbound answers/ICE go back over the relay port.
     _onRelayedWebRTCSignal(kind, screenId, payload) {
         if (kind === WebRTCSignalKind.IceServers) {
             this._storeWebRTCIceServers(payload);
@@ -4545,9 +4442,6 @@ export default class RFB extends EventTargetMixin {
             (sid) => this._makeRelaySignaling(sid));
     }
 
-    // Outbound signaling sink for a secondary window: post the answer/ICE
-    // to the primary over the encodedFramePort; the primary forwards it to
-    // the server's WebSocket.
     _makeRelaySignaling(screenId) {
         return new WebRTCSignaling(screenId,
             (k, sid, p) => {
@@ -4557,14 +4451,6 @@ export default class RFB extends EventTargetMixin {
     }
 
     _onWebRTCVideoReady(video, transport) {
-        // Overlay the <video> full-window on top of the canvas. Each
-        // window renders exactly one screen and that screen's PC streams
-        // exactly that screen's content, so the overlay is 100%x100% (no
-        // sub-rect positioning — that was only needed by the rejected
-        // spanning approach). The canvas stays in the DOM so the
-        // WebSocket/image-mode path can take over instantly on failure.
-        // A *pending* (codec-switch) transport sits above the live one
-        // and promotes on `playing`.
         const screenId = transport.screenId;
         const slot = this._webrtcScreens.get(screenId);
         const pending = !!(slot && transport === slot.pending);
@@ -4574,26 +4460,13 @@ export default class RFB extends EventTargetMixin {
             video.style.top    = '0';
             video.style.width  = '100%';
             video.style.height = '100%';
-            // Pending overlay must sit above the live overlay (z=1) so
-            // it visually wins on opacity:1. Both stay click-through.
             video.style.zIndex = pending ? '2' : '1';
-            // CRITICAL: the overlay must be click-through. Without this,
-            // the <video> intercepts all mouse/touch events and the
-            // canvas underneath (where rfb's input handlers live)
-            // never receives them — the user can see the stream but
-            // can't interact with the remote desktop.
             video.style.pointerEvents = 'none';
-            // Hide until the first frame is decoded and ready to paint.
-            // Otherwise the user sees a black <video> rectangle covering
-            // whatever the canvas had during ICE/SDP negotiation.
             video.style.opacity = '0';
             video.addEventListener('playing', () => {
                 video.style.opacity = '1';
                 if (pending) this._promotePendingWebRTCScreen(screenId, transport);
             }, { once: true });
-            // Find the canvas's parent. _screen is the standard mount
-            // point; if a project embeds rfb differently, the hook can
-            // be overridden by subclassing.
             const host = this._screen || this._target;
             if (host && host.appendChild) host.appendChild(video);
         } catch (e) {
@@ -4601,12 +4474,9 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    // First decoded frame from a screen's pending transport has painted —
-    // promote it: drop that screen's old live transport + <video>, make
-    // the pending one live.
     _promotePendingWebRTCScreen(screenId, transport) {
         const slot = this._webrtcScreens.get(screenId);
-        if (!slot || transport !== slot.pending) return;  // superseded
+        if (!slot || transport !== slot.pending) return;
         Log.Info('Pending WebRTC media (screen ' + screenId + ') is playing — promoting');
         const oldLive  = slot.live;
         const oldVideo = oldLive && oldLive.video;
@@ -4616,14 +4486,9 @@ export default class RFB extends EventTargetMixin {
         }
         slot.live = slot.pending;
         slot.pending = null;
-        // Drop the now-live overlay back to z=1.
         try { if (slot.live.video) slot.live.video.style.zIndex = '1'; } catch (e) {}
     }
 
-    // One screen's live transport failed (ICE / codec) — drop just that
-    // screen; the server streams it over the WebSocket and the canvas /
-    // KasmVideo path renders it. Other screens keep streaming. The
-    // transport already sent a per-screen Fallback to the server.
     _onWebRTCScreenFallback(screenId, reason) {
         Log.Warn('WebRTC screen ' + screenId + ' fallback (' + reason +
             ') — this screen now streams over the WebSocket');
@@ -4635,24 +4500,11 @@ export default class RFB extends EventTargetMixin {
         this._webrtcScreens.delete(screenId);
     }
 
-    // The server tore down the whole WebRTC session (ICE timeout, no
-    // server codec, etc.). Drop every screen; image mode / WebSocket
-    // video takes over for all of them.
     _onWebRTCSessionFallback(reason) {
         Log.Warn('WebRTC session fallback (' + reason + ') — image mode taking over');
         this._freezeFrameWebRTC();
         this._teardownAllWebRTCScreens();
-        // Secondary windows own their own PeerConnections; the primary
-        // returns before relaying session-level signals, so tell each one to
-        // drop its screen instead of leaving a stale <video> overlay up until
-        // its own ICE grace expires.
         this._relaySessionFallbackToSecondaries(reason);
-        // Recoverable reasons: the server keeps the session subscribed and will
-        // re-offer (tickWebRTCReoffer). Stay "active" so that offer is accepted
-        // instead of being declined with an 'unsubscribe' that would turn
-        // WebRTC off for the rest of the session. Every other reason
-        // (retries-exhausted, no-server-codec, no-hw-codec-overlap, ...) ends
-        // the session.
         if (WEBRTC_RECOVERABLE_FALLBACKS.has(String(reason))) return;
         this._webrtcSessionActive = false;
         this._webrtcSessionCodec = null;

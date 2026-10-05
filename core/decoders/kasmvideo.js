@@ -99,10 +99,6 @@ export default class KasmVideoDecoder {
     }
 
     _skipRect(x, y, width, height, _sock, display, _depth, frameId) {
-        // Skip-rects mean the video rides WebRTC. Clearing would paint the canvas
-        // black during the ICE/SDP handshake, so keep the last frame until the
-        // <video> overlay takes over. Screens that fell back to WebSocket video
-        // emit real rects, not skip-rects.
         let webrtcActive = false;
         const screens = this._rfb && this._rfb._webrtcScreens;
         if (screens) {

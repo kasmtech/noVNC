@@ -25,8 +25,6 @@ const LOSS_CHECK_INTERVAL_MS = 250;
 const MAX_PIECES = 65536;
 
 export default class WebRTCImageTransport {
-    // onRect(u8, frame): one complete rect or LastRect message.
-    // onLoss(): a message was lost or abandoned.
     constructor(rfb, signaling, iceServers, onRect, onLoss) {
         this._rfb = rfb;
         this._signaling = signaling;
@@ -45,8 +43,7 @@ export default class WebRTCImageTransport {
         this._remoteDescriptionSet = false;
         this._pendingRemoteCandidates = [];
 
-        this._partials = new Map();   // id -> {total, got, bytes, parts, t, frame}
-        // Ids are contiguous, so a persistent hole means a lost message.
+        this._partials = new Map();
         this._nextId = null;
         this._completedAhead = new Set();
         this._gapSince = 0;
@@ -55,7 +52,6 @@ export default class WebRTCImageTransport {
     get isOpen() { return this._open; }
     get signaling() { return this._signaling; }
 
-    // The ICE list arrives after construction, before the offer.
     setIceServers(iceServers) { this._iceServers = iceServers || []; }
 
     stop() {
@@ -90,7 +86,7 @@ export default class WebRTCImageTransport {
             case WebRTCSignalKind.Fallback:
             case WebRTCSignalKind.Close:
                 Log.Warn('Server dropped the image DataChannel: ' + payload);
-                this._fail('server-' + payload, /*silent=*/true);
+                this._fail('server-' + payload, true);
                 break;
             default:
                 Log.Warn('Unknown image-channel signal kind: ' + kind);
@@ -189,7 +185,6 @@ export default class WebRTCImageTransport {
         }
         const candidate = payload.substring(0, pipe);
         const sdpMid = payload.substring(pipe + 1);
-        // Buffer until setRemoteDescription resolves.
         if (!this._pc || !this._remoteDescriptionSet) {
             this._pendingRemoteCandidates.push({ candidate, sdpMid });
             return;
@@ -205,8 +200,6 @@ export default class WebRTCImageTransport {
             Log.Warn('Image-channel addIceCandidate failed: ' + e);
         }
     }
-
-    // ---- DataChannel receive path ----
 
     _onMessage(buf) {
         if (this._closed || !(buf instanceof ArrayBuffer) ||
@@ -226,7 +219,6 @@ export default class WebRTCImageTransport {
         }
 
         if (pieces === 1) {
-            // Copy: decoders need a zero-offset array (they use .buffer).
             this._complete(id, frame,
                 new Uint8Array(buf.slice(IMAGE_CHANNEL_HEADER_SIZE)));
             return;
@@ -240,7 +232,6 @@ export default class WebRTCImageTransport {
                   parts: new Array(pieces), t: Date.now(), frame };
             this._partials.set(id, p);
         }
-        // Duplicate or inconsistent piece: ignore rather than double-count.
         if (index >= p.total || p.parts[index] !== undefined) return;
         p.parts[index] = payload;
         p.got++;
@@ -269,12 +260,10 @@ export default class WebRTCImageTransport {
             this._completedAhead.add(id);
             if (!this._gapSince) this._gapSince = Date.now();
         }
-        // Late arrival for an id already given up on is still rendered.
 
         this._onRect(bytes, frame);
     }
 
-    // Abandons stale partials and persistent id gaps, reporting each as a loss.
     _checkLoss() {
         const now = Date.now();
         let lost = false;
@@ -303,7 +292,6 @@ export default class WebRTCImageTransport {
         if (lost && this._onLoss) this._onLoss();
     }
 
-    // silent: don't echo a fallback the server already sent.
     _fail(reason, silent) {
         if (this._closed) return;
         if (!silent) {

@@ -30,11 +30,6 @@ import { WebRTCSignalKind } from './webrtc_signaling.js';
 const FALLBACK_GRACE_MS = 5000;
 
 export default class WebRTCVideoTransport {
-    // signaling: a WebRTCSignaling already bound to `screenId` and an
-    //            outbound sink (socket or relay port).
-    // opts.iceServers: [{urls}] list from the session-level kind=4 signal.
-    // opts.pending:    true when this is a smooth codec-switch transport
-    //                  that replaces an existing live one on `playing`.
     constructor(rfb, screenId, signaling, opts) {
         this._rfb = rfb;
         this._screenId = screenId;
@@ -49,16 +44,9 @@ export default class WebRTCVideoTransport {
         this._negotiated = false;
         this._iceServers = this._opts.iceServers || [];
 
-        // Remote ICE candidates can arrive (trickled by the server) before this
-        // side has finished setRemoteDescription — addIceCandidate() throws in
-        // that window and the candidate is lost, slowing or stalling ICE. Buffer
-        // them here and flush once the remote description is applied. See
-        // remediation plan P4.2.
         this._remoteDescriptionSet = false;
         this._pendingRemoteCandidates = [];
 
-        // Mirrors rfb.js's transit-state semantics so failure counters /
-        // UX don't need to learn a second model.
         this._state = 'idle';
     }
 
@@ -97,15 +85,12 @@ export default class WebRTCVideoTransport {
             case WebRTCSignalKind.Close:
                 Log.Info('Server closed WebRTC screen ' + this._screenId +
                          ': ' + payload);
-                // The screen left the layout (or its negotiation was
-                // rejected). Drop the PC; the owning window falls back to
-                // its WebSocket/encoded-frame decode path for this screen.
-                this._fallback('server-close:' + payload, /*silent=*/true);
+                this._fallback('server-close:' + payload, true);
                 break;
             case WebRTCSignalKind.Fallback:
                 Log.Warn('Server signalled WebRTC fallback (screen ' +
                          this._screenId + '): ' + payload);
-                this._fallback('server-' + payload, /*silent=*/true);
+                this._fallback('server-' + payload, true);
                 break;
             default:
                 Log.Warn('Unknown WebRTC signal kind for screen ' +
@@ -130,8 +115,6 @@ export default class WebRTCVideoTransport {
             return;
         }
 
-        // Recv-only transceiver so the answer aligns with the server's
-        // send-only track.
         try {
             this._pc.addTransceiver('video', { direction: 'recvonly' });
         } catch (e) {
@@ -146,10 +129,6 @@ export default class WebRTCVideoTransport {
 
         const logVideoEvent = (name) => {
             const err = this._video.error ? this._video.error.code : 0;
-            // Debug, not Info: these <video> media events (resize/waiting/
-            // stalled/suspend/...) fire repeatedly, especially on a stalling or
-            // low-motion stream, and spam the console at Info in production. The
-            // one-shot milestones (PLAYING / ontrack) stay at Info. See P4.1.
             Log.Debug('[WEBRTC-DIAG] <video> ' + name + ' screen ' +
                      this._screenId + ' (readyState=' + this._video.readyState +
                      ', networkState=' + this._video.networkState +
@@ -186,7 +165,6 @@ export default class WebRTCVideoTransport {
                 if (!this._failureTimer) {
                     this._failureTimer = setTimeout(() => {
                         this._failureTimer = null;
-                        // stop() can null _pc between schedule and fire.
                         if (!this._pc) return;
                         this._fallback('ice-' + this._pc.iceConnectionState);
                     }, FALLBACK_GRACE_MS);
@@ -207,8 +185,6 @@ export default class WebRTCVideoTransport {
         }
         try {
             await this._pc.setRemoteDescription({ type: 'offer', sdp });
-            // Remote description is applied — any candidates that arrived during
-            // the await are now safe to add. Flush the buffer (P4.2).
             this._remoteDescriptionSet = true;
             const buffered = this._pendingRemoteCandidates;
             this._pendingRemoteCandidates = [];
@@ -217,9 +193,6 @@ export default class WebRTCVideoTransport {
             const answer = await this._pc.createAnswer();
             await this._pc.setLocalDescription(answer);
 
-            // Codec-mismatch guard: no usable video m-line means the
-            // browser refused every offered codec (e.g. HEVC-only server
-            // vs Firefox). Drop this screen loudly before a black frame.
             const sdpText = answer.sdp || '';
             if (!/^m=video /m.test(sdpText) || /^a=inactive/m.test(sdpText)) {
                 Log.Error('SDP answer for screen ' + this._screenId +
@@ -244,11 +217,6 @@ export default class WebRTCVideoTransport {
         }
         const candidate = payload.substring(0, pipe);
         const sdpMid    = payload.substring(pipe + 1);
-        // If the offer hasn't been applied yet (no PC, or setRemoteDescription
-        // still in flight), buffer the candidate instead of dropping it —
-        // addIceCandidate() before the remote description throws and the
-        // candidate is lost, which slows or stalls ICE. _handleOffer flushes
-        // the buffer once setRemoteDescription resolves. See plan P4.2.
         if (!this._pc || !this._remoteDescriptionSet) {
             this._pendingRemoteCandidates.push({ candidate, sdpMid });
             return;
@@ -266,15 +234,9 @@ export default class WebRTCVideoTransport {
         }
     }
 
-    // Drop this screen's PC. `silent` suppresses the outbound fallback
-    // signal (used when the server already told us to close, so we don't
-    // echo it back). The owning window resumes its WebSocket/encoded-frame
-    // decode path for this screen; rfb.js handles the bookkeeping.
     _fallback(reason, silent) {
         this._state = 'fallback';
         if (this._opts.pending) {
-            // A pending (codec-switch) transport failing must not drag the
-            // live one down. Abandon just the pending half.
             if (!silent) { try { this._signaling.sendFallback('renegotiate'); } catch (e) {} }
             if (this._rfb &&
                 typeof this._rfb._abandonPendingWebRTCScreen === 'function') {

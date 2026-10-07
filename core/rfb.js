@@ -186,6 +186,10 @@ export default class RFB extends EventTargetMixin {
         this._nextMeasurementId = 1;
         this._inflightMeasurementId = null;
         this._pendingLatencyRender = null;
+        this._firstFrameRendered = false; // a frame has been painted since connecting ("firstframe" event)
+        this._awaitingResizeReply = false; // sent SetDesktopSize, no ExtendedDesktopSize reply yet
+        this._resizeRepliedAt = null;      // when that reply came, if before "firstframe"
+        this._firstFrameTimer = null;
 
         this._clipboardText = null;
         this._clipboardServerCapabilitiesActions = {};
@@ -1795,6 +1799,9 @@ export default class RFB extends EventTargetMixin {
 
             const size = this._screenSize();
             this._forceFullFrameUpdateAfterResize = true;
+            if (size.serverWidth !== this._fbWidth || size.serverHeight !== this._fbHeight) {
+                this._awaitingResizeReply = true;
+            }
             RFB.messages.setDesktopSize(this._sock, size, this._screenFlags);
 
             Log.Debug('Requested new desktop size: ' +
@@ -1930,6 +1937,8 @@ export default class RFB extends EventTargetMixin {
                 break;
 
             case 'connected':
+                this._firstFrameRendered = false;
+                this._resizeRepliedAt = null;
                 this.dispatchEvent(new CustomEvent("connect", { detail: {} }));
                 break;
 
@@ -4077,7 +4086,36 @@ export default class RFB extends EventTargetMixin {
         return true;
     }
 
+    _firstFrame() {
+        clearTimeout(this._firstFrameTimer);
+        this._firstFrameTimer = null;
+        if (this._firstFrameRendered || this._rfbConnectionState !== 'connected') {
+            return;
+        }
+        this._firstFrameRendered = true;
+        this.dispatchEvent(new CustomEvent("firstframe", { detail: {} }));
+    }
+
     _onFrameRendered() {
+        // The canvas is opaque black until the first frame is painted, so
+        // "connect" (ServerInit) is too early to reveal it. "firstframe" is
+        // the first frame painted after connecting. When the session is being
+        // resized to the viewer, frames before the server's reply are at the
+        // old size, and for a moment after it the new area is still black
+        // while the window manager and the apps lay out again; then it waits
+        // for the display to settle (FIRST_FRAME_SETTLE_MS without a new
+        // frame, at most FIRST_FRAME_SETTLE_MAX_MS after the reply).
+        if (!this._firstFrameRendered && !this._awaitingResizeReply &&
+            this._rfbConnectionState === 'connected') {
+            clearTimeout(this._firstFrameTimer);
+            if (this._resizeRepliedAt === null ||
+                performance.now() - this._resizeRepliedAt >= RFB.FIRST_FRAME_SETTLE_MAX_MS) {
+                this._firstFrame();
+            } else {
+                this._firstFrameTimer = setTimeout(() => this._firstFrame(), RFB.FIRST_FRAME_SETTLE_MS);
+            }
+        }
+
         if (!this._pendingLatencyRender)
             return;
 
@@ -4840,6 +4878,14 @@ export default class RFB extends EventTargetMixin {
          *  2 - another client requested the resize
          */
 
+        // x === 1: the reply to our own SetDesktopSize, accepted or not.
+        if (this._FBU.x === 1 && this._awaitingResizeReply) {
+            this._awaitingResizeReply = false;
+            if (!this._firstFrameRendered) {
+                this._resizeRepliedAt = performance.now();
+            }
+        }
+
         // We need to handle errors when we requested the resize.
         if (this._FBU.x === 1 && this._FBU.y !== 0) {
             let msg = "";
@@ -4998,6 +5044,10 @@ export default class RFB extends EventTargetMixin {
         return (new DES(passwordChars)).encrypt(challenge);
     }
 }
+
+// "firstframe" after a resize: quiet time without a new frame, and the cap.
+RFB.FIRST_FRAME_SETTLE_MS = 120;
+RFB.FIRST_FRAME_SETTLE_MAX_MS = 500;
 
 // Class Methods
 RFB.messages = {

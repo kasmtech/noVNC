@@ -807,7 +807,7 @@ const UI = {
         document.documentElement.classList.remove("noVNC_disconnected");
 
         const transitionElem = document.getElementById("noVNC_transition_text");
-        UI.sendMessage('connection_state', state);
+        UI.sendConnectionState(state);
 
         switch (state) {
             case 'init':
@@ -1992,6 +1992,7 @@ const UI = {
                         UI.codecDetector?.getSupportedCodecIds(),
                         true );
         UI.rfb.addEventListener("connect", UI.connectFinished);
+        UI.rfb.addEventListener("firstframe", UI.firstFrameRendered);
         UI.rfb.addEventListener("badencoding", (e) => {
             Log.Warn("Reconnecting due to encoding error or corrupted frame...");
 
@@ -2360,6 +2361,32 @@ const UI = {
         }));
 
         UI.sendMessage("update_codecs", {current: mode, codecs: availableModes});
+    },
+
+    // Tell the embedding page about connection state changes. "connected" waits
+    // for the first frame to be painted: until then the canvas is opaque black,
+    // and a page that drops its loading screen on "connected" would show that
+    // black for the ~100 ms before the first update arrives. If no frame comes
+    // within FIRST_FRAME_WAIT_MS, "connected" is sent anyway.
+    FIRST_FRAME_WAIT_MS: 1000,
+    pendingConnectedTimer: null,
+
+    sendConnectionState(state) {
+        clearTimeout(UI.pendingConnectedTimer);
+        UI.pendingConnectedTimer = null;
+        if (state === 'connected' && UI.rfb) {
+            UI.pendingConnectedTimer = setTimeout(UI.firstFrameRendered, UI.FIRST_FRAME_WAIT_MS);
+            return;
+        }
+        UI.sendMessage('connection_state', state);
+    },
+
+    firstFrameRendered() {
+        if (UI.pendingConnectedTimer === null)
+            return;
+        clearTimeout(UI.pendingConnectedTimer);
+        UI.pendingConnectedTimer = null;
+        UI.sendMessage('connection_state', 'connected');
     },
 
     //send message to parent window

@@ -27,10 +27,12 @@ body {
   background: white url('../images/splash.jpg') no-repeat fixed center;
   height:100%;
   touch-action: none;
+  overscroll-behavior: none;
 }
 
 html {
   height:100%;
+  overscroll-behavior: none;
 }
 
 .noVNC_only_touch.noVNC_hidden {

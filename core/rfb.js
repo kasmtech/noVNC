@@ -4476,6 +4476,9 @@ export default class RFB extends EventTargetMixin {
 
         this._iosKeyboard?.textInputFocus(focused, tapped, touchId, field);
         this._textInputFocusGate.textInputFocus({focused, tapped, caret, field});
+
+        this._textFieldFocused = focused && field.w > 0 && field.h > 0;
+        this._syncTouchCursor();
         return true;
     }
 

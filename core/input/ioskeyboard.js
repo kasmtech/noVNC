@@ -16,6 +16,8 @@ export default class IOSKeyboard {
         this._enabled = enabled;
 
         this._focused = false;
+        this._armed = false;        // A prior tap landed in a field; the next tap opens the keyboard
+        this._armedField = null;    // The field _armed refers to; arming is per-field
         this._field = null;         // Cached field rect, consumed by the next touchstart
         this._fields = [];          // All text-input rects in the active window (remote coords)
         this._lastTap = null;       // Touch id of the last stationary tap
@@ -87,15 +89,31 @@ export default class IOSKeyboard {
         this._focused = focused;
         if (tapped) {
             const matches = this._lastTap !== null && touchId === this._lastTap;
-            this._field = focused && matches && field.w > 0 && field.h > 0 ? { ...field } : null;
+            this._field = focused && matches && field.w > 0 && field.h > 0 ? {...field} : null;
+            if (focused && matches) {
+                this._armed = true;
+                this._armedField = this._field;
+            }
             Log.Debug("iOS keyboard: verdict for touch " + touchId +
-                      (matches ? "" : " (not the last tap)") + ", cached field=" +
-                      (this._field ? field.w + "x" + field.h + "+" + field.x + "+" + field.y : "none"));
+                (matches ? "" : " (not the last tap)") + ", cached field=" +
+                (this._field ? field.w + "x" + field.h + "+" + field.x + "+" + field.y : "none"));
         }
         if (!focused) {
             this._pendingClick = null;
             this._candidate = null;
+            this._armed = false;   // left the field -> next field needs a fresh first tap
+            this._armedField = null;
         }
+    }
+
+    _sameField(a, b) {
+        if (!a || !b) return false;
+        if (a.any || b.any) return a.any === true && b.any === true;
+        return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+    }
+
+    textInputFields(fields) {
+        this._fields = Array.isArray(fields) ? fields : [];
     }
 
     _touchStart(ev) {
@@ -107,11 +125,31 @@ export default class IOSKeyboard {
         const touch = ev.changedTouches[0];
         this._tapStart = this._point(touch);
 
-        if (field === null || !this._inside(touch, field)) return;
+        let hit = null;
+        if (field && this._inside(touch, field)) {
+            hit = field;
+        } else {
+            hit = this._fieldAt(touch);
+        }
 
-        this._candidate = { ...this._point(touch), field };
-        this._allowClick = this._enabled() && this._focused;
-        Log.Debug("iOS keyboard: tap inside the cached field, allowClick=" + this._allowClick);
+        if (!hit && this._focused && !field && this._fields.length === 0) {
+            hit = {any: true};
+        }
+
+        if (!hit) {
+            this._armed = false;   // tapped away from any field -> require two taps again
+            this._armedField = null;
+            return;
+        }
+
+        if (this._armed && !this._sameField(hit, this._armedField)) {
+            this._armed = false;
+            this._armedField = null;
+        }
+
+        this._candidate = {...this._point(touch), field: hit};
+        this._allowClick = this._enabled() && this._armed;
+        Log.Debug("iOS keyboard: tap on a field, armed=" + this._armed + " allowClick=" + this._allowClick);
     }
 
     _touchMove(ev) {
@@ -143,7 +181,9 @@ export default class IOSKeyboard {
         if (candidate === null) return;
         const touch = findTouch(ev.changedTouches, candidate.identifier);
         if (ev.touches.length === 0 && touch && this._stillOn(touch, candidate)) {
-            this._pendingClick = { ...this._point(touch), field: candidate.field, at: Date.now() };
+            this._pendingClick = {...this._point(touch), field: candidate.field, at: Date.now()};
+            this._armed = true;
+            this._armedField = candidate.field;
         } else {
             this._allowClick = false;
         }
@@ -174,7 +214,7 @@ export default class IOSKeyboard {
     }
 
     _point(touch) {
-        return { identifier: touch.identifier, clientX: touch.clientX, clientY: touch.clientY };
+        return {identifier: touch.identifier, clientX: touch.clientX, clientY: touch.clientY};
     }
 
     _stillOn(touch, candidate) {
@@ -182,9 +222,25 @@ export default class IOSKeyboard {
     }
 
     _inside(point, rect) {
-        const { x, y } = this._toRemote(point.clientX, point.clientY);
+        if (rect && rect.any)
+            return true;
+
+        const {x, y} = this._toRemote(point.clientX, point.clientY);
         return x >= rect.x && x < rect.x + rect.w &&
-               y >= rect.y && y < rect.y + rect.h;
+            y >= rect.y && y < rect.y + rect.h;
+    }
+
+    _fieldAt(touch) {
+        const {x, y} = this._toRemote(touch.clientX, touch.clientY);
+        for (let i = 0; i < this._fields.length; i++) {
+            const r = this._fields[i];
+            if (r.w > 0 && r.h > 0 &&
+                x >= r.x && x < r.x + r.w &&
+                y >= r.y && y < r.y + r.h) {
+                return {...r};
+            }
+        }
+        return null;
     }
 }
 
@@ -197,5 +253,5 @@ function findTouch(touches, identifier) {
 
 function near(a, b) {
     return Math.abs(a.clientX - b.clientX) <= TAP_SLOP &&
-           Math.abs(a.clientY - b.clientY) <= TAP_SLOP;
+        Math.abs(a.clientY - b.clientY) <= TAP_SLOP;
 }

@@ -9,12 +9,22 @@ export default class TextInputFocusGate {
         this._touches = new Map();
         this._moved = false;
         this._deferred = null;
+        this._fields = [];
     }
 
     reset() {
         this._touches.clear();
         this._moved = false;
         this._deferred = null;
+        this._fields = [];
+    }
+
+    textInputFields(fields) {
+        this._fields = Array.isArray(fields) ? fields : [];
+    }
+
+    get fields() {
+        return this._fields;
     }
 
     handleTouch(ev) {

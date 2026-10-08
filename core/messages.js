@@ -12,6 +12,7 @@ export const messages = {
     msgTypeTouchSupported: 192,
     msgTypeTouchEvent: 193,
     msgTypeTextInputFocus: 194,
+    msgTypeTextInputFields: 195,
     msgTypeUserAddedToSession: 253,
     msgTypeUserRemovedFromSession: 254
 };

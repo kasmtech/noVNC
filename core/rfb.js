@@ -4192,6 +4192,9 @@ export default class RFB extends EventTargetMixin {
             case messages.msgTypeTextInputFocus:
                 return this._handleTextInputFocus();
 
+            case messages.msgTypeTextInputFields:
+                return this._handleTextInputFields();
+
             case messages.msgTypeVideoEncoders:
                 return this._handleServerVideoEncoders();
 
@@ -4473,6 +4476,33 @@ export default class RFB extends EventTargetMixin {
 
         this._iosKeyboard?.textInputFocus(focused, tapped, touchId, field);
         this._textInputFocusGate.textInputFocus({focused, tapped, caret, field});
+        return true;
+    }
+
+    _handleTextInputFields() {
+        if (this._sock.rQwait("TextInputFields", 2, 1))
+            return false;
+
+        const count = this._sock.rQshift16();
+
+        // rewind the msg type (1) + count (2) if the field rects are not all in yet
+        if (count > 0 && this._sock.rQwait("TextInputFields", count * 8, 3))
+            return false;
+
+        const fields = [];
+        for (let i = 0; i < count; i++) {
+            fields.push({
+                x: this._sock.rQshift16(),
+                y: this._sock.rQshift16(),
+                w: this._sock.rQshift16(),
+                h: this._sock.rQshift16()
+            });
+        }
+
+        Log.Debug("Text input fields: " + count);
+
+        this._iosKeyboard?.textInputFields?.(fields);
+        this._textInputFocusGate.textInputFields(fields);
         return true;
     }
 

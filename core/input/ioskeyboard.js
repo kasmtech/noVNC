@@ -9,7 +9,7 @@ const TAP_SLOP = 15;
 const CLICK_WINDOW_MS = 1000;
 
 export default class IOSKeyboard {
-    constructor(canvas, input, { toRemote, enabled }) {
+    constructor(canvas, input, {toRemote, enabled}) {
         this._canvas = canvas;
         this._input = input;
         this._toRemote = toRemote;
@@ -17,6 +17,7 @@ export default class IOSKeyboard {
 
         this._focused = false;
         this._field = null;         // Cached field rect, consumed by the next touchstart
+        this._fields = [];          // All text-input rects in the active window (remote coords)
         this._lastTap = null;       // Touch id of the last stationary tap
         this._tapStart = null;      // Current single contact
         this._candidate = null;     // Current contact that started inside _field
@@ -54,10 +55,18 @@ export default class IOSKeyboard {
 
     handleTouch(ev) {
         switch (ev.type) {
-            case 'touchstart': this._touchStart(ev); break;
-            case 'touchmove': this._touchMove(ev); break;
-            case 'touchend': this._touchEnd(ev); break;
-            default: this.reset(); break;
+            case 'touchstart':
+                this._touchStart(ev);
+                break;
+            case 'touchmove':
+                this._touchMove(ev);
+                break;
+            case 'touchend':
+                this._touchEnd(ev);
+                break;
+            default:
+                this.reset();
+                break;
         }
 
         const allow = this._allowClick;

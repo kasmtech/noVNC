@@ -4,6 +4,7 @@
  */
 
 import * as Log from '../util/logging.js';
+import Field, { FieldList } from './field.js';
 
 const TAP_SLOP = 15;
 const CLICK_WINDOW_MS = 1000;
@@ -12,14 +13,13 @@ export default class IOSKeyboard {
     constructor(canvas, input, {toRemote, enabled}) {
         this._canvas = canvas;
         this._input = input;
-        this._toRemote = toRemote;
         this._enabled = enabled;
 
         this._focused = false;
         this._armed = false;        // A prior tap landed in a field; the next tap opens the keyboard
         this._armedField = null;    // The field _armed refers to; arming is per-field
-        this._field = null;         // Cached field rect, consumed by the next touchstart
-        this._fields = [];          // All text-input rects in the active window (remote coords)
+        this._field = null;         // Cached field, consumed by the next touchstart
+        this._fields = new FieldList(toRemote);  // All text-input fields in the active window
         this._lastTap = null;       // Touch id of the last stationary tap
         this._tapStart = null;      // Current single contact
         this._candidate = null;     // Current contact that started inside _field
@@ -89,7 +89,8 @@ export default class IOSKeyboard {
         this._focused = focused;
         if (tapped) {
             const matches = this._lastTap !== null && touchId === this._lastTap;
-            this._field = focused && matches && field.w > 0 && field.h > 0 ? {...field} : null;
+            const f = Field.from(field);
+            this._field = focused && matches && f.valid ? f : null;
             if (focused && matches) {
                 this._armed = true;
                 this._armedField = this._field;
@@ -106,14 +107,8 @@ export default class IOSKeyboard {
         }
     }
 
-    _sameField(a, b) {
-        if (!a || !b) return false;
-        if (a.any || b.any) return a.any === true && b.any === true;
-        return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
-    }
-
     textInputFields(fields) {
-        this._fields = Array.isArray(fields) ? fields : [];
+        this._fields.set(fields);
     }
 
     _touchStart(ev) {
@@ -126,14 +121,14 @@ export default class IOSKeyboard {
         this._tapStart = this._point(touch);
 
         let hit = null;
-        if (field && this._inside(touch, field)) {
+        if (field && this._fields.contains(field, touch.clientX, touch.clientY)) {
             hit = field;
         } else {
-            hit = this._fieldAt(touch);
+            hit = this._fields.at(touch.clientX, touch.clientY);
         }
 
         if (!hit && this._focused && !field && this._fields.length === 0) {
-            hit = {any: true};
+            hit = Field.any();
         }
 
         if (!hit) {
@@ -142,7 +137,7 @@ export default class IOSKeyboard {
             return;
         }
 
-        if (this._armed && !this._sameField(hit, this._armedField)) {
+        if (this._armed && !hit.equals(this._armedField)) {
             this._armed = false;
             this._armedField = null;
         }
@@ -195,7 +190,7 @@ export default class IOSKeyboard {
         if (!tap) return;
         if (!ev.isTrusted || ev.target !== this._canvas ||
             Date.now() - tap.at > CLICK_WINDOW_MS ||
-            !near(ev, tap) || !this._inside(ev, tap.field)) {
+            !near(ev, tap) || !this._fields.contains(tap.field, ev.clientX, ev.clientY)) {
             Log.Debug("iOS keyboard: click rejected");
             return;
         }
@@ -218,29 +213,8 @@ export default class IOSKeyboard {
     }
 
     _stillOn(touch, candidate) {
-        return near(touch, candidate) && this._inside(touch, candidate.field);
-    }
-
-    _inside(point, rect) {
-        if (rect && rect.any)
-            return true;
-
-        const {x, y} = this._toRemote(point.clientX, point.clientY);
-        return x >= rect.x && x < rect.x + rect.w &&
-            y >= rect.y && y < rect.y + rect.h;
-    }
-
-    _fieldAt(touch) {
-        const {x, y} = this._toRemote(touch.clientX, touch.clientY);
-        for (let i = 0; i < this._fields.length; i++) {
-            const r = this._fields[i];
-            if (r.w > 0 && r.h > 0 &&
-                x >= r.x && x < r.x + r.w &&
-                y >= r.y && y < r.y + r.h) {
-                return {...r};
-            }
-        }
-        return null;
+        return near(touch, candidate) &&
+            this._fields.contains(candidate.field, touch.clientX, touch.clientY);
     }
 }
 

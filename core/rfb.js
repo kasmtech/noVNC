@@ -1613,6 +1613,8 @@ export default class RFB extends EventTargetMixin {
                 Log.Debug("Window focused while user switched between tabs.");
             }
 
+            if (this._keyboard.enableIME && this.focusOnClick && !this._viewOnly)
+                this.focus();
         }
 
         if (document.visibilityState === "visible" && this._lastVisibilityState === "hidden") {

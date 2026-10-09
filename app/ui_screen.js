@@ -201,9 +201,7 @@ const UI = {
             seamlessClip = false;
         }
         UI.rfb.clipboardSeamless = seamlessClip;
-        if (!WebUtil.isInsideKasmVDI()) {
-            UI.rfb.keyboard.enableIME = UI.getSetting('enable_ime', true, false);
-        }
+        UI.rfb.keyboard.enableIME = UI.getSetting('enable_ime', true, false);
         UI.rfb.clipboardBinary = supportsBinaryClipboard() && UI.rfb.clipboardSeamless;
         UI.rfb.enableWebRTC = UI.getSetting('enable_webrtc', true, false);
         UI.rfb.mouseButtonMapper = UI.initMouseButtonMapper();

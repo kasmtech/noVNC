@@ -192,6 +192,7 @@ export default class RFB extends EventTargetMixin {
         this._firstFrameTimer = null;
 
         this._clipboardText = null;
+        this._clipboardWrite = null;
         this._clipboardServerCapabilitiesActions = {};
         this._clipboardServerCapabilitiesFormats = {};
 
@@ -1140,10 +1141,8 @@ export default class RFB extends EventTargetMixin {
         if (this.clipboardUp && this.clipboardSeamless && this._resendClipboardNextUserDrivenEvent) {
             this._resendClipboardNextUserDrivenEvent = false;
             if (this.clipboardBinary) {
-                navigator.clipboard.read().then((data) => {
-                    this.clipboardPasteDataFrom(data);
-                }, (err) => {
-                    Log.Debug("No data in clipboard: " + err);
+                this._sendLocalClipboard().catch((err) => {
+                    Log.Debug("Failed to read system clipboard: " + err);
                 });
             } else {
                 if (navigator.clipboard && navigator.clipboard.readText) {
@@ -1152,6 +1151,28 @@ export default class RFB extends EventTargetMixin {
                     }.bind(this)).catch(function () {
                       return Log.Debug("Failed to read system clipboard");
                     });
+                }
+            }
+        }
+    }
+
+    // A ClipboardItem from clipboard.read() reads the system clipboard when
+    // getType() is called, and Chrome throws InvalidStateError if the clipboard
+    // changed after read(): a copy on the client, a clipboard manager, or our
+    // own write of the server's clipboard. Wait for our write, read once more
+    // if it changes anyway, and failing that try again on the next
+    // user-driven event.
+    async _sendLocalClipboard() {
+        for (let attempt = 0; ; attempt++) {
+            await this._clipboardWrite;
+            try {
+                await this.clipboardPasteDataFrom(await navigator.clipboard.read());
+                return;
+            } catch (err) {
+                if (err.name !== 'InvalidStateError') { throw err; }
+                if (attempt > 0) {
+                    this._resendClipboardNextUserDrivenEvent = true;
+                    throw err;
                 }
             }
         }
@@ -1211,8 +1232,6 @@ export default class RFB extends EventTargetMixin {
                             if (h === this._clipHash) {
                                 Log.Debug('No clipboard changes');
                                 return;
-                            } else {
-                                this._clipHash = h;
                             }
                         }
 
@@ -1245,6 +1264,9 @@ export default class RFB extends EventTargetMixin {
 
 
         if (dataset.length > 0) {
+            // Only once every type has been read: a getType() that throws
+            // must not leave the hash claiming this clipboard was sent.
+            this._clipHash = h;
             if (this._isPrimaryDisplay) {
                 RFB.messages.sendBinaryClipboard(this._sock, dataset, mimes);
             } else {
@@ -3926,7 +3948,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     _write_binary_clipboard(clipItemData, textdata) {
-        navigator.clipboard.write([new ClipboardItem(clipItemData)]).then(
+        // _sendLocalClipboard() waits on this so it doesn't read mid-write
+        this._clipboardWrite = navigator.clipboard.write([new ClipboardItem(clipItemData)]).then(
             () => {
                 if (textdata) {
                     this._clipHash = hashUInt8Array(textdata);
@@ -3936,7 +3959,7 @@ export default class RFB extends EventTargetMixin {
                 Log.Error("Error writing to client clipboard: " + err);
                 // Lets try writeText
                 if (textdata.length > 0) {
-                    navigator.clipboard.writeText(textdata).then(
+                    return navigator.clipboard.writeText(textdata).then(
                         () => {
                             this._clipHash = hashUInt8Array(textdata);
                         },

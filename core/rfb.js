@@ -4386,6 +4386,7 @@ export default class RFB extends EventTargetMixin {
             this._changeTransitConnectionState(this.TransitConnectionStates.Failure)
             this._udpConnectFailures++;
         }.bind(this));
+        return true;
     }
 
     _handleSubscribeUnixRelay() {
@@ -4401,6 +4402,7 @@ export default class RFB extends EventTargetMixin {
         } else {
             Log.Warn("Unix relay subscription failed, " + payload);
         }
+        return true;
     }
 
     _handleUnixRelay() {
@@ -4416,6 +4418,8 @@ export default class RFB extends EventTargetMixin {
         const payload = this._sock.rQshiftBytes(len);
         const processRelay = this._unixRelays[name];
         processRelay && processRelay(payload);
+        // true: _handleMessage() goes on to the next message in the queue
+        return true;
     }
 
     _handleServerVideoEncoders() {

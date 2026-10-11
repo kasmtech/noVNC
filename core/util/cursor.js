@@ -19,6 +19,7 @@ export default class Cursor {
         // Can't use "display" because of Firefox bug #1445997
         this._canvas.style.visibility = 'hidden';
         this._useFallback = needsFallback;
+        this._nativeTouch = false;
 
         this._position = { x: 0, y: 0 };
         this._hotSpot = { x: 0, y: 0 };
@@ -239,7 +240,20 @@ export default class Cursor {
         return true;
     }
 
+    set nativeTouch(value) {
+        value = !!value;
+        if (this._nativeTouch === value)
+            return;
+        this._nativeTouch = value;
+        if (value)
+            this._hideCursor();
+    }
+
     _updateVisibility(target) {
+        if (this._nativeTouch) {
+            this._hideCursor();
+            return;
+        }
         // When the cursor target has capture we want to show the cursor.
         // So, if a capture is active - look at the captured element instead.
         if (this._captureIsActive()) {

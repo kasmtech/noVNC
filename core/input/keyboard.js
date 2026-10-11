@@ -481,8 +481,8 @@ export default class Keyboard {
 
     // ===== PUBLIC METHODS =====
 
-    focus() {
-        if (this._enableIME) {
+    focus(options = {}) {
+        if (this._enableIME && options.virtualKeyboard !== false) {
             this._touchInput.focus();
         } else {
             this._screenInput.focus();

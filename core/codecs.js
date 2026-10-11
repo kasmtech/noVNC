@@ -80,10 +80,14 @@ export const VIDEO_CODEC_HW_ACC = {
 }
 
 export const preferredCodecs = [
+    encodings.pseudoEncodingStreamingModeAVCNVENC,
     encodings.pseudoEncodingStreamingModeAVCVAAPI,
     encodings.pseudoEncodingStreamingModeAVCSW,
+    encodings.pseudoEncodingStreamingModeHEVCNVENC,
     encodings.pseudoEncodingStreamingModeHEVCVAAPI,
-    encodings.pseudoEncodingStreamingModeHEVCSW
+    encodings.pseudoEncodingStreamingModeHEVCSW,
+    encodings.pseudoEncodingStreamingModeAV1NVENC,
+    encodings.pseudoEncodingStreamingModeAV1VAAPI
 ];
 
 export default class CodecDetector {

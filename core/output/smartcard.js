@@ -38,16 +38,31 @@ const commandToString = (command) => {
   }[command] || `0x${command.toString(16).toUpperCase()}`;
 };
 
-const createRelayPacket = (command, payload = new Uint8Array(0)) => {
+// A bridge may tag a request with an ID, appended after the payload as
+// ID_MARKER and a 32-bit big-endian ID. The length field does not count
+// it, so a client that ignores trailing bytes reads the request as
+// before. The answer carries the same trailer: requests are handled
+// concurrently, so answers can go back out of order, and the bridge
+// drops an answer whose ID is not the request it is waiting for. A
+// bridge that does not tag (the stock one) gets answers without it.
+const ID_MARKER = 0x49;
+const ID_TRAILER_LENGTH = 5;
+
+const createRelayPacket = (command, payload = new Uint8Array(0), requestId = null) => {
   if (command !== RESPONSE_ACK && command !== RESPONSE_ERROR) {
     throw new Error("invalid_relay_response");
   }
 
-  const packet = new Uint8Array(3 + payload.length);
+  const trailerLength = requestId ? ID_TRAILER_LENGTH : 0;
+  const packet = new Uint8Array(3 + payload.length + trailerLength);
   packet[0] = command;
   packet[1] = (payload.length >> 8) & 0xff;
   packet[2] = payload.length & 0xff;
   packet.set(payload, 3);
+  if (requestId) {
+    packet[3 + payload.length] = ID_MARKER;
+    packet.set(requestId, 3 + payload.length + 1);
+  }
   return packet;
 };
 
@@ -63,9 +78,17 @@ const parseRelayPacket = (data) => {
     throw new Error("invalid_relay_packet");
   }
 
+  // Other trailing bytes are ignored, as they always were.
+  const end = 3 + payloadLength;
+  const requestId =
+    data.length === end + ID_TRAILER_LENGTH && data[end] === ID_MARKER
+      ? data.slice(end + 1, end + ID_TRAILER_LENGTH)
+      : null;
+
   return {
     command,
-    payload: data.slice(3, 3 + payloadLength),
+    payload: data.slice(3, end),
+    requestId,
   };
 };
 
@@ -263,9 +286,10 @@ class SmartcardSession {
 export default async (rfb) => {
   Log.Debug("smartcard.initializeSmartcardRelay");
 
-  const sendSmartcardResponse = (command, payload = new Uint8Array(0)) => {
-    Log.Debug(`smartcard.response: command=${commandToString(command)}, payloadLen=${payload.length}`);
-    const packet = createRelayPacket(command, payload);
+  const sendResponse = (command, payload = new Uint8Array(0), requestId = null) => {
+    Log.Debug(`smartcard.response: command=${commandToString(command)}, payloadLen=${payload.length}` +
+      (requestId ? `, id=${toHex(requestId)}` : ""));
+    const packet = createRelayPacket(command, payload, requestId);
     rfb.sendUnixRelayData("smartcard", packet);
   };
 
@@ -273,9 +297,14 @@ export default async (rfb) => {
   await clientSession.refresh();
 
   rfb.subscribeUnixRelay("smartcard", async (data) => {
+    let requestId = null;
     try {
-      const { command, payload } = parseRelayPacket(data);
-      Log.Debug(`smartcard.request: command=${commandToString(command)}, payloadLen=${payload.length}`);
+      const request = parseRelayPacket(data);
+      const { command, payload } = request;
+      requestId = request.requestId;
+      Log.Debug(`smartcard.request: command=${commandToString(command)}, payloadLen=${payload.length}` +
+        (requestId ? `, id=${toHex(requestId)}` : ""));
+      const sendSmartcardResponse = (command, payload) => sendResponse(command, payload, requestId);
 
       switch (command) {
         case REQUEST_INITIALIZE:
@@ -312,7 +341,7 @@ export default async (rfb) => {
       }
     } catch (error) {
       Log.Error(`Failed to process command: ${error.message}`);
-      sendSmartcardResponse(RESPONSE_ERROR, new TextEncoder().encode(error.message));
+      sendResponse(RESPONSE_ERROR, new TextEncoder().encode(error.message), requestId);
     }
   });
 };

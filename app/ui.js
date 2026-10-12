@@ -35,7 +35,7 @@ import "core-js/stable";
 import "regenerator-runtime/runtime";
 import * as Log from '../core/util/logging.js';
 import _, { l10n } from './localization.js';
-import { isTouchDevice, isSafari, hasScrollbarGutter, dragThreshold, supportsBinaryClipboard, isFirefox, isWindows, isIOS, supportsPointerLock, supportsKeyboardLock }
+import { isTouchDevice, isSafari, hasScrollbarGutter, dragThreshold, supportsBinaryClipboard, isFirefox, isWindows, isIOS, supportsPointerLock, supportsKeyboardLock, deviceClass }
     from '../core/util/browser.js';
 import { setCapture, getPointerEvent } from '../core/util/events.js';
 import KeyTable from "../core/input/keysym.js";
@@ -359,7 +359,10 @@ const UI = {
         UI.initSetting('touch_mode', 'native');
         UI.initSetting('auto_keyboard', true);
         UI.initSetting('enable_webrtc', false);
-        UI.initSetting('enable_hidpi', false);
+        // Phones and tablets have 2-3 device pixels per CSS pixel; without
+        // native resolution the session runs at about half that and is
+        // stretched soft. A saved choice still wins.
+        UI.initSetting('enable_hidpi', deviceClass() !== 'desktop');
         UI.initSetting('fallback_image_mode', false);
 
         UI.initSetting(UI_SETTINGS.STREAM_MODE, encodings.pseudoEncodingStreamingModeJpegWebp);
@@ -804,7 +807,7 @@ const UI = {
         document.documentElement.classList.remove("noVNC_disconnected");
 
         const transitionElem = document.getElementById("noVNC_transition_text");
-        UI.sendMessage('connection_state', state);
+        UI.sendConnectionState(state);
 
         switch (state) {
             case 'init':
@@ -1989,6 +1992,7 @@ const UI = {
                         UI.codecDetector?.getSupportedCodecIds(),
                         true );
         UI.rfb.addEventListener("connect", UI.connectFinished);
+        UI.rfb.addEventListener("firstframe", UI.firstFrameRendered);
         UI.rfb.addEventListener("badencoding", (e) => {
             Log.Warn("Reconnecting due to encoding error or corrupted frame...");
 
@@ -2357,6 +2361,32 @@ const UI = {
         }));
 
         UI.sendMessage("update_codecs", {current: mode, codecs: availableModes});
+    },
+
+    // Tell the embedding page about connection state changes. "connected" waits
+    // for the first frame to be painted: until then the canvas is opaque black,
+    // and a page that drops its loading screen on "connected" would show that
+    // black for the ~100 ms before the first update arrives. If no frame comes
+    // within FIRST_FRAME_WAIT_MS, "connected" is sent anyway.
+    FIRST_FRAME_WAIT_MS: 1000,
+    pendingConnectedTimer: null,
+
+    sendConnectionState(state) {
+        clearTimeout(UI.pendingConnectedTimer);
+        UI.pendingConnectedTimer = null;
+        if (state === 'connected' && UI.rfb) {
+            UI.pendingConnectedTimer = setTimeout(UI.firstFrameRendered, UI.FIRST_FRAME_WAIT_MS);
+            return;
+        }
+        UI.sendMessage('connection_state', state);
+    },
+
+    firstFrameRendered() {
+        if (UI.pendingConnectedTimer === null)
+            return;
+        clearTimeout(UI.pendingConnectedTimer);
+        UI.pendingConnectedTimer = null;
+        UI.sendMessage('connection_state', 'connected');
     },
 
     //send message to parent window

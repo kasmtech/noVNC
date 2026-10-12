@@ -95,7 +95,28 @@ export function isIOS() {
     return navigator &&
            (!!(/ipad/i).exec(navigator.platform) ||
             !!(/iphone/i).exec(navigator.platform) ||
-            !!(/ipod/i).exec(navigator.platform));
+            !!(/ipod/i).exec(navigator.platform) ||
+            isIPadOS());
+}
+
+// iPadOS Safari presents as a Mac (platform "MacIntel", a Mac User-Agent);
+// only its touch points give it away.
+export function isIPadOS() {
+    return !!navigator && navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1;
+}
+
+// The viewer's device: 'phone', 'tablet' or 'desktop'. The client sends it
+// to the server with its encodings, so the session can adapt to the device.
+export function deviceClass() {
+    const ua = (navigator && navigator.userAgent) || '';
+    const uaMobile = !!(navigator && navigator.userAgentData && navigator.userAgentData.mobile);
+    if (/iPhone|iPod/.test(ua)) return 'phone';
+    if (/iPad/.test(ua) || isIPadOS()) return 'tablet';
+    // Android phones say "Mobile"; Android tablets don't.
+    if (/Android/.test(ua)) return (/Mobile/.test(ua) || uaMobile) ? 'phone' : 'tablet';
+    if (uaMobile || /Windows Phone|Mobile.*Firefox|Firefox.*Mobile/.test(ua)) return 'phone';
+    if (/Tablet/.test(ua)) return 'tablet';
+    return 'desktop';
 }
 
 export function isSafari() {

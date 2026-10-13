@@ -4365,6 +4365,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleServerVideoEncoders() {
+        const msgStart = this._sock.rQi;
+
         if (this._sock.rQwait("VideoEncoders header", 1, 1))
             return false;
 
@@ -4373,7 +4375,7 @@ export default class RFB extends EventTargetMixin {
         // Each encoder has variable length data:
         // codec(4) + minQuality(4) + maxQuality(4) + numPresets(1) + presets(4*n)
         // Minimum is 13 bytes per encoder
-        if (this._sock.rQwait("VideoEncoders data", num * 13, 1))
+        if (this._sock.rQwait("VideoEncoders data", num * 13, this._sock.rQi - msgStart + 1))
             return false;
 
         let serverSupportedEncoders = [];
@@ -4387,7 +4389,7 @@ export default class RFB extends EventTargetMixin {
 
             const numPresets = this._sock.rQshift8();
             if (numPresets > 0) {
-                if (this._sock.rQwait("VideoEncoders presets", numPresets * 4)) {
+                if (this._sock.rQwait("VideoEncoders presets", numPresets * 4, this._sock.rQi - msgStart + 1)) {
                     return false;
                 }
             }

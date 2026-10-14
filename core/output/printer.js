@@ -33,6 +33,7 @@ export default (rfb) => {
 
         switch (packetId) {
             case PACKETS.DOCUMENT_START:
+                documentData = [];
                 documentSize = packetData.getUint32(4, false);
                 downloadedSize = 0;
                 console.log(`Downloading document for printing (${documentSize}B)`);
@@ -49,6 +50,7 @@ export default (rfb) => {
             case PACKETS.DOCUMENT_END:
                 console.log(`Downloaded document for printing (${downloadedSize}/${documentSize}B)`);
                 printDocument(documentData);
+                documentData = [];
                 downloadedSize = 0;
                 documentSize = 0;
                 break;

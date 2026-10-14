@@ -1,5 +1,5 @@
 /*
- * KasmVNC WebRTC signaling — wraps msgTypeWebRTCSignal (192) frames
+ * KasmVNC WebRTC signaling — wraps msgTypeWebRTCSignal (196) frames
  * over the existing WebSocket. Body schema (multi-screen):
  *     [u8 kind][u8 screenId][u16 len][bytes payload]
  *
@@ -30,7 +30,7 @@
 
 import * as Log from '../util/logging.js';
 
-export const WEBRTC_MSG_TYPE = 192;
+export const WEBRTC_MSG_TYPE = 196;
 export const WEBRTC_SESSION_SCREEN = 0xFF;
 export const WEBRTC_IMAGE_SCREEN = 0xFE;
 export const WEBRTC_MAX_SIGNAL_BYTES = 16 * 1024;

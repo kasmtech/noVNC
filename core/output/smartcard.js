@@ -69,7 +69,7 @@ const parseRelayPacket = (data) => {
   };
 };
 
-const KASM_SMARTCARD_EXTENSION_ID = "obhhhhhfhnmfoonndahjcjpkndkeompc";
+const KASM_SMARTCARD_EXTENSION_ID = "cjkohjfgidilbllbjkdhpoeonjanpomo";
 
 class SmartcardSession {
   constructor() {

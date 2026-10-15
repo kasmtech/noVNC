@@ -58,7 +58,7 @@ const base64ToBuffer = (b64) => {
     return bytes;
 };
 
-const KASM_SSH_AGENT_EXTENSION_ID = "obhhhhhfhnmfoonndahjcjpkndkeompc";
+const KASM_SSH_AGENT_EXTENSION_ID = "cjkohjfgidilbllbjkdhpoeonjanpomo";
 
 const callExtension = (connectionId, event, payload) => {
     return new Promise((resolve, reject) => {

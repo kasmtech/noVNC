@@ -2459,16 +2459,12 @@ const UI = {
 
                     break;
                 case 'enable_ime_mode':
-                    if (!UI.getSetting('enable_ime')) {
-                        UI.forceSetting('enable_ime', true, false);
-                        UI.toggleIMEMode();
-                    }
+                    UI.forceSetting('enable_ime', true, false);
+                    UI.toggleIMEMode();
                     break;
                 case 'disable_ime_mode':
-                    if (UI.getSetting('enable_ime')) {
-                        UI.forceSetting('enable_ime', false, false);
-                        UI.toggleIMEMode();
-                    }
+                    UI.forceSetting('enable_ime', false, false);
+                    UI.toggleIMEMode();
                     break;
                 case 'open_displays_mode':
                     if (UI.rfb) {

@@ -1667,6 +1667,8 @@ export default class RFB extends EventTargetMixin {
                 Log.Debug("Window focused while user switched between tabs.");
             }
 
+            if (this._keyboard.enableIME && this.focusOnClick && !this._viewOnly)
+                this.focus();
         }
 
         if (document.visibilityState === "visible" && this._lastVisibilityState === "hidden") {
@@ -2337,7 +2339,7 @@ export default class RFB extends EventTargetMixin {
         const mappedButton = this.mouseButtonMapper.get(ev.button);
         switch (ev.type) {
             case 'mousedown':
-                if (this._display.screens.length === 0 || window.self === window.top) {
+                if (this._display.screens.length === 0 || window.self === window.top || this._keyboard.enableIME) {
                 	ev.preventDefault();
                 }
                 setCapture(this._canvas);

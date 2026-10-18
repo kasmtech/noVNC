@@ -22,6 +22,7 @@ import Deflator from "./deflator.js";
 import Keyboard from "./input/keyboard.js";
 import initializePrinterRelay from "./output/printer.js";
 import initializeSmartcardRelay from "./output/smartcard.js";
+import * as WebUtil from "../app/webutil.js";
 import GestureHandler from "./input/gesturehandler.js";
 import Cursor from "./util/cursor.js";
 import Websock from "./websock.js";
@@ -1102,6 +1103,14 @@ export default class RFB extends EventTargetMixin {
         this._keyboard.blur();
     }
 
+    isLocalEditableFocused() {
+        const el = document.activeElement;
+        if (!el || el.id === 'noVNC_keyboardinput')
+            return false;
+
+        return el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA';
+    }
+
     checkLocalClipboard() {
         if (this.clipboardUp && this.clipboardSeamless && this._resendClipboardNextUserDrivenEvent) {
             this._resendClipboardNextUserDrivenEvent = false;
@@ -1613,7 +1622,7 @@ export default class RFB extends EventTargetMixin {
                 Log.Debug("Window focused while user switched between tabs.");
             }
 
-            if (this._keyboard.enableIME && this.focusOnClick && !this._viewOnly)
+            if (this._keyboard.enableIME && this.focusOnClick && !this._viewOnly && (WebUtil.isInsideKasmVDI() || !this.isLocalEditableFocused()))
                 this.focus();
         }
 

@@ -2459,6 +2459,13 @@ const UI = {
 
                     break;
                 case 'enable_ime_mode':
+                    if (!UI.getSetting('enable_ime')) {
+                        UI.forceSetting('enable_ime', true, false);
+                        UI.toggleIMEMode();
+                    }
+
+                    break;
+                case 'enable_ime_mode':
                     UI.forceSetting('enable_ime', true, false);
                     UI.toggleIMEMode();
                     break;

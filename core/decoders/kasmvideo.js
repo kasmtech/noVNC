@@ -99,7 +99,20 @@ export default class KasmVideoDecoder {
     }
 
     _skipRect(x, y, width, height, _sock, display, _depth, frameId) {
-        display.clearRect(x, y, width, height, 0, frameId, false);
+        let webrtcActive = false;
+        const screens = this._rfb && this._rfb._webrtcScreens;
+        if (screens) {
+            for (const slot of screens.values()) {
+                const t = slot.live || slot.pending;
+                if (t && t.state !== 'closed' && t.state !== 'fallback') {
+                    webrtcActive = true;
+                    break;
+                }
+            }
+        }
+        if (!webrtcActive) {
+            display.clearRect(x, y, width, height, 0, frameId, false);
+        }
         return true;
     }
 

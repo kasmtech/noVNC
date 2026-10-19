@@ -22,6 +22,7 @@ import Deflator from "./deflator.js";
 import Keyboard from "./input/keyboard.js";
 import initializePrinterRelay from "./output/printer.js";
 import initializeSmartcardRelay from "./output/smartcard.js";
+import * as WebUtil from "../app/webutil.js";
 import GestureHandler from "./input/gesturehandler.js";
 import IOSKeyboard from "./input/ioskeyboard.js";
 import TextInputFocusGate from "./input/textinputfocusgate.js";
@@ -1288,6 +1289,14 @@ export default class RFB extends EventTargetMixin {
         this._keyboard.blur();
     }
 
+    isLocalEditableFocused() {
+        const el = document.activeElement;
+        if (!el || el.id === 'noVNC_keyboardinput')
+            return false;
+
+        return el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA';
+    }
+
     checkLocalClipboard() {
         if (this.clipboardUp && this.clipboardSeamless && this._resendClipboardNextUserDrivenEvent) {
             this._resendClipboardNextUserDrivenEvent = false;
@@ -1707,6 +1716,8 @@ export default class RFB extends EventTargetMixin {
                 Log.Debug("Window focused while user switched between tabs.");
             }
 
+            if (this._keyboard.enableIME && this.focusOnClick && !this._viewOnly && (WebUtil.isInsideKasmVDI() || !this.isLocalEditableFocused()))
+                this.focus();
         }
 
         if (document.visibilityState === "visible" && this._lastVisibilityState === "hidden") {
@@ -2377,7 +2388,7 @@ export default class RFB extends EventTargetMixin {
         const mappedButton = this.mouseButtonMapper.get(ev.button);
         switch (ev.type) {
             case 'mousedown':
-                if (this._display.screens.length === 0 || window.self === window.top) {
+                if (this._display.screens.length === 0 || window.self === window.top || this._keyboard.enableIME) {
                 	ev.preventDefault();
                 }
                 setCapture(this._canvas);

@@ -1,4 +1,6 @@
 import * as Log from "../../core/util/logging.js";
+import { callExtension } from "./kasm_extension.js";
+import { getPassthroughStatusMonitor } from "./passthrough_status.js";
 
 const REQUEST_MAKE_CREDENTIAL = 0x01;
 const REQUEST_GET_ASSERTION = 0x02;
@@ -51,33 +53,10 @@ const parseRelayPacket = (data) => {
 const encodeJson = (value) => new TextEncoder().encode(JSON.stringify(value ?? {}));
 const decodeJson = (payload) => (payload.length === 0 ? {} : JSON.parse(new TextDecoder().decode(payload)));
 
-const KASM_FIDO2_EXTENSION_ID = "cjkohjfgidilbllbjkdhpoeonjanpomo";
-
-
-const callExtension = (type, params) => {
-    return new Promise((resolve, reject) => {
-        const message = {
-            deviceId: "fido2-relay",
-            completionId: Date.now().toString() + Math.random().toString(36),
-            type,
-            args: params === undefined ? "" : JSON.stringify(params),
-        };
-
-        const onResponse = (response) => {
-            if (chrome.runtime.lastError) {
-                reject(new Error(chrome.runtime.lastError.message));
-                return;
-            }
-
-            if (!response || response.status === "error") {
-                const detail = response && Array.isArray(response.result) ? response.result.join(" | ") : "fido2_request_failed";
-                reject(new Error(detail));
-            } else {
-                resolve(response.result);
-            }
-        };
-
-        chrome.runtime.sendMessage(KASM_FIDO2_EXTENSION_ID, message, onResponse);
+const callFido2Extension = (type, params) => {
+    return callExtension(type, params === undefined ? "" : JSON.stringify(params), {
+        deviceId: "fido2-relay",
+        defaultError: "fido2_request_failed",
     });
 };
 
@@ -92,6 +71,8 @@ export default (rfb) => {
         rfb.sendUnixRelayData("fido2", packet);
     };
 
+    const statusMonitor = getPassthroughStatusMonitor(rfb);
+
     rfb.subscribeUnixRelay("fido2", async (data) => {
         let command, deviceId, payload;
         try {
@@ -105,19 +86,26 @@ export default (rfb) => {
             `fido2.request: device[${deviceId}] command=${commandToString(command)}, payloadLen=${payload.length}`
         );
 
+        // Ceremonies can wait for a PIN or touch, so status probes stay out of their way.
+        const isCeremony = command === REQUEST_MAKE_CREDENTIAL || command === REQUEST_GET_ASSERTION;
+        if (isCeremony) {
+            statusMonitor.beginActivity();
+        }
+        let failed = false;
+
         try {
             let result;
             switch (command) {
                 case REQUEST_LIST_DEVICES:
-                    result = await callExtension("ctap_list_devices");
+                    result = await callFido2Extension("ctap_list_devices");
                     break;
 
                 case REQUEST_MAKE_CREDENTIAL:
-                    result = await callExtension("ctap_make_credential", decodeJson(payload));
+                    result = await callFido2Extension("ctap_make_credential", decodeJson(payload));
                     break;
 
                 case REQUEST_GET_ASSERTION:
-                    result = await callExtension("ctap_get_assertion", decodeJson(payload));
+                    result = await callFido2Extension("ctap_get_assertion", decodeJson(payload));
                     break;
 
                 default:
@@ -126,8 +114,15 @@ export default (rfb) => {
 
             sendFido2Response(deviceId, RESPONSE_ACK, encodeJson(result));
         } catch (error) {
+            failed = true;
             Log.Error(`fido2: device[${deviceId}]: ${error.message}`);
             sendFido2Response(deviceId, RESPONSE_ERROR, new TextEncoder().encode(error.message));
+        } finally {
+            if (isCeremony) {
+                statusMonitor.endActivity(failed);
+            }
         }
     });
+
+    statusMonitor.start();
 };

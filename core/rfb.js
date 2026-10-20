@@ -135,6 +135,8 @@ export default class RFB extends EventTargetMixin {
         this._fbHeight = 0;
         this._fbName = "";
         this._capabilities = { power: false };
+        this._unixRelayStates = {};  // relay name -> { isAllowed, replied }
+        this._unixRelayPending = []; // relay names awaiting a subscribe reply, oldest first
         this._supportsFence = false;
         this._supportsContinuousUpdates = false;
         this._enabledContinuousUpdates = false;
@@ -1269,8 +1271,26 @@ export default class RFB extends EventTargetMixin {
         if (this._isPrimaryDisplay){
             this._unixRelays = this._unixRelays || {};
             this._unixRelays[name] = processRelayFn;
+            this._unixRelayStates[name] = { isAllowed: null, replied: false };
+            this._unixRelayPending.push(name);
             RFB.messages.sendSubscribeUnixRelay(this._sock, name);
         }
+    }
+
+    // Result of the server's subscribe reply for a relay:
+    //   true  = subscribed
+    //   false = server answered "No such unix channel" (relay not registered)
+    //   null  = no reply yet, or the server did not say (old Xvnc, or no permissions)
+    getUnixRelayState(name) {
+        const state = this._unixRelayStates[name];
+        return state ? state.isAllowed : null;
+    }
+
+    // True once the server has answered the subscribe for this relay, even when the
+    // answer did not name the relay (old Xvnc) and getUnixRelayState() is still null.
+    hasUnixRelayReply(name) {
+        const state = this._unixRelayStates[name];
+        return !!state && state.replied;
     }
 
     sendUnixRelayData(name, payload) {
@@ -4347,9 +4367,41 @@ export default class RFB extends EventTargetMixin {
         const payload = this._sock.rQshiftStr(len);
 
         if (status) {
-            Log.Info("Unix relay subscription succeeded");
+            Log.Info("Unix relay subscription succeeded, " + payload);
         } else {
             Log.Warn("Unix relay subscription failed, " + payload);
+        }
+
+        // Newer servers prefix the relay name ("fido2: Ok"). Older ones send just the
+        // message; replies come back in request order, so they map to the oldest
+        // pending subscription, but the result can't be trusted to name a policy.
+        let name = null;
+        let message = payload;
+        const sep = payload.indexOf(": ");
+        if (sep > 0 && Object.prototype.hasOwnProperty.call(this._unixRelayStates, payload.slice(0, sep))) {
+            name = payload.slice(0, sep);
+            message = payload.slice(sep + 2);
+        }
+
+        let isAllowed = null;
+        if (name !== null) {
+            if (status) {
+                isAllowed = true;
+            } else if (message === "No such unix channel") {
+                isAllowed = false;
+            }
+
+            const pending = this._unixRelayPending.indexOf(name);
+            if (pending !== -1) {
+                this._unixRelayPending.splice(pending, 1);
+            }
+        } else {
+            name = this._unixRelayPending.shift() || null;
+        }
+
+        if (name !== null) {
+            this._unixRelayStates[name] = { isAllowed, replied: true };
+            this.dispatchEvent(new CustomEvent("unixrelaystate", { detail: { name, isAllowed } }));
         }
     }
 

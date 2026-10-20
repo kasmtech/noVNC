@@ -1,4 +1,6 @@
 import * as Log from "../../core/util/logging.js";
+import { callExtension } from "./kasm_extension.js";
+import { getPassthroughStatusMonitor } from "./passthrough_status.js";
 
 const EVENT_DATA = 0x01;   // one complete raw SSH-agent-protocol frame (bidirectional)
 const EVENT_CLOSE = 0x02;  // tear down this connection (bidirectional)
@@ -58,36 +60,14 @@ const base64ToBuffer = (b64) => {
     return bytes;
 };
 
-const KASM_SSH_AGENT_EXTENSION_ID = "cjkohjfgidilbllbjkdhpoeonjanpomo";
-
-const callExtension = (connectionId, event, payload) => {
-    return new Promise((resolve, reject) => {
-        const message = {
-            deviceId: "ssh-agent-relay",
-            completionId: Date.now().toString() + Math.random().toString(36),
-            type: "ssh_agent_forward",
-            args: JSON.stringify({
-                connectionId,
-                event: event === EVENT_CLOSE ? "close" : "data",
-                payload: bufferToBase64(payload),
-            }),
-        };
-
-        const onResponse = (response) => {
-            if (chrome.runtime.lastError) {
-                reject(new Error(chrome.runtime.lastError.message));
-                return;
-            }
-
-            if (!response || response.status === "error") {
-                const detail = response && Array.isArray(response.result) ? response.result.join(" | ") : "ssh_agent_request_failed";
-                reject(new Error(detail));
-            } else {
-                resolve(response.result);
-            }
-        };
-
-        chrome.runtime.sendMessage(KASM_SSH_AGENT_EXTENSION_ID, message, onResponse);
+const callSshAgentExtension = (connectionId, event, payload) => {
+    return callExtension("ssh_agent_forward", JSON.stringify({
+        connectionId,
+        event: event === EVENT_CLOSE ? "close" : "data",
+        payload: bufferToBase64(payload),
+    }), {
+        deviceId: "ssh-agent-relay",
+        defaultError: "ssh_agent_request_failed",
     });
 };
 
@@ -101,6 +81,8 @@ export default (rfb) => {
         const packet = createRelayPacket(connectionId, event, payload);
         rfb.sendUnixRelayData("ssh_agent", packet);
     };
+
+    const statusMonitor = getPassthroughStatusMonitor(rfb);
 
     rfb.subscribeUnixRelay("ssh_agent", async (data) => {
         let connectionId, event, payload;
@@ -120,17 +102,26 @@ export default (rfb) => {
             return;
         }
 
+        // No status probe runs while an exchange is in flight or just finished.
+        statusMonitor.beginActivity();
+        let failed = false;
+
         try {
             if (event === EVENT_CLOSE) {
-                await callExtension(connectionId, EVENT_CLOSE, payload);
+                await callSshAgentExtension(connectionId, EVENT_CLOSE, payload);
                 return;
             }
 
-            const responseB64 = await callExtension(connectionId, EVENT_DATA, payload);
+            const responseB64 = await callSshAgentExtension(connectionId, EVENT_DATA, payload);
             sendSshAgentEvent(connectionId, EVENT_DATA, base64ToBuffer(responseB64));
         } catch (error) {
+            failed = true;
             Log.Error(`ssh_agent: connection[${connectionId}]: ${error.message}`);
             sendSshAgentEvent(connectionId, EVENT_ERROR, new TextEncoder().encode(error.message));
+        } finally {
+            statusMonitor.endActivity(failed);
         }
     });
+
+    statusMonitor.start();
 };

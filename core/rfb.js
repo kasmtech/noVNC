@@ -666,6 +666,11 @@ export default class RFB extends EventTargetMixin {
             return;
         }
 
+        if (value > MAX_FB_DIMENSION) {
+            Log.Warn("Clamping max video resolution width " + value + " to " + MAX_FB_DIMENSION);
+            value = MAX_FB_DIMENSION;
+        }
+
         if (this._maxVideoResolutionX === value) {
             return;
         }
@@ -679,6 +684,11 @@ export default class RFB extends EventTargetMixin {
         if (!Number.isInteger(value) || value < 100 ) {
             Log.Error("max video resolution must be an integer greater than 100");
             return;
+        }
+
+        if (value > MAX_FB_DIMENSION) {
+            Log.Warn("Clamping max video resolution height " + value + " to " + MAX_FB_DIMENSION);
+            value = MAX_FB_DIMENSION;
         }
 
         if (this._maxVideoResolutionY === value) {
@@ -1740,6 +1750,13 @@ export default class RFB extends EventTargetMixin {
             }
 
             const size = this._screenSize();
+
+            if (!this._validateDimensions(size.serverWidth, size.serverHeight)) {
+                Log.Warn("Not requesting remote resize to " + size.serverWidth + "x" + size.serverHeight + " (max " + MAX_FB_DIMENSION + ")");
+
+                return;
+            }
+
             this._forceFullFrameUpdateAfterResize = true;
             RFB.messages.setDesktopSize(this._sock, size, this._screenFlags);
 

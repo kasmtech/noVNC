@@ -1744,18 +1744,20 @@ export default class RFB extends EventTargetMixin {
                 return;
             }
 
+            const candidate = this._screenSize(undefined, true);
+
+            if (!this._validateDimensions(candidate.serverWidth, candidate.serverHeight)) {
+                Log.Warn("Not requesting remote resize to " + candidate.serverWidth + "x" + candidate.serverHeight + " (max " + MAX_FB_DIMENSION + ")");
+
+                return;
+            }
+
             //zero out the server reported resolution
             for (let i=0; i < this._display.screens.length; i++) {
                 this._display.applyServerResolution(0, 0, this._display.screens[i].screenIndex);
             }
 
             const size = this._screenSize();
-
-            if (!this._validateDimensions(size.serverWidth, size.serverHeight)) {
-                Log.Warn("Not requesting remote resize to " + size.serverWidth + "x" + size.serverHeight + " (max " + MAX_FB_DIMENSION + ")");
-
-                return;
-            }
 
             this._forceFullFrameUpdateAfterResize = true;
             RFB.messages.setDesktopSize(this._sock, size, this._screenFlags);
@@ -1782,8 +1784,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     // Gets the the size of the available screen
-    _screenSize (limited) {
-        return this._display.getScreenSize(this.videoQuality, this.forcedResolutionX, this.forcedResolutionY, this._hiDpi, limited, !this._resizeSession, this._streamMode);
+    _screenSize (limited, ignoreServerReported) {
+        return this._display.getScreenSize(this.videoQuality, this.forcedResolutionX, this.forcedResolutionY, this._hiDpi, limited, !this._resizeSession, this._streamMode, ignoreServerReported);
     }
 
     _fixScrollbars() {
@@ -2002,7 +2004,11 @@ export default class RFB extends EventTargetMixin {
                         this.dispatchEvent(new CustomEvent("screenregistered", {}));
                         Log.Info(`Secondary monitor (${event.data.screenID}) has been removed.`);
                         const size = this._screenSize();
-                        RFB.messages.setDesktopSize(this._sock, size, this._screenFlags);
+                        if (this._validateDimensions(size.serverWidth, size.serverHeight)) {
+                            RFB.messages.setDesktopSize(this._sock, size, this._screenFlags);
+                        } else {
+                            Log.Warn("Not requesting remote resize to " + size.serverWidth + "x" + size.serverHeight + " (max " + MAX_FB_DIMENSION + ")");
+                        }
                         this._sendEncodings();
                         this._updateContinuousUpdates();
                         this.dispatchEvent(new CustomEvent("screenregistered", {}));
@@ -4661,10 +4667,7 @@ export default class RFB extends EventTargetMixin {
                 this._sock.rQskipBytes(4);
             }
 
-            if (this._validateDimensions(w, h))
-                this._display.applyServerResolution(w, h, i);
-            else
-                Log.Warn("Ignoring oversized screen " + sI + ": " + w + "x" + h);
+            this._display.applyServerResolution(w, h, i);
 
             Log.Debug(`Server reported screen ${sI} with resolution ${w}x${h} at ${x}x${y}`);
         }

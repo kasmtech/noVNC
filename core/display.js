@@ -290,7 +290,7 @@ export default class Display {
         return [x, y];
     }
 
-    getScreenSize(resolutionQuality, max_width, max_height, hiDpi, disableLimit, disableScaling, streamMode) {
+    getScreenSize(resolutionQuality, max_width, max_height, hiDpi, disableLimit, disableScaling, streamMode, ignoreServerReported = false) {
         let data = {
             screens: null,
             serverWidth: 0,
@@ -316,6 +316,7 @@ export default class Display {
 
         //max the resolution of a single screen to 1280
         if (
+            !ignoreServerReported &&
             (this._screens[i].serverReportedWidth > 0 && this._screens[i].serverReportedHeight > 0) &&
             (
                 disableScaling ||
@@ -377,12 +378,19 @@ export default class Display {
     }
 
     applyServerResolution(width, height, screenIndex) {
+        const clear = width === 0 && height === 0;
+        if (!clear && !(width > 0 && width <= MAX_FB_DIMENSION && height > 0 && height <= MAX_FB_DIMENSION)) {
+            Log.Warn("Ignoring server resolution " + width + "x" + height + " for screen " + screenIndex + " (max " + MAX_FB_DIMENSION + ")");
+            return false;
+        }
+
         for (let z = 0; z < this._screens.length; z++) {
             if (screenIndex === this._screens[z].screenIndex) {
                 this._screens[z].serverReportedWidth = width;
                 this._screens[z].serverReportedHeight = height;
             }
         }
+        return true;
     }
 
     applyScreenPlan(screenPlan) {

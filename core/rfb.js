@@ -2353,7 +2353,7 @@ export default class RFB extends EventTargetMixin {
         switch (ev.type) {
             case 'mousedown':
                 if (this._display.screens.length === 0 || window.self === window.top || this._keyboard.enableIME) {
-                    ev.preventDefault();
+                	ev.preventDefault();
                 }
                 setCapture(this._canvas);
 

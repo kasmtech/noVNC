@@ -377,6 +377,28 @@ export default class Display {
         return data;
     }
 
+    snapshotScreens() {
+        return this._screens.map(screen => ({
+            screenID: screen.screenID,
+            width: screen.width,
+            height: screen.height,
+            serverWidth: screen.serverWidth,
+            serverHeight: screen.serverHeight,
+            scale: screen.scale,
+            x2: screen.x2,
+            y2: screen.y2
+        }));
+    }
+
+    restoreScreens(snapshot) {
+        for (let i = 0; i < snapshot.length; i++) {
+            const screen = this._screens.find(s => s.screenID === snapshot[i].screenID);
+            if (screen) {
+                Object.assign(screen, snapshot[i]);
+            }
+        }
+    }
+
     applyServerResolution(width, height, screenIndex) {
         const clear = width === 0 && height === 0;
         if (!clear && !(width > 0 && width <= MAX_FB_DIMENSION && height > 0 && height <= MAX_FB_DIMENSION)) {

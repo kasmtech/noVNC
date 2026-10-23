@@ -1744,10 +1744,12 @@ export default class RFB extends EventTargetMixin {
                 return;
             }
 
+            const screensBefore = this._display.snapshotScreens();
             const candidate = this._screenSize(undefined, true);
 
             if (!this._validateDimensions(candidate.serverWidth, candidate.serverHeight)) {
                 Log.Warn("Not requesting remote resize to " + candidate.serverWidth + "x" + candidate.serverHeight + " (max " + MAX_FB_DIMENSION + ")");
+                this._display.restoreScreens(screensBefore);
 
                 return;
             }
@@ -1758,7 +1760,6 @@ export default class RFB extends EventTargetMixin {
             }
 
             const size = this._screenSize();
-
             this._forceFullFrameUpdateAfterResize = true;
             RFB.messages.setDesktopSize(this._sock, size, this._screenFlags);
 
@@ -4668,7 +4669,6 @@ export default class RFB extends EventTargetMixin {
             }
 
             this._display.applyServerResolution(w, h, i);
-
             Log.Debug(`Server reported screen ${sI} with resolution ${w}x${h} at ${x}x${y}`);
         }
 

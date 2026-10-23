@@ -100,7 +100,7 @@ export default class KasmVideoDecoder {
 
     _skipRect(x, y, width, height, _sock, display, _depth, frameId) {
         let webrtcActive = false;
-        const screens = this._rfb && this._rfb._webrtcScreens;
+        const screens = this._rfb && this._rfb._webrtc && this._rfb._webrtc._webrtcScreens;
         if (screens) {
             for (const slot of screens.values()) {
                 const t = slot.live || slot.pending;

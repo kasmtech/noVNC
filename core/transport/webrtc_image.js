@@ -25,8 +25,8 @@ const LOSS_CHECK_INTERVAL_MS = 250;
 const MAX_PIECES = 65536;
 
 export default class WebRTCImageTransport {
-    constructor(rfb, signaling, iceServers, onRect, onLoss) {
-        this._rfb = rfb;
+    constructor(controller, signaling, iceServers, onRect, onLoss) {
+        this._controller = controller;
         this._signaling = signaling;
         this._signaling.onMessage((kind, payload) => this._onSignal(kind, payload));
         this._iceServers = iceServers || [];
@@ -115,8 +115,8 @@ export default class WebRTCImageTransport {
                 Log.Info('Image DataChannel open');
                 this._lossTimer = setInterval(() => this._checkLoss(),
                                               LOSS_CHECK_INTERVAL_MS);
-                if (this._rfb && this._rfb._onImageChannelOpen) {
-                    this._rfb._onImageChannelOpen();
+                if (this._controller && this._controller._onImageChannelOpen) {
+                    this._controller._onImageChannelOpen();
                 }
             };
             ch.onclose = () => {
@@ -297,10 +297,10 @@ export default class WebRTCImageTransport {
         if (!silent) {
             try { this._signaling.sendFallback(reason); } catch (e) {}
         }
-        const rfb = this._rfb;
+        const controller = this._controller;
         this.stop();
-        if (rfb && typeof rfb._onImageChannelFallback === 'function') {
-            rfb._onImageChannelFallback(this, reason);
+        if (controller && typeof controller._onImageChannelFallback === 'function') {
+            controller._onImageChannelFallback(this, reason);
         }
     }
 }

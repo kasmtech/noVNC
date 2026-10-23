@@ -491,9 +491,9 @@ export default class Display {
                             screen.encodedFramePort = e.data.port;
                             screen.encodedFramePort.onmessage = (ev) => {
                                 const w = ev.data && ev.data.webrtc;
-                                if (w && this._rfb &&
-                                    typeof this._rfb._forwardRelayedWebRTCToServer === 'function') {
-                                    this._rfb._forwardRelayedWebRTCToServer(w.kind, w.screenId, w.payload);
+                                if (w && this._rfb && this._rfb._webrtc &&
+                                    typeof this._rfb._webrtc._forwardRelayedWebRTCToServer === 'function') {
+                                    this._rfb._webrtc._forwardRelayedWebRTCToServer(w.kind, w.screenId, w.payload);
                                 }
                             };
                             screen.encodedFramePort.start();
@@ -1066,8 +1066,9 @@ export default class Display {
                     if (typeof prevScreenIndex === 'number' &&
                         prevScreenIndex !== screenIndex &&
                         this._rfb &&
-                        typeof this._rfb._teardownStaleSecondaryWebRTC === 'function') {
-                        this._rfb._teardownStaleSecondaryWebRTC(screenIndex);
+                        this._rfb._webrtc &&
+                        typeof this._rfb._webrtc._teardownStaleSecondaryWebRTC === 'function') {
+                        this._rfb._webrtc._teardownStaleSecondaryWebRTC(screenIndex);
                     }
                     Log.Info(`Screen with index (${screenIndex}) successfully registered with the primary display.`);
                     if (this._screens.length > 0) {
@@ -1084,8 +1085,9 @@ export default class Display {
                             this._encodedFramePort.onmessage = this._handleEncodedFrame.bind(this);
                             Log.Info(`[SECONDARY] encodedFramePort established`);
                             if (this._rfb &&
-                                typeof this._rfb._maybeRequestPendingWebRTCOffer === 'function') {
-                                this._rfb._maybeRequestPendingWebRTCOffer();
+                                this._rfb._webrtc &&
+                                typeof this._rfb._webrtc._maybeRequestPendingWebRTCOffer === 'function') {
+                                this._rfb._webrtc._maybeRequestPendingWebRTCOffer();
                             }
                         }
                     };
@@ -1651,8 +1653,9 @@ export default class Display {
         if (e.data && e.data.webrtc) {
             const w = e.data.webrtc;
             if (this._rfb &&
-                typeof this._rfb._onRelayedWebRTCSignal === 'function') {
-                this._rfb._onRelayedWebRTCSignal(w.kind, w.screenId, w.payload);
+                this._rfb._webrtc &&
+                typeof this._rfb._webrtc._onRelayedWebRTCSignal === 'function') {
+                this._rfb._webrtc._onRelayedWebRTCSignal(w.kind, w.screenId, w.payload);
             }
             return;
         }

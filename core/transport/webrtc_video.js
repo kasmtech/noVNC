@@ -4,10 +4,11 @@
  * Multi-monitor sessions run one RTCPeerConnection per screen (see
  * doc/MULTI_MONITOR_WEBRTC_PLAN.md). Each instance owns exactly one
  * screen's PC + <video>, and is RECV-ONLY (the server initiates the SDP
- * offer per screen). Instances are created *reactively* by rfb.js when a
- * per-screen SdpOffer arrives — the client does not send capabilities or
- * offers from here; rfb.js advertises capability once for the session and
- * the server replies with one offer per screen.
+ * offer per screen). Instances are created *reactively* by WebRTCController
+ * (core/decoders/webrtc_controller.js) when a per-screen SdpOffer arrives —
+ * the client does not send capabilities or offers from here; the controller
+ * advertises capability once for the session and the server replies with one
+ * offer per screen.
  *
  * Signaling is decoupled from the WebSocket: the WebRTCSignaling passed
  * in carries a sink that routes outbound answers/ICE either straight to
@@ -30,8 +31,8 @@ import { WebRTCSignalKind } from './webrtc_signaling.js';
 const FALLBACK_GRACE_MS = 5000;
 
 export default class WebRTCVideoTransport {
-    constructor(rfb, screenId, signaling, opts) {
-        this._rfb = rfb;
+    constructor(controller, screenId, signaling, opts) {
+        this._controller = controller;
         this._screenId = screenId;
         this._signaling = signaling;
         this._signaling.onMessage((kind, payload) => this._onSignal(kind, payload));
@@ -147,8 +148,8 @@ export default class WebRTCVideoTransport {
                 ? e.streams[0]
                 : new MediaStream([e.track]);
             this._state = 'connected';
-            if (this._rfb._onWebRTCVideoReady) {
-                this._rfb._onWebRTCVideoReady(this._video, this);
+            if (this._controller._onWebRTCVideoReady) {
+                this._controller._onWebRTCVideoReady(this._video, this);
             }
         };
 
@@ -238,18 +239,18 @@ export default class WebRTCVideoTransport {
         this._state = 'fallback';
         if (this._opts.pending) {
             if (!silent) { try { this._signaling.sendFallback('renegotiate'); } catch (e) {} }
-            if (this._rfb &&
-                typeof this._rfb._abandonPendingWebRTCScreen === 'function') {
-                this._rfb._abandonPendingWebRTCScreen(this._screenId,
-                                                      'pending-failed:' + reason);
+            if (this._controller &&
+                typeof this._controller._abandonPendingWebRTCScreen === 'function') {
+                this._controller._abandonPendingWebRTCScreen(this._screenId,
+                                                             'pending-failed:' + reason);
             }
             this.stop();
             return;
         }
         if (!silent) { try { this._signaling.sendFallback(reason); } catch (e) {} }
-        if (this._rfb &&
-            typeof this._rfb._onWebRTCScreenFallback === 'function') {
-            this._rfb._onWebRTCScreenFallback(this._screenId, reason);
+        if (this._controller &&
+            typeof this._controller._onWebRTCScreenFallback === 'function') {
+            this._controller._onWebRTCScreenFallback(this._screenId, reason);
         }
         this.stop();
     }

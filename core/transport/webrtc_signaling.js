@@ -30,7 +30,6 @@
 
 import * as Log from '../util/logging.js';
 
-export const WEBRTC_MSG_TYPE = 196;
 export const WEBRTC_SESSION_SCREEN = 0xFF;
 export const WEBRTC_IMAGE_SCREEN = 0xFE;
 export const WEBRTC_MAX_SIGNAL_BYTES = 16 * 1024;
@@ -56,7 +55,7 @@ export function writeWebRTCFrame(sock, kind, screenId, payload) {
         return;
     }
     const header = new Uint8Array(5);
-    header[0] = WEBRTC_MSG_TYPE;
+    header[0] = msgTypeWebrtc;
     header[1] = kind & 0xff;
     header[2] = screenId & 0xff;
     header[3] = (utf8.length >> 8) & 0xff;

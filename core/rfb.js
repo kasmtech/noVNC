@@ -22,8 +22,6 @@ import Deflator from "./deflator.js";
 import Keyboard from "./input/keyboard.js";
 import initializePrinterRelay from "./output/printer.js";
 import initializeSmartcardRelay from "./output/smartcard.js";
-import initializeFido2Relay from "./output/fido2.js";
-import initializeSshAgentRelay from "./output/ssh_agent.js";
 import * as WebUtil from "../app/webutil.js";
 import initializeFido2Relay from "./output/fido2.js";
 import initializeSshAgentRelay from "./output/ssh_agent.js";

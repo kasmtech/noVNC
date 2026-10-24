@@ -869,8 +869,9 @@ const UI = {
         const enableStats = perfStatsToggle ? perfStatsToggle.checked : false;
         UI.saveSetting('enable_perf_stats');
 
-        document.getElementById("noVNC_connection_stats")?.style.setProperty("visibility", enableStats ? "visible" : "hidden");
-        document.getElementById("noVNC_charts_container")?.classList.toggle('visible', enableStats);
+        const showPanel = enableStats && !UI.enhancedMetrics;
+        document.getElementById("noVNC_connection_stats")?.style.setProperty("visibility", showPanel ? "visible" : "hidden");
+        document.getElementById("noVNC_charts_container")?.classList.toggle('visible', showPanel);
 
         if (WebUtil.isInsideKasmVDI()) {
             ["noVNC_rtt_chart", "noVNC_jitter_chart", "noVNC_bandwidth_chart"].forEach((id) => {
@@ -897,15 +898,10 @@ const UI = {
     },
 
     updateEnhancedMetrics() {
-        if (UI.enhancedMetrics) {
-            UI.forceSetting('enable_perf_stats', false, false);
+        if (UI.enhancedMetrics)
             UI.forceSetting('enable_latency_stats', false, false);
 
-            document.getElementById("noVNC_connection_stats")?.style.setProperty("visibility", "hidden");
-            document.getElementById("noVNC_charts_container")?.classList.remove('visible');
-        }
-
-        UI.updateStatsPolling();
+        UI.showStats();
         if (UI.rfb) {
             UI.rfb.enableInputLatencyMeasurement(UI.getSetting('enable_latency_stats') || UI.enhancedMetrics);
         }

@@ -18,6 +18,12 @@ import {Canvas2DRenderer} from "./renderers/Canvas2DRenderer";
 import {WebGLRenderer} from "./renderers/WebGLRenderer";
 import { perfLogger } from './util/performance-logger.js';
 
+export const MAX_FB_DIMENSION = 8192;
+
+export function clampDimension(value) {
+    return Math.min(Math.max(0, Math.floor(value)), MAX_FB_DIMENSION);
+}
+
 export default class Display {
     constructor(target, rfb, isPrimaryDisplay, videoRenderingMode = 'canvas2d') {
         Log.Debug(">> Display.constructor");
@@ -286,7 +292,7 @@ export default class Display {
         return [x, y];
     }
 
-    getScreenSize(resolutionQuality, max_width, max_height, hiDpi, disableLimit, disableScaling, streamMode) {
+    getScreenSize(resolutionQuality, max_width, max_height, hiDpi, disableLimit, disableScaling, streamMode, ignoreServerReported = false) {
         let data = {
             screens: null,
             serverWidth: 0,
@@ -312,6 +318,7 @@ export default class Display {
 
         //max the resolution of a single screen to 1280
         if (
+            !ignoreServerReported &&
             (this._screens[i].serverReportedWidth > 0 && this._screens[i].serverReportedHeight > 0) &&
             (
                 disableScaling ||
@@ -372,13 +379,42 @@ export default class Display {
         return data;
     }
 
+    snapshotScreens() {
+        return this._screens.map(screen => ({
+            screenID: screen.screenID,
+            width: screen.width,
+            height: screen.height,
+            serverWidth: screen.serverWidth,
+            serverHeight: screen.serverHeight,
+            scale: screen.scale,
+            x2: screen.x2,
+            y2: screen.y2
+        }));
+    }
+
+    restoreScreens(snapshot) {
+        for (let i = 0; i < snapshot.length; i++) {
+            const screen = this._screens.find(s => s.screenID === snapshot[i].screenID);
+            if (screen) {
+                Object.assign(screen, snapshot[i]);
+            }
+        }
+    }
+
     applyServerResolution(width, height, screenIndex) {
+        const clear = width === 0 && height === 0;
+        if (!clear && !(width > 0 && width <= MAX_FB_DIMENSION && height > 0 && height <= MAX_FB_DIMENSION)) {
+            Log.Warn("Ignoring server resolution " + width + "x" + height + " for screen " + screenIndex + " (max " + MAX_FB_DIMENSION + ")");
+            return false;
+        }
+
         for (let z = 0; z < this._screens.length; z++) {
             if (screenIndex === this._screens[z].screenIndex) {
                 this._screens[z].serverReportedWidth = width;
                 this._screens[z].serverReportedHeight = height;
             }
         }
+        return true;
     }
 
     applyScreenPlan(screenPlan) {
@@ -637,6 +673,9 @@ export default class Display {
     }
 
     resize(width, height) {
+        width = clampDimension(width);
+        height = clampDimension(height);
+
         this._fbWidth = width;
         this._fbHeight = height;
 

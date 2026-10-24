@@ -99,6 +99,7 @@ const UI = {
     displayWindows: new Map([['primary', 'primary']]),
     registeredWindows: new Map([['primary', 'primary']]),
     fpsChart: null,
+    enhancedMetrics: false,
     bandwidthChart: null,
     jitterChart: null,
     rttChart: null,
@@ -863,53 +864,47 @@ const UI = {
     },
 
     showStats() {
-        // Clear any existing interval first
+        // Read checkbox state directly and save it
+        const perfStatsToggle = document.getElementById('noVNC_setting_enable_perf_stats');
+        const enableStats = perfStatsToggle ? perfStatsToggle.checked : false;
+        UI.saveSetting('enable_perf_stats');
+
+        const showPanel = enableStats && !UI.enhancedMetrics;
+        document.getElementById("noVNC_connection_stats")?.style.setProperty("visibility", showPanel ? "visible" : "hidden");
+        document.getElementById("noVNC_charts_container")?.classList.toggle('visible', showPanel);
+
+        if (WebUtil.isInsideKasmVDI()) {
+            ["noVNC_rtt_chart", "noVNC_jitter_chart", "noVNC_bandwidth_chart"].forEach((id) => {
+                document.getElementById(id)?.style.setProperty("display", "none");
+            });
+        }
+
+        UI.updateStatsPolling();
+    },
+
+    updateStatsPolling() {
         if (UI.statsInterval) {
             clearInterval(UI.statsInterval);
             UI.statsInterval = null;
         }
 
-        // Read checkbox state directly and save it
-        const perfStatsToggle = document.getElementById('noVNC_setting_enable_perf_stats');
-        const enable_stats = perfStatsToggle ? perfStatsToggle.checked : false;
-        // WebUtil.writeSetting('enable_perf_stats', enable_stats);
-        UI.saveSetting('enable_perf_stats');
-
-        if (enable_stats) {
-            document.getElementById("noVNC_connection_stats").style.visibility = "visible";
-            document.getElementById("noVNC_charts_container").classList.add('visible');
-            UI.statsInterval = setInterval(function() {
-                if (UI.rfb !== undefined) {
-                    UI.rfb.requestBottleneckStats();
-                }
-            }, 5000);
-        } else {
-            document.getElementById("noVNC_connection_stats").style.visibility = "hidden";
-            document.getElementById("noVNC_charts_container").classList.remove('visible');
-        }
-
-        /*
-        if (!WebUtil.isInsideKasmVDI()) {
-            const ids = ['noVNC_connection_stats', 'noVNC_charts_container'];
-            ids.forEach(id => {
-                const element = document.getElementById(id);
-                if (element) {
-                    element.style.visibility = enable_stats ? 'visible' : 'hidden';
-                }
-            })
-        }
-
-        if (enable_stats) {
+        if (UI.getSetting('enable_perf_stats') || UI.enhancedMetrics) {
             UI.statsInterval = setInterval(function () {
-                if (UI.rfb !== undefined) {
+                if (UI.rfb) {
                     UI.rfb.requestBottleneckStats();
                 }
             }, 5000);
-        } else {
-            clearInterval(UI.statsInterval);
-            UI.statsInterval = null;
         }
-         */
+    },
+
+    updateEnhancedMetrics() {
+        if (UI.enhancedMetrics)
+            UI.forceSetting('enable_latency_stats', false, false);
+
+        UI.showStats();
+        if (UI.rfb) {
+            UI.rfb.enableInputLatencyMeasurement(UI.getSetting('enable_latency_stats') || UI.enhancedMetrics);
+        }
     },
 
     toggleLatencyStats() {
@@ -918,7 +913,7 @@ const UI = {
             return;
 
         const enabled = document.getElementById('noVNC_setting_enable_latency_stats').checked;
-        UI.rfb.enableInputLatencyMeasurement(enabled);
+        UI.rfb.enableInputLatencyMeasurement(enabled || UI.enhancedMetrics);
     },
 
     threading() {
@@ -1782,17 +1777,20 @@ const UI = {
             return;
 
         try {
-            console.log(e.detail.text);
+            Log.Debug(e.detail.text);
             let obj = JSON.parse(e.detail.text);
             let fps = UI.rfb.statsFps;
-            if (!WebUtil.isInsideKasmVDI()) {
+            const bottleneckStats = UI.getSetting('enable_perf_stats');
+            if (bottleneckStats) {
                 document.getElementById("noVNC_connection_stats").textContent = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
                 if (UI.fpsChart) {
                     UI.fpsChart.update(Number(fps));
                 }
- } else {
-                UI.sendMessage("bottleneck_stats", {stats: obj, fps: fps, droppedFps: UI.rfb.statsDroppedFps});
             }
+
+            if (bottleneckStats || UI.enhancedMetrics)
+                UI.sendMessage("bottleneck_stats", {stats: obj, fps: fps, droppedFps: UI.rfb.statsDroppedFps});
+
         } catch (err) {
             console.log('Invalid bottleneck stats received from server.')
         }
@@ -1801,7 +1799,7 @@ const UI = {
     inputLatencyReceive(e) {
         const d = e.detail;
 
-        if (WebUtil.isInsideKasmVDI()) {
+        if (UI.enhancedMetrics) {
             UI.sendMessage('input_latency', {
                 latest: d.latest,
                 average: d.average,
@@ -1815,7 +1813,9 @@ const UI = {
                 renderAvg: d.renderAvg,
                 renderP95: d.renderP95
             });
-        } else {
+        }
+
+        if (UI.getSetting('enable_latency_stats')) {
             const stats = document.getElementById("noVNC_connection_stats");
             if (stats) {
                 const tag = " | Latency: " + d.latest.toFixed(1) + "ms (min " + d.min.toFixed(1) + "ms, p95 " + d.p95.toFixed(1) + "ms)";
@@ -1833,7 +1833,7 @@ const UI = {
         try {
             const [jitter, rtt, bandwidth] = JSON.parse(e.detail.text);
 
-            if (!WebUtil.isInsideKasmVDI()) {
+            if (UI.getSetting('enable_perf_stats') && !WebUtil.isInsideKasmVDI()) {
 
                 const updateChart = (chart, value) => {
                     if (chart && value !== undefined) {
@@ -1844,10 +1844,12 @@ const UI = {
                 updateChart(UI.jitterChart, jitter);
                 updateChart(UI.rttChart, rtt);
                 updateChart(UI.bandwidthChart, bandwidth);
-            } else {
-                UI.sendMessage('network_stats', {jitter, rtt, bandwidth});
             }
-            console.log(e.detail.text);
+
+            if (UI.enhancedMetrics)
+                UI.sendMessage('network_stats', {jitter, rtt, bandwidth});
+
+            Log.Debug(e.detail.text);
         } catch (err) {
             console.log('Invalid network stats received from server.')
         }
@@ -1858,11 +1860,10 @@ const UI = {
             return;
 
         try {
-            if (WebUtil.isInsideKasmVDI()) {
+            if (UI.enhancedMetrics) {
                 const systemStats = JSON.parse(e.detail.text);
                 UI.sendMessage('system_stats', systemStats);
             }
-            //console.log(e.detail.text);
         } catch (err) {
             console.log('Invalid system stats received from server.')
         }
@@ -1914,9 +1915,12 @@ const UI = {
         UI.rfb.videoQuality = parseInt(UI.getSetting('video_quality'));
         UI.rfb.enableHiDpi = UI.getSetting('enable_hidpi');
         UI.rfb.threading = UI.getSetting('enable_threading');
-        if (UI.getSetting('enable_latency_stats')) {
+        if (UI.getSetting('enable_latency_stats') || UI.enhancedMetrics) {
             UI.rfb.enableInputLatencyMeasurement(true);
         }
+
+        if (UI.enhancedMetrics)
+            UI.updateStatsPolling();
         // UI.rfb.hwEncoderProfile = parseInt(UI.getSetting(UI_SETTINGS.HW_PROFILE));
         UI.rfb.gop = parseInt(UI.getSetting(UI_SETTINGS.GOP));
         UI.rfb.videoStreamQuality = parseInt(UI.getSetting(UI_SETTINGS.VIDEO_STREAM_QUALITY));
@@ -2506,6 +2510,10 @@ const UI = {
                 case 'set_latency_stats':
                     UI.forceSetting('enable_latency_stats', event.data.value, false);
                     UI.toggleLatencyStats();
+                    break;
+                case 'set_enhanced_metrics':
+                    UI.enhancedMetrics = !!event.data.value;
+                    UI.updateEnhancedMetrics();
                     break;
                 case 'set_idle_timeout':
                     //message value in seconds

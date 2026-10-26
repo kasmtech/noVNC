@@ -873,11 +873,9 @@ const UI = {
         document.getElementById("noVNC_connection_stats")?.style.setProperty("visibility", showPanel ? "visible" : "hidden");
         document.getElementById("noVNC_charts_container")?.classList.toggle('visible', showPanel);
 
-        if (WebUtil.isInsideKasmVDI()) {
-            ["noVNC_rtt_chart", "noVNC_jitter_chart", "noVNC_bandwidth_chart"].forEach((id) => {
-                document.getElementById(id)?.style.setProperty("display", "none");
-            });
-        }
+        ["noVNC_fps_chart", "noVNC_rtt_chart", "noVNC_jitter_chart", "noVNC_bandwidth_chart"].forEach((id) => {
+            document.getElementById(id)?.style.setProperty("display", showPanel ? "flex" : "none");
+        });
 
         UI.updateStatsPolling();
     },
@@ -1833,7 +1831,7 @@ const UI = {
         try {
             const [jitter, rtt, bandwidth] = JSON.parse(e.detail.text);
 
-            if (UI.getSetting('enable_perf_stats') && !WebUtil.isInsideKasmVDI()) {
+            if (UI.getSetting('enable_perf_stats')) {
 
                 const updateChart = (chart, value) => {
                     if (chart && value !== undefined) {

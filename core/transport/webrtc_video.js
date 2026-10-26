@@ -238,7 +238,11 @@ export default class WebRTCVideoTransport {
     _fallback(reason, silent) {
         this._state = 'fallback';
         if (this._opts.pending) {
-            if (!silent) { try { this._signaling.sendFallback('renegotiate'); } catch (e) {} }
+            if (!silent) {
+                try { this._signaling.sendFallback('renegotiate'); } catch (e) {
+                    Log.Warn('Fallback send failed (screen ' + this._screenId + '): ' + e);
+                }
+            }
             if (this._controller &&
                 typeof this._controller._abandonPendingWebRTCScreen === 'function') {
                 this._controller._abandonPendingWebRTCScreen(this._screenId,
@@ -247,7 +251,11 @@ export default class WebRTCVideoTransport {
             this.stop();
             return;
         }
-        if (!silent) { try { this._signaling.sendFallback(reason); } catch (e) {} }
+        if (!silent) {
+            try { this._signaling.sendFallback(reason); } catch (e) {
+                Log.Warn('Fallback send failed (screen ' + this._screenId + '): ' + e);
+            }
+        }
         if (this._controller &&
             typeof this._controller._onWebRTCScreenFallback === 'function') {
             this._controller._onWebRTCScreenFallback(this._screenId, reason);

@@ -29,6 +29,7 @@
  */
 
 import * as Log from '../util/logging.js';
+import { messages } from '../messages.js';
 
 export const WEBRTC_SESSION_SCREEN = 0xFF;
 export const WEBRTC_IMAGE_SCREEN = 0xFE;
@@ -46,16 +47,20 @@ export const WebRTCSignalKind = Object.freeze({
     ImageRequest:  9,
 });
 
+// Throws on failure, so the caller's fallback path runs. Nothing is dropped silently.
 export function writeWebRTCFrame(sock, kind, screenId, payload) {
     const utf8 = (typeof payload === 'string')
         ? new TextEncoder().encode(payload)
         : (payload || new Uint8Array(0));
     if (utf8.length > WEBRTC_MAX_SIGNAL_BYTES) {
-        Log.Error('WebRTC signal payload too large (' + utf8.length + 'B); dropped');
-        return;
+        throw new Error('WebRTC signal payload too large (' + utf8.length + ' bytes)');
+    }
+    const open = sock.readyState === WebSocket.OPEN || sock.readyState === 'open';
+    if (!open) {
+        throw new Error('WebRTC signal not sent: socket is not open');
     }
     const header = new Uint8Array(5);
-    header[0] = msgTypeWebrtc;
+    header[0] = messages.msgTypeWebrtc;
     header[1] = kind & 0xff;
     header[2] = screenId & 0xff;
     header[3] = (utf8.length >> 8) & 0xff;

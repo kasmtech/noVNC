@@ -295,7 +295,9 @@ export default class WebRTCImageTransport {
     _fail(reason, silent) {
         if (this._closed) return;
         if (!silent) {
-            try { this._signaling.sendFallback(reason); } catch (e) {}
+            try { this._signaling.sendFallback(reason); } catch (e) {
+                Log.Warn('Image-channel fallback send failed: ' + e);
+            }
         }
         const controller = this._controller;
         this.stop();

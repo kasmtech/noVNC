@@ -84,13 +84,15 @@ export default class WebRTCController {
                 Log.Info('Advertising WebRTC capability (codecs=' + codecKey +
                     ', reason=' + reason + ')');
                 this._webRTCMediaCodecs = wantCodecs;
-                this._webrtcSessionActive = true;
-                this._webrtcSessionCodec = codecKey;
                 try {
                     this._sendWebRTCFrame(WebRTCSignalKind.ClientCapabilities,
                         WEBRTC_SESSION_SCREEN, codecKey);
+                    this._webrtcSessionActive = true;
+                    this._webrtcSessionCodec = codecKey;
                 } catch (e) {
                     Log.Error('WebRTC capability advertisement failed: ' + e);
+                    this._webrtcSessionActive = false;
+                    this._webrtcSessionCodec = null;
                 }
             }
             return;
@@ -102,7 +104,9 @@ export default class WebRTCController {
             try {
                 this._sendWebRTCFrame(WebRTCSignalKind.Fallback,
                     WEBRTC_SESSION_SCREEN, 'unsubscribe');
-            } catch (e) {}
+            } catch (e) {
+                Log.Warn('WebRTC unsubscribe send failed: ' + e);
+            }
             this._teardownAllWebRTCScreens();
             this._webrtcSessionActive = false;
             this._webrtcSessionCodec = null;
@@ -227,7 +231,9 @@ export default class WebRTCController {
             try {
                 this._sendWebRTCFrame(WebRTCSignalKind.Fallback,
                     WEBRTC_IMAGE_SCREEN, 'client-stop');
-            } catch (e) {}
+            } catch (e) {
+                Log.Warn('Image channel stop notice failed: ' + e);
+            }
         }
         if (wasActive) this._rfb._display.clear();
     }
@@ -238,7 +244,9 @@ export default class WebRTCController {
                 try {
                     this._sendWebRTCFrame(WebRTCSignalKind.Fallback,
                         WEBRTC_IMAGE_SCREEN, 'client-stop');
-                } catch (e) {}
+                } catch (e) {
+                    Log.Warn('Image channel stop notice failed: ' + e);
+                }
             }
             return;
         }
@@ -307,7 +315,9 @@ export default class WebRTCController {
                     try {
                         this._sendWebRTCFrame(WebRTCSignalKind.Fallback,
                             WEBRTC_SESSION_SCREEN, 'unsubscribe');
-                    } catch (e) {}
+                    } catch (e) {
+                        Log.Warn('WebRTC unsubscribe send failed: ' + e);
+                    }
                     return;
                 }
                 break;
@@ -368,7 +378,9 @@ export default class WebRTCController {
             if (kind === WebRTCSignalKind.SdpOffer) {
                 Log.Warn('RTCPeerConnection unsupported; declining screen ' + screenId);
                 const sig = makeSignaling(screenId);
-                try { sig.send(WebRTCSignalKind.Fallback, 'no-rtcpeerconnection'); } catch (e) {}
+                try { sig.send(WebRTCSignalKind.Fallback, 'no-rtcpeerconnection'); } catch (e) {
+                    Log.Warn('No-RTCPeerConnection fallback send failed: ' + e);
+                }
             }
             return;
         }

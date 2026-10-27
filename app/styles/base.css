@@ -357,6 +357,12 @@ select:active {
   z-index: 1000;
 }
 
+/* Statistics overlays must not intercept session mouse or touch input. */
+#noVNC_connection_stats,
+#noVNC_charts_container {
+    pointer-events: none;
+}
+
 /* Create a container for all charts */
 #noVNC_charts_container {
     position: fixed;
@@ -364,6 +370,8 @@ select:active {
     right: 0;
     display: flex;
     flex-direction: column;
+    width: 300px;
+    max-width: 100vw;
     gap: 10px; /* spacing between charts */
     z-index: 1000;
     visibility: hidden;
@@ -380,6 +388,13 @@ select:active {
 #noVNC_bandwidth_chart {
     background: #9fa5a2d4;
     display: flex;
+    flex-direction: column;
+}
+
+#noVNC_charts_container svg {
+    display: block;
+    width: 100%;
+    height: 100px;
 }
 
 /* ----------------------------------------

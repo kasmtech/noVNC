@@ -2091,9 +2091,9 @@ const UI = {
         }
 
         UI.fpsChart = new BasicChart('noVNC_fps_chart_path', 'FPS', 60, 120);
-        UI.bandwidthChart = new BasicChart('noVNC_bandwidth_path', 'Bandwidth', 60, 0);
-        UI.rttChart = new BasicChart('noVNC_rtt_path', 'RTT', 60, 0);
-        UI.jitterChart = new BasicChart('noVNC_jitter_path', 'Jitter', 60, 0);
+        UI.bandwidthChart = new BasicChart('noVNC_bandwidth_path', 'Bandwidth', 60, 0, 'bytes/s');
+        UI.rttChart = new BasicChart('noVNC_rtt_path', 'RTT', 60, 0, 'ms');
+        UI.jitterChart = new BasicChart('noVNC_jitter_path', 'Jitter', 60, 0, 'ms');
 
         //key events for KasmVNC control
         document.addEventListener('keyup', function (event) {

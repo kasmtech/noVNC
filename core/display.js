@@ -29,9 +29,8 @@ export default class Display {
         Log.Debug(">> Display.constructor");
 
         /*
-        For performance reasons we use a multi dimensional array
-        1st Dimension of Array Represents Frames, each element is a Frame
-        2nd Dimension is the contents of a frame and meta data, contains 4 elements
+        Frames waiting to be drawn, ordered by frame id, at most _maxAsyncFrameQueue of them.
+        Each element is a Frame, an array of 6 elements:
             0 - int, FrameID
             1 - int, Rect Count
             2 - Array of Rect objects
@@ -41,6 +40,8 @@ export default class Display {
         */
         this._asyncFrameQueue = [];
         this._maxAsyncFrameQueue = 3;
+        //largest frame id that has left the queue, rects of that frame or older ones are dropped
+        this._removedFrameID = 0;
         this._clearAsyncQueue();
         this._syncFrameQueue = [];
         this._lastTransparentRectId = "";
@@ -695,8 +696,7 @@ export default class Display {
     * @returns {bool} is the queue full
     */
     pending() {
-        //is the slot in the queue for the newest frame in use
-        return this._asyncFrameQueue[this._maxAsyncFrameQueue - 1][0] > 0;
+        return this._asyncFrameQueue.length >= this._maxAsyncFrameQueue;
     }
 
     /*
@@ -707,7 +707,9 @@ export default class Display {
     */
     flush(onflush_message=true) {
         //force oldest frame to render
-        this._asyncFrameComplete(0, true);
+        if (this._asyncFrameQueue.length > 0) {
+            this._asyncFrameComplete(this._asyncFrameQueue[0], true);
+        }
 
         if (onflush_message)
             this.onflush();
@@ -1184,80 +1186,78 @@ export default class Display {
     Process incoming rects into a frame buffer, assume rects are out of order due to either UDP or parallel processing of decoding
     */
     _asyncRenderQPush(rect) {
-        let frameIx = -1;
-        let newestFrameID = 0;
-        for (let i=0; i<this._asyncFrameQueue.length; i++) {
-            if (rect.frame_id == this._asyncFrameQueue[i][0]) {
-                this._asyncFrameQueue[i][2].push(rect);
-                frameIx = i;
-                break;
-            } else if (this._asyncFrameQueue[i][0] == 0) {
-                let rect_cnt = ((rect.type == "flip") ? rect.rect_cnt : 0);
-                this._asyncFrameQueue[i][0] = rect.frame_id;
-                this._asyncFrameQueue[i][2].push(rect);
-                this._asyncFrameQueue[i][3] = (rect_cnt == 1);
-                frameIx = i;
-                break;
-            }
-            newestFrameID = Math.max(newestFrameID, this._asyncFrameQueue[i][0]);
-        }
-
         if (!this._firstRect) { //TODO: Remove this
             this._firstRect = true;
             Log.Info("First rect received.");
         }
 
-        if (frameIx >= 0) {
-            if (rect.type == "flip") {
-                //flip rect contains the rect count for the frame
-                if (this._asyncFrameQueue[frameIx][1] !== 0) {
-                    Log.Warn("Redundant flip rect, current rect_cnt: " + this._asyncFrameQueue[frameIx][1] + ", new rect_cnt: " + rect.rect_cnt );
-                }
-                this._asyncFrameQueue[frameIx][1] += rect.rect_cnt;
-                if (rect.rect_cnt == 0) {
-                    Log.Warn("Invalid rect count");
-                }
-            }
+        if (rect.frame_id <= this._removedFrameID) {
+            //the frame of this rect has already been drawn or dropped
+            this._dropLateRect(rect);
+            return;
+        }
 
-            if (this._asyncFrameQueue[frameIx][1] > 0 && this._asyncFrameQueue[frameIx][2].length >= this._asyncFrameQueue[frameIx][1]) {
-                //frame is complete
-                this._asyncFrameComplete(frameIx);
-            }
+        const queue = this._asyncFrameQueue;
+        let frame = queue.find(f => f[0] == rect.frame_id);
+        if (frame) {
+            frame[2].push(rect);
         } else {
-            if (rect.frame_id <= newestFrameID) {
-                //no entry has this frame_id and none is free; only a frame_id above every queued one
-                //gets a new entry, so drop the rect
-                this._droppedRects++;
-                this._closeRectImage(rect);
-                if (rect.type === 'flip') {
-                    this._lateFlipRect++;
+            if (queue.length >= this._maxAsyncFrameQueue) {
+                if (rect.frame_id < queue[0][0]) {
+                    //every queued frame is newer, give up the frame of this rect
+                    this._removedFrameID = rect.frame_id;
+                    this._dropLateRect(rect);
+                    return;
                 }
-
-                return;
-            } else if (rect.frame_id > newestFrameID) {
-                //frame is newer than any frame in the queue, drop old frame
-                if (this._asyncFrameQueue[0][3] == true) {
+                //make room by removing the oldest frame
+                const skipped = Math.max(rect.frame_id - queue[queue.length - 1][0], 1) - 1;
+                if (queue[0][3]) {
                     Log.Warn("Forced frame to canvas");
                     this._pushAsyncFrame(true);
-                    this._droppedFrames += (rect.frame_id - (newestFrameID + 1));
+                    this._droppedFrames += skipped;
                     this._forcedFrameCnt++;
                 } else {
                     Log.Warn("Old frame dropped");
-
-                    const droppedFrame = this._asyncFrameQueue[0];
-                    for (const droppedRect of droppedFrame[2]) {
-                        this._closeRectImage(droppedRect);
-                    }
-
-                    this._asyncFrameQueue.shift();
-                    this._droppedFrames += (rect.frame_id - newestFrameID);
+                    this._dropOldestFrame();
+                    this._droppedFrames += skipped + 1;
                 }
+            }
+            frame = [ rect.frame_id, 0, [ rect ], false, 0, 0 ];
+            const ix = queue.findIndex(f => f[0] > rect.frame_id);
+            queue.splice(ix < 0 ? queue.length : ix, 0, frame);
+        }
 
-                let rect_cnt = ((rect.type == "flip") ? rect.rect_cnt : 0);
-                this._asyncFrameQueue.push([ rect.frame_id, rect_cnt, [ rect ], (rect_cnt == 1), 0, 0 ]);
-
+        if (rect.type == "flip") {
+            //flip rect contains the rect count for the frame
+            if (frame[1] !== 0) {
+                Log.Warn("Redundant flip rect, current rect_cnt: " + frame[1] + ", new rect_cnt: " + rect.rect_cnt );
+            }
+            frame[1] += rect.rect_cnt;
+            if (rect.rect_cnt == 0) {
+                Log.Warn("Invalid rect count");
             }
         }
+
+        if (frame[1] > 0 && frame[2].length >= frame[1]) {
+            //frame is complete
+            this._asyncFrameComplete(frame);
+        }
+    }
+
+    _dropLateRect(rect) {
+        this._droppedRects++;
+        this._closeRectImage(rect);
+        if (rect.type === 'flip') {
+            this._lateFlipRect++;
+        }
+    }
+
+    _dropOldestFrame() {
+        const droppedFrame = this._asyncFrameQueue.shift();
+        for (const droppedRect of droppedFrame[2]) {
+            this._closeRectImage(droppedRect);
+        }
+        this._removedFrameID = Math.max(this._removedFrameID, droppedFrame[0]);
     }
 
     /*
@@ -1272,9 +1272,8 @@ export default class Display {
         this._droppedFrames += this._asyncFrameQueue.length;
 
         this._asyncFrameQueue = [];
-        for (let i=0; i<this._maxAsyncFrameQueue; i++) {
-            this._asyncFrameQueue.push([ 0, 0, [], false, 0, 0 ])
-        }
+        //TCP and UDP number their frames separately
+        this._removedFrameID = 0;
     }
 
     /*
@@ -1296,26 +1295,26 @@ export default class Display {
     Pre-processing required before displaying a finished frame
     If marked force, unloaded images will be skipped and the frame will be marked complete and ready for rendering
     */
-    _asyncFrameComplete(frameIx, force=false) {
-        if (frameIx >= this._asyncFrameQueue.length) {
+    _asyncFrameComplete(frame, force=false) {
+        if (!this._asyncFrameQueue.includes(frame)) {
             return;
         }
 
-        let currentFrameRectIx = this._asyncFrameQueue[frameIx][4];
+        let currentFrameRectIx = frame[4];
 
         if (force) {
-            if (this._asyncFrameQueue[frameIx][1] == 0) {
+            if (frame[1] == 0) {
                 this._missingFlipRect++; //at minimum the flip rect is missing
-            } else if (this._asyncFrameQueue[frameIx][1] !== this._asyncFrameQueue[frameIx][2].length) {
-                this._droppedRects += (this._asyncFrameQueue[frameIx][1] - this._asyncFrameQueue[frameIx][2].length);
-                if (this._asyncFrameQueue[frameIx][2].length > this._asyncFrameQueue[frameIx][1]) {
+            } else if (frame[1] !== frame[2].length) {
+                this._droppedRects += (frame[1] - frame[2].length);
+                if (frame[2].length > frame[1]) {
                     Log.Warn("Frame has more rects than the reported rect_cnt.");
                 }
             }
-            while (currentFrameRectIx < this._asyncFrameQueue[frameIx][2].length) {
-                if (this._asyncFrameQueue[frameIx][2][currentFrameRectIx].type == 'img') {
-                    if (this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img && !this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img.complete) {
-                        this._asyncFrameQueue[frameIx][2][currentFrameRectIx].type = 'skip';
+            while (currentFrameRectIx < frame[2].length) {
+                if (frame[2][currentFrameRectIx].type == 'img') {
+                    if (frame[2][currentFrameRectIx].img && !frame[2][currentFrameRectIx].img.complete) {
+                        frame[2][currentFrameRectIx].type = 'skip';
                         this._droppedRects++;
                     }
                 }
@@ -1323,20 +1322,20 @@ export default class Display {
                 currentFrameRectIx++;
             }
         } else {
-            while (currentFrameRectIx < this._asyncFrameQueue[frameIx][2].length) {
-                if (this._asyncFrameQueue[frameIx][2][currentFrameRectIx].type == 'img' && !this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img.complete) {
-                    this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img.addEventListener('load', () => { this._asyncFrameComplete(frameIx); });
-                    this._asyncFrameQueue[frameIx][4] = currentFrameRectIx;
+            while (currentFrameRectIx < frame[2].length) {
+                if (frame[2][currentFrameRectIx].type == 'img' && !frame[2][currentFrameRectIx].img.complete) {
+                    frame[2][currentFrameRectIx].img.addEventListener('load', () => { this._asyncFrameComplete(frame); });
+                    frame[4] = currentFrameRectIx;
                     return;
                 }
 
                 currentFrameRectIx++;
             }
         }
-        this._asyncFrameQueue[frameIx][4] = currentFrameRectIx;
-        this._asyncFrameQueue[frameIx][3] = true;
+        frame[4] = currentFrameRectIx;
+        frame[3] = true;
 
-        if (force && frameIx == 0) {
+        if (force && frame === this._asyncFrameQueue[0]) {
             this._pushAsyncFrame(true);
         } else {
             window.requestAnimationFrame( () => { this._pushAsyncFrame(); });
@@ -1350,14 +1349,16 @@ export default class Display {
         // Record frame-to-frame interval
         perfLogger.recordFrameInterval();
 
+        if (this._asyncFrameQueue.length === 0) {
+            return;
+        }
+
         if (this._asyncFrameQueue[0][3] || force) {
             const frameStart = perfLogger.start('frameProcessing');
 
             let frame = this._asyncFrameQueue[0][2];
             let frameId = this._asyncFrameQueue.shift()[0];
-            if (this._asyncFrameQueue.length < this._maxAsyncFrameQueue) {
-                this._asyncFrameQueue.push([ 0, 0, [], false, 0, 0 ]);
-            }
+            this._removedFrameID = Math.max(this._removedFrameID, frameId);
 
             let secondaryScreenRects = 0;
             let primaryScreenRects = 0;
@@ -1543,7 +1544,7 @@ export default class Display {
             this.onFrameRendered();
 
             // if there is more data in queue, then keep checking
-            if (this._asyncFrameQueue[0][2].length > 0) {
+            if (this._asyncFrameQueue.length > 0) {
                 window.requestAnimationFrame( () => { this._pushAsyncFrame(); });
             }
         } else if (this._asyncFrameQueue[0][1] > 0 && this._asyncFrameQueue[0][1] === this._asyncFrameQueue[0][2].length) {

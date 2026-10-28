@@ -71,8 +71,13 @@ const parseRelayPacket = (data) => {
 
 const KASM_SMARTCARD_EXTENSION_ID = "cjkohjfgidilbllbjkdhpoeonjanpomo";
 
+// Used whenever the server does not provide (valid) extension IDs.
+const DEFAULT_EXTENSION_IDS = [KASM_SMARTCARD_EXTENSION_ID];
+
 class SmartcardSession {
-  constructor() {
+  constructor(getExtensionIds = () => DEFAULT_EXTENSION_IDS) {
+    this.getExtensionIds = getExtensionIds;
+    this.activeExtensionId = null;
     this.context = null;
     this.cardAtr = null;
     this.cardHandle = null;
@@ -231,20 +236,54 @@ class SmartcardSession {
   }
 
   async _callExtension(name, ...args) {
+    const deviceId = "smartcard-relay";
+    const completionId = Date.now().toString() + Math.random().toString(36);
+
+    const message = {
+      deviceId,
+      completionId,
+      type: name,
+      args: args.join(","),
+    };
+
+    // Read the IDs per call so a server config that arrives late still applies.
+    const extensionIds = this.getExtensionIds();
+
+    // Prefer the extension that answered last time, then the configured order.
+    // The last responder is retried first on purpose, even ahead of the configured order.
+    const candidates = this.activeExtensionId && extensionIds.includes(this.activeExtensionId)
+      ? [this.activeExtensionId, ...extensionIds.filter((id) => id !== this.activeExtensionId)]
+      : extensionIds;
+
+    let lastError = null;
+
+    for (const extensionId of candidates) {
+      try {
+        const result = await this._sendToExtension(extensionId, message);
+        this.activeExtensionId = extensionId;
+        return result;
+      } catch (error) {
+        // Only an unreachable extension moves on to the next ID; an error
+        // reported by a reachable extension is final.
+        if (!error.unreachable) {
+          this.activeExtensionId = extensionId;
+          throw error;
+        }
+        lastError = error;
+      }
+    }
+
+    this.activeExtensionId = null;
+    throw lastError || new Error("no_extension_ids");
+  }
+
+  _sendToExtension(extensionId, message) {
     return new Promise((resolve, reject) => {
-      const deviceId = "smartcard-relay";
-      const completionId = Date.now().toString() + Math.random().toString(36);
-
-      const message = {
-        deviceId,
-        completionId,
-        type: name,
-        args: args.join(","),
-      };
-
       const onResponse = (response) => {
         if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
+          const error = new Error(chrome.runtime.lastError.message);
+          error.unreachable = true;
+          reject(error);
           return;
         }
 
@@ -255,13 +294,27 @@ class SmartcardSession {
         }
       };
 
-      chrome.runtime.sendMessage(KASM_SMARTCARD_EXTENSION_ID, message, onResponse);
+      try {
+        chrome.runtime.sendMessage(extensionId, message, onResponse);
+      } catch (error) {
+        // Chrome refused the ID outright (e.g. malformed): treat it like an unreachable one.
+        const failure = new Error(error.message);
+        failure.unreachable = true;
+        reject(failure);
+      }
     });
   }
 }
 
-export default async (rfb) => {
+export default async (rfb, getServerExtensionIds = () => null) => {
   Log.Debug("smartcard.initializeSmartcardRelay");
+
+  // Server IDs replace the default when present; otherwise the built-in ID is used.
+  const getExtensionIds = () => {
+    const serverIds = getServerExtensionIds();
+    return Array.isArray(serverIds) && serverIds.length > 0 ? serverIds : DEFAULT_EXTENSION_IDS;
+  };
+  Log.Debug(`smartcard extension IDs: ${getExtensionIds().join(", ")}`);
 
   const sendSmartcardResponse = (command, payload = new Uint8Array(0)) => {
     Log.Debug(`smartcard.response: command=${commandToString(command)}, payloadLen=${payload.length}`);
@@ -269,7 +322,7 @@ export default async (rfb) => {
     rfb.sendUnixRelayData("smartcard", packet);
   };
 
-  const clientSession = new SmartcardSession();
+  const clientSession = new SmartcardSession(getExtensionIds);
   await clientSession.refresh();
 
   rfb.subscribeUnixRelay("smartcard", async (data) => {

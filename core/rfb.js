@@ -199,6 +199,12 @@ export default class RFB extends EventTargetMixin {
         // input falls back to the gesture emulation regardless of touchMode.
         this._serverSupportsTouch = false;
 
+        // Smartcard extension IDs pushed by the server; null when the server
+        // sent none, so smartcard.js falls back to its built-in default.
+        this._smartcardExtensionIds = null;
+        this._smartcardInitTimer = null;
+        this._smartcardRelayStarted = false;
+
         // Internal objects
         this._sock = null;              // Websock object
         this._display = null;           // Display object
@@ -1372,6 +1378,8 @@ export default class RFB extends EventTargetMixin {
         Log.Debug(">> RFB.connect");
 
         this._serverSupportsTouch = false;
+        this._smartcardExtensionIds = null;
+        this._smartcardRelayStarted = false;
 
         if (this._url && this._isPrimaryDisplay) {
             try {
@@ -1578,6 +1586,8 @@ export default class RFB extends EventTargetMixin {
 
     _disconnect() {
         Log.Debug(">> RFB.disconnect");
+        clearTimeout(this._smartcardInitTimer);
+        this._smartcardInitTimer = null;
         this._cursor.detach();
         this._canvas.removeEventListener("gesturestart", this._eventHandlers.handleGesture);
         this._canvas.removeEventListener("gesturemove", this._eventHandlers.handleGesture);
@@ -3513,7 +3523,12 @@ export default class RFB extends EventTargetMixin {
 
         //Register pipe based extensions
         initializePrinterRelay(this);
-        initializeSmartcardRelay(this);
+        // The server may push smartcard extension IDs right after our encodings
+        // arrive; wait briefly for them, otherwise use the built-in default.
+        // Trade-off: every client waits this long, including the default case,
+        // because the server sends nothing when no IDs are configured.
+        clearTimeout(this._smartcardInitTimer);
+        this._smartcardInitTimer = setTimeout(() => this._startSmartcardRelay(), 1000);
 
         return true;
     }
@@ -3577,6 +3592,7 @@ export default class RFB extends EventTargetMixin {
         encs.push(encodings.pseudoEncodingDirectMouse);
         if (isTouchDevice)
             encs.push(encodings.pseudoEncodingTouch);
+        encs.push(encodings.pseudoEncodingSmartcardConfig);
         if (this._hasWebp())
             encs.push(encodings.pseudoEncodingWEBP);
         if (this._enableQOI)
@@ -4191,6 +4207,9 @@ export default class RFB extends EventTargetMixin {
             case messages.msgTypeTouchSupported:
                 return this._handleTouchSupported();
 
+            case messages.msgTypeSmartcardConfig:
+                return this._handleSmartcardConfig();
+
             case messages.msgTypeTextInputFocus:
                 return this._handleTextInputFocus();
 
@@ -4422,6 +4441,40 @@ export default class RFB extends EventTargetMixin {
         // No payload — the server is requesting that this client enter game mode.
         // Fire an event so the UI layer can engage pointer lock on the next user gesture.
         this.dispatchEvent(new CustomEvent("gamemodeforced"));
+        return true;
+    }
+
+    _startSmartcardRelay() {
+        clearTimeout(this._smartcardInitTimer);
+        this._smartcardInitTimer = null;
+
+        if (this._smartcardRelayStarted) { return; }
+        this._smartcardRelayStarted = true;
+
+        initializeSmartcardRelay(this, () => this._smartcardExtensionIds);
+    }
+
+    _handleSmartcardConfig() {
+        // count(1), then per ID: len(1) + bytes. goback covers the msg type byte
+        // plus everything consumed so far, so a partial message is re-parsed.
+        if (this._sock.rQwait("SmartcardConfig header", 1, 1)) { return false; }
+        const count = this._sock.rQshift8();
+        let consumed = 2;
+        const ids = [];
+
+        for (let i = 0; i < count; i++) {
+            if (this._sock.rQwait("SmartcardConfig id len", 1, consumed)) { return false; }
+            const len = this._sock.rQshift8();
+            consumed += 1;
+
+            if (this._sock.rQwait("SmartcardConfig id", len, consumed)) { return false; }
+            ids.push(this._sock.rQshiftStr(len));
+            consumed += len;
+        }
+
+        this._smartcardExtensionIds = ids;
+        Log.Info(`Server provided ${ids.length} smartcard extension ID(s)`);
+        this._startSmartcardRelay();
         return true;
     }
 

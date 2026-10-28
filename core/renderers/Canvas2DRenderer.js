@@ -1,5 +1,6 @@
 import * as Log from "../util/logging";
 import { perfLogger } from '../util/performance-logger.js';
+import {clampDimension} from "../display";
 
 export class Canvas2DRenderer {
     constructor(canvas, backbuffer) {
@@ -101,6 +102,9 @@ export class Canvas2DRenderer {
     }
 
     viewportChangeSize(width, height) {
+        width = clampDimension(width);
+        height = clampDimension(height);
+
         const canvas = this._target;
         if (canvas.width === width && canvas.height === height) {
             return false;
@@ -155,6 +159,9 @@ export class Canvas2DRenderer {
             width = screens[0].serverWidth;
             height = screens[0].serverHeight;
         }
+
+        width = clampDimension(width);
+        height = clampDimension(height);
 
         if (canvas.width !== width || canvas.height !== height) {
             // We have to save the canvas data since changing the size will clear it

@@ -1236,13 +1236,9 @@ export default class Display {
             if (rect.frame_id < oldestFrameID) {
                 //rect is older than any frame in the queue, drop it
                 this._droppedRects++;
-                switch (rect.type) {
-                    case 'video_frame':
-                        rect.frame?.close();
-                        break;
-                    case 'flip':
-                        this._lateFlipRect++;
-                        break;
+                this._closeRectImage(rect);
+                if (rect.type === 'flip') {
+                    this._lateFlipRect++;
                 }
 
                 return;
@@ -1256,12 +1252,9 @@ export default class Display {
                 } else {
                     Log.Warn("Old frame dropped");
 
-                    // Close VideoFrames in the frame being dropped
                     const droppedFrame = this._asyncFrameQueue[0];
                     for (const droppedRect of droppedFrame[2]) {
-                        if (droppedRect.type === 'video_frame') {
-                            droppedRect.frame?.close();
-                        }
+                        this._closeRectImage(droppedRect);
                     }
 
                     this._asyncFrameQueue.shift();
@@ -1279,11 +1272,9 @@ export default class Display {
     Clear the async frame buffer
     */
     _clearAsyncQueue() {
-        // Close all VideoFrames in the queue before dropping
         for (const frame of this._asyncFrameQueue) {
             for (const rect of frame[2])
-                if (rect.type === 'video_frame')
-                    rect.frame?.close();
+                this._closeRectImage(rect);
         }
 
         this._droppedFrames += this._asyncFrameQueue.length;
@@ -1291,6 +1282,21 @@ export default class Display {
         this._asyncFrameQueue = [];
         for (let i=0; i<this._maxAsyncFrameQueue; i++) {
             this._asyncFrameQueue.push([ 0, 0, [], false, 0, 0 ])
+        }
+    }
+
+    /*
+    Close the VideoFrame or ImageBitmap of a rect that will not be drawn
+    */
+    _closeRectImage(rect) {
+        switch (rect.type) {
+            case 'vid':
+            case 'bitmap':
+                rect.img.close();
+                break;
+            case 'video_frame':
+                rect.frame?.close();
+                break;
         }
     }
 
@@ -1392,9 +1398,11 @@ export default class Display {
                                 break;
                             case 'vid':
                                 this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
+                                a.img.close();
                                 break;
                             case 'bitmap':
                                 this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
+                                a.img.close();
                                 break;
                             case 'video_frame':
                                 this.drawVideoFrame(a.frame, screenLocation.x, screenLocation.y, a.width, a.height);

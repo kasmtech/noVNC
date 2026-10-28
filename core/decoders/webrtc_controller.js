@@ -10,6 +10,7 @@
 
 import * as Log from '../util/logging.js';
 import { encodings } from '../encodings.js';
+import { placeOverCanvas, positionHost } from '../util/element.js';
 import WebRTCVideoTransport from '../transport/webrtc_video.js';
 import WebRTCImageTransport from '../transport/webrtc_image.js';
 import WebRTCSignaling, { WEBRTC_SESSION_SCREEN, WEBRTC_IMAGE_SCREEN, WebRTCSignalKind, writeWebRTCFrame } from '../transport/webrtc_signaling.js';
@@ -39,6 +40,9 @@ export default class WebRTCController {
         this._imageChannelFailures = 0;
         this._imageOfferTimer = null;
         this._imageLastRefresh = 0;
+
+        this._webrtcLayer = null;
+        this._webrtcLayerObserver = null;
     }
 
     _streamModeToWebRTCCodecs(mode) {
@@ -456,10 +460,7 @@ export default class WebRTCController {
         const pending = !!(slot && transport === slot.pending);
         try {
             video.style.position = 'absolute';
-            video.style.left   = '0';
-            video.style.top    = '0';
-            video.style.width  = '100%';
-            video.style.height = '100%';
+            video.dataset.screenId = screenId;
             video.style.zIndex = pending ? '2' : '1';
             video.style.pointerEvents = 'none';
             video.style.opacity = '0';
@@ -468,10 +469,69 @@ export default class WebRTCController {
                 if (pending) this._promotePendingWebRTCScreen(screenId, transport);
             }, { once: true });
             const host = this._rfb._screen || this._rfb._target;
-            if (host && host.appendChild) host.appendChild(video);
+            if (host && host.appendChild) {
+                this._ensureWebRTCLayer(host).appendChild(video);
+                this._layoutWebRTCVideos();
+            }
         } catch (e) {
             Log.Warn('Failed to mount WebRTC <video> (screen ' + screenId + '): ' + e);
         }
+    }
+
+    // The layer sits over the visible canvas and clips the video to it. The
+    // video is the whole desktop, so the clip keeps it from overflowing the
+    // host and growing its scroll area.
+    _ensureWebRTCLayer(host) {
+        if (this._webrtcLayer) return this._webrtcLayer;
+        positionHost(host);
+        const layer = document.createElement('div');
+        layer.style.position = 'absolute';
+        layer.style.overflow = 'hidden';
+        layer.style.pointerEvents = 'none';
+        layer.style.zIndex = '1';
+        host.appendChild(layer);
+        this._webrtcLayer = layer;
+        this._webrtcLayerObserver = new ResizeObserver(() => this._layoutWebRTCVideos());
+        this._webrtcLayerObserver.observe(host);
+        this._webrtcLayerObserver.observe(this._rfb._canvas);
+        return layer;
+    }
+
+    // The canvas shows the viewport (screens[0]) at display.scale. Each video
+    // covers one server screen, so it is offset by that screen's position
+    // relative to the viewport origin and scaled to the screen's size. Called
+    // on canvas/host resize, viewport pan, and desktop resize.
+    _layoutWebRTCVideos() {
+        const layer = this._webrtcLayer;
+        const display = this._rfb._display;
+        const canvas = this._rfb._canvas;
+        if (!layer || !layer.parentNode || !display || !canvas || !display.screens.length) return;
+
+        const host = layer.parentNode;
+        const vp = display.screens[0];
+        const scale = display.scale;
+        placeOverCanvas(layer, canvas, host);
+
+        for (const video of layer.querySelectorAll('video')) {
+            const rect = this._webrtcScreenRect(Number(video.dataset.screenId));
+            video.style.left = (rect.x - vp.x) * scale + 'px';
+            video.style.top = (rect.y - vp.y) * scale + 'px';
+            video.style.width = rect.width * scale + 'px';
+            video.style.height = rect.height * scale + 'px';
+        }
+    }
+
+    // Desktop rectangle of the screen a video covers. A secondary window shows
+    // its own screen, so its video starts at the canvas origin. The primary
+    // uses the server's rectangle, which pan and clipping don't move.
+    _webrtcScreenRect(screenId) {
+        const display = this._rfb._display;
+        if (!this._rfb._isPrimaryDisplay) {
+            return { x: display.screens[0].x, y: display.screens[0].y,
+                width: display.width, height: display.height };
+        }
+        return display.serverScreenRect(screenId) ||
+            { x: 0, y: 0, width: display.width, height: display.height };
     }
 
     _promotePendingWebRTCScreen(screenId, transport) {

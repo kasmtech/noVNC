@@ -51,6 +51,11 @@ export default class Display {
         this._fbWidth = 0;
         this._fbHeight = 0;
 
+        // Desktop rectangle of each server screen, by screen index, as
+        // reported in ExtendedDesktopSize. Unlike _screens[0], pan and clip
+        // don't change these.
+        this._serverScreenRects = [];
+
         this._renderMs = 0;
         this._backbuffer = document.createElement('canvas');
         this._target = target;
@@ -399,6 +404,14 @@ export default class Display {
                 Object.assign(screen, snapshot[i]);
             }
         }
+    }
+
+    applyServerScreenRects(rects) {
+        this._serverScreenRects = rects;
+    }
+
+    serverScreenRect(screenIndex) {
+        return this._serverScreenRects[screenIndex] || null;
     }
 
     applyServerResolution(width, height, screenIndex) {

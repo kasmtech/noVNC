@@ -2094,6 +2094,7 @@ export default class RFB extends EventTargetMixin {
             let size = this._screenSize();
             this._display.resize(size.screens[0].serverWidth, size.screens[0].serverHeight);
             this._display.autoscale(size.screens[0].serverWidth, size.screens[0].serverHeight, size.screens[0].scale);
+            this._webrtc._layoutWebRTCVideos();
 
             let screen = size.screens[0];
             const windowId = new URLSearchParams(document.location.search).get('windowId');
@@ -2387,6 +2388,7 @@ export default class RFB extends EventTargetMixin {
 
                 this._viewportDragPos = {'x': x, 'y': y};
                 this._display.viewportChangePos(deltaX, deltaY);
+                this._webrtc._layoutWebRTCVideos();
             }
 
             // Skip sending mouse events
@@ -4726,11 +4728,12 @@ export default class RFB extends EventTargetMixin {
         this._sock.rQskipBytes(1);  // number-of-screens
         this._sock.rQskipBytes(3);  // padding
 
+        const screenRects = [];
         for (let i = 0; i < numberOfScreens; i += 1) {
             // Save the id and flags of the first screen
             let sI = this._sock.rQshift32();    // id
-            let x = this._sock.rQshift16();                       // width
-            let y = this._sock.rQshift16();                       // height
+            let x = this._sock.rQshift16();                       // x position
+            let y = this._sock.rQshift16();                       // y position
             let w = this._sock.rQshift16();                       // width
             let h = this._sock.rQshift16();                       // height
             if (i == 0) {
@@ -4741,8 +4744,10 @@ export default class RFB extends EventTargetMixin {
             }
 
             this._display.applyServerResolution(w, h, i);
+            screenRects.push({ x: x, y: y, width: w, height: h });
             Log.Debug(`Server reported screen ${sI} with resolution ${w}x${h} at ${x}x${y}`);
         }
+        this._display.applyServerScreenRects(screenRects);
 
         /*
          * The x-position indicates the reason for the change:
@@ -4838,6 +4843,7 @@ export default class RFB extends EventTargetMixin {
         // Adjust the visible viewport based on the new dimensions
         this._updateClip();
         this._updateScale();
+        this._webrtc._layoutWebRTCVideos();
 
         this._updateContinuousUpdates();
 

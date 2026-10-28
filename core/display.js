@@ -40,8 +40,11 @@ export default class Display {
         */
         this._asyncFrameQueue = [];
         this._maxAsyncFrameQueue = 3;
-        //largest frame id that has left the queue, rects of that frame or older ones are dropped
-        this._removedFrameID = 0;
+        /*
+        Largest frame id dequeued, whether the frame was drawn or dropped. Rects of that frame or of older ones are
+        dropped, so every queued frame is newer and the next frame dequeued has a larger id. Clearing the queue resets it.
+        */
+        this._largestDequeuedFrameID = 0;
         this._clearAsyncQueue();
         this._syncFrameQueue = [];
         this._lastTransparentRectId = "";
@@ -1191,26 +1194,31 @@ export default class Display {
             Log.Info("First rect received.");
         }
 
-        if (rect.frame_id <= this._removedFrameID) {
+        if (rect.frame_id <= this._largestDequeuedFrameID) {
             //the frame of this rect has already been drawn or dropped
             this._dropLateRect(rect);
             return;
         }
 
+        //the entry of this frame, or else the index at which it belongs
         const queue = this._asyncFrameQueue;
-        let frame = queue.find(f => f[0] == rect.frame_id);
-        if (frame) {
+        let ix = 0;
+        while (ix < queue.length && queue[ix][0] < rect.frame_id) {
+            ix++;
+        }
+        let frame = queue[ix];
+        if (frame && frame[0] == rect.frame_id) {
             frame[2].push(rect);
         } else {
             if (queue.length >= this._maxAsyncFrameQueue) {
-                if (rect.frame_id < queue[0][0]) {
-                    //every queued frame is newer, give up the frame of this rect
-                    this._removedFrameID = rect.frame_id;
+                if (ix === 0) {
+                    //every queued frame is newer, so drop this rect; the queue stays full until its oldest frame
+                    //is dequeued, and from then on the frame id check drops the other rects of this frame
                     this._dropLateRect(rect);
                     return;
                 }
                 //make room by removing the oldest frame
-                const skipped = Math.max(rect.frame_id - queue[queue.length - 1][0], 1) - 1;
+                const skipped = Math.max(rect.frame_id - queue[queue.length - 1][0] - 1, 0);
                 if (queue[0][3]) {
                     Log.Warn("Forced frame to canvas");
                     this._pushAsyncFrame(true);
@@ -1221,10 +1229,15 @@ export default class Display {
                     this._dropOldestFrame();
                     this._droppedFrames += skipped + 1;
                 }
+                ix--;
             }
             frame = [ rect.frame_id, 0, [ rect ], false, 0, 0 ];
-            const ix = queue.findIndex(f => f[0] > rect.frame_id);
-            queue.splice(ix < 0 ? queue.length : ix, 0, frame);
+            //usually the newest frame, and push() costs less than splice()
+            if (ix === queue.length) {
+                queue.push(frame);
+            } else {
+                queue.splice(ix, 0, frame);
+            }
         }
 
         if (rect.type == "flip") {
@@ -1257,7 +1270,7 @@ export default class Display {
         for (const droppedRect of droppedFrame[2]) {
             this._closeRectImage(droppedRect);
         }
-        this._removedFrameID = Math.max(this._removedFrameID, droppedFrame[0]);
+        this._largestDequeuedFrameID = droppedFrame[0];
     }
 
     /*
@@ -1273,7 +1286,7 @@ export default class Display {
 
         this._asyncFrameQueue = [];
         //TCP and UDP number their frames separately
-        this._removedFrameID = 0;
+        this._largestDequeuedFrameID = 0;
     }
 
     /*
@@ -1358,7 +1371,7 @@ export default class Display {
 
             let frame = this._asyncFrameQueue[0][2];
             let frameId = this._asyncFrameQueue.shift()[0];
-            this._removedFrameID = Math.max(this._removedFrameID, frameId);
+            this._largestDequeuedFrameID = frameId;
 
             let secondaryScreenRects = 0;
             let primaryScreenRects = 0;

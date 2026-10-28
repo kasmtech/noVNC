@@ -1272,7 +1272,11 @@ export default class RFB extends EventTargetMixin {
             this._unixRelays = this._unixRelays || {};
             this._unixRelays[name] = processRelayFn;
             this._unixRelayStates[name] = { isAllowed: null, replied: false };
-            this._unixRelayPending.push(name);
+            // A repeated subscribe must not queue a second entry, or a later reply
+            // would be matched against a name that is no longer waiting.
+            if (!this._unixRelayPending.includes(name)) {
+                this._unixRelayPending.push(name);
+            }
             RFB.messages.sendSubscribeUnixRelay(this._sock, name);
         }
     }

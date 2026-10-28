@@ -4,6 +4,12 @@
 // parent renders it. One extension call (`get_status`) answers both features, so the
 // probe and its schedule are shared by fido2.js and ssh_agent.js through one monitor
 // per RFB connection.
+//
+// Reasons a feature can report: ok, policy_disabled, extension_missing,
+// extension_unresponsive, extension_outdated, unsupported_platform,
+// native_client_unreachable, native_client_outdated, status_probe_failed (the native
+// client answered but its probe for this feature failed), backend_unavailable,
+// agent_not_configured, agent_unreachable.
 import * as Log from "../util/logging.js";
 import * as WebUtil from "../../app/webutil.js";
 import {
@@ -15,6 +21,7 @@ import {
 
 const PROBE_INTERVAL_MS = 10000;     // while the page is visible
 const EXTENSION_TIMEOUT_MS = 5000;   // no answer from the extension => extension_unresponsive
+const ACTIVITY_STALE_MS = 120000;    // in-flight activity older than this no longer blocks probes
 const QUIET_PERIOD_MS = 1000;        // no probe this soon after a ceremony / agent exchange
 const STATE_DEBOUNCE_MS = 100;       // lets both relay subscribe replies land in one probe
 
@@ -95,6 +102,11 @@ const failingLink = (status, probe) => {
     return null;
 };
 
+// get_status leaves a feature object null when the native client does not know the
+// probe ("unsupported", or no error field from an older extension) or when the probe
+// itself failed ("failed").
+const missingFeatureReason = errorValue => (errorValue === "failed" ? "status_probe_failed" : "native_client_outdated");
+
 export const buildFido2Status = (isAllowed, probe) => {
     const status = fido2Status(isAllowed);
     if (isAllowed === false) {
@@ -109,7 +121,7 @@ export const buildFido2Status = (isAllowed, probe) => {
 
     const fido2 = probe.result.fido2;
     if (!fido2) {
-        status.reason = "native_client_outdated";
+        status.reason = missingFeatureReason(probe.result.fido2Error);
         return status;
     }
 
@@ -136,7 +148,7 @@ export const buildSshAgentStatus = (isAllowed, probe) => {
 
     const agent = probe.result.sshAgent;
     if (!agent) {
-        status.reason = "native_client_outdated";
+        status.reason = missingFeatureReason(probe.result.sshAgentError);
         return status;
     }
 
@@ -167,6 +179,7 @@ class PassthroughStatusMonitor {
         this._probing = false;
         this._reprobe = false;
         this._activeCount = 0;
+        this._activityStartedAt = 0;   // when the count last went from 0 to above 0
         this._lastActivityEndedAt = 0;
         this._disabledPosted = {};
 
@@ -218,6 +231,9 @@ class PassthroughStatusMonitor {
 
     // A ceremony or agent exchange is starting. No probe runs while any is in flight.
     beginActivity() {
+        if (this._activeCount === 0) {
+            this._activityStartedAt = Date.now();
+        }
         this._activeCount++;
     }
 
@@ -326,7 +342,13 @@ class PassthroughStatusMonitor {
             return;
         }
         if (this._activeCount > 0) {
-            return;
+            // Ceremonies wait for a PIN or touch and have no timeout, so a call that never
+            // answers must not freeze status forever. Treat old activity as stale.
+            if (Date.now() - this._activityStartedAt < ACTIVITY_STALE_MS) {
+                return;
+            }
+            Log.Warn("passthrough_status: in-flight activity is stale, resuming probes");
+            this._activeCount = 0;
         }
         if (!ignoreQuietPeriod && Date.now() - this._lastActivityEndedAt < QUIET_PERIOD_MS) {
             return;

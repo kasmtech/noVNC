@@ -2093,23 +2093,25 @@ const UI = {
         UI.rttChart = new BasicChart('noVNC_rtt_path', 'RTT', 60, 0);
         UI.jitterChart = new BasicChart('noVNC_jitter_path', 'Jitter', 60, 0);
 
-        //key events for KasmVNC control
-        document.addEventListener('keyup', function (event) {
-            if (event.ctrlKey && event.shiftKey) {
-                switch(event.keyCode) {
-                        case 49:
-                            UI.toggleNav();
-                            break;
-                        case 50:
-                            UI.toggleRelativePointer();
-                            break;
-                        case 51:
-                            UI.togglePointerLock();
-                            break;
-                    }
-            }
+        // The same function each time, so connecting again does not add a second listener.
+        document.addEventListener('keyup', UI.onShortcutKeyup, true);
+    },
 
-        }, true);
+    //key events for KasmVNC control
+    onShortcutKeyup(event) {
+        if (event.ctrlKey && event.shiftKey) {
+            switch (event.keyCode) {
+                case 49:
+                    UI.toggleNav();
+                    break;
+                case 50:
+                    UI.toggleRelativePointer();
+                    break;
+                case 51:
+                    UI.togglePointerLock();
+                    break;
+            }
+        }
     },
 
     disconnect() {

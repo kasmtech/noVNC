@@ -48,9 +48,10 @@ import CopyRectDecoder from "./decoders/copyrect.js";
 import RREDecoder from "./decoders/rre.js";
 import HextileDecoder from "./decoders/hextile.js";
 import KasmVideoDecoder from "./decoders/kasmvideo.js";
+import WebRTCController from "./decoders/webrtc_controller.js";
 import TightDecoder from "./decoders/tight.js";
 import TightPNGDecoder from "./decoders/tightpng.js";
-import UDPDecoder from './decoders/udp.js';
+import UDPDecoder from "./decoders/udp.js";
 import {FPS, UI_SETTING_PROFILE_OPTIONS} from '../app/constants.js';
 
 // How many seconds to wait for a disconnect to finish
@@ -163,22 +164,14 @@ export default class RFB extends EventTargetMixin {
         this._forcedResolutionY = null;
         this._clipboardBinary = true;
         this._resendClipboardNextUserDrivenEvent = true;
-        this._useUdp = true;
+        this._webrtc = new WebRTCController(this);
+
+        this._imageRectsSeen = false;
+
         this._hiDpi = 'hiDpi' in options ? !!options.hiDpi : false;
         this._enableQOI = false;
         this._videoQuality = 2;
         this._enableWebP = false;
-        this.TransitConnectionStates = {
-            Tcp: Symbol("tcp"),
-            Udp: Symbol("udp"),
-            Upgrading: Symbol("upgrading"),
-            Downgrading: Symbol("downgrading"),
-            Failure: Symbol("failure")
-        }
-        this._transitConnectionState = this.TransitConnectionStates.Tcp;
-        this._lastTransition = null;
-        this._udpConnectFailures = 0; //Failures in upgrading connection to udp
-        this._udpTransitFailures = 0; //Failures in transit after successful upgrade
 
         this._trackFrameStats = false;
 
@@ -786,18 +779,10 @@ export default class RFB extends EventTargetMixin {
     get statsFps() { return this._display.fps; }
     get statsDroppedFps() { return this._display.droppedFps; }
 
-    get enableWebRTC() { return this._useUdp; }
+    get enableWebRTC() { return this._webrtc._useUdp; }
     set enableWebRTC(value) {
-        this._useUdp = value;
-        if (!value) {
-            if (this.isConnected && (this._transitConnectionState !== this.TransitConnectionStates.Tcp)) {
-                this._sendUdpDowngrade();
-            }
-        } else {
-            if (this.isConnected && (this._transitConnectionState !== this.TransitConnectionStates.Udp)) {
-                this._sendUdpUpgrade();
-            }
-        }
+        this._webrtc._useUdp = value;
+        this._webrtc._applyWebRTCMediaState('toggle');
     }
 
     get enableHiDpi() { return this._hiDpi; }
@@ -876,6 +861,7 @@ export default class RFB extends EventTargetMixin {
             if (this._display) {
                 this._display.preferSoftwareDecode = value === encodings.pseudoEncodingStreamingModeAVCNVENC;
             }
+            this._webrtc._applyWebRTCMediaState('streamMode');
         }
     }
 
@@ -1307,11 +1293,6 @@ export default class RFB extends EventTargetMixin {
         }));
     }
 
-    _changeTransitConnectionState(value) {
-        Log.Info("Transit state change from " + this._transitConnectionState.toString() + ' to ' + value.toString());
-        this._transitConnectionState = value;
-    }
-
     _setupWebSocket() {
         this._sock = new Websock();
         this._sock.on('message', () => {
@@ -1484,115 +1465,7 @@ export default class RFB extends EventTargetMixin {
 
         this._resendClipboardNextUserDrivenEvent = true;
 
-        // WebRTC UDP datachannel inits
-        if (typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
-            this._udpBuffer = new Map();
-
-            this._udpPeer = new RTCPeerConnection({
-                iceServers: [{
-                    urls: ["stun:stun.l.google.com:19302"]
-                }]
-            });
-            let peer = this._udpPeer;
-
-            peer.onicecandidate = function(e) {
-                if (e.candidate)
-                    Log.Debug("received ice candidate", e.candidate);
-                else
-                    Log.Debug("all candidates received");
-            }
-
-            peer.ondatachannel = function(e) {
-                Log.Debug("peer connection on data channel", e);
-            }
-
-            this._udpChannel = peer.createDataChannel("webudp", {
-                ordered: false,
-                maxRetransmits: 0
-            });
-            this._udpChannel.binaryType = "arraybuffer";
-
-            this._udpChannel.onerror = function(e) {
-                Log.Error("data channel error " + e.message);
-                this._udpTransitFailures+=1;
-                this._sendUdpDowngrade();
-            }
-
-            let sock = this._sock;
-            let udpBuffer = this._udpBuffer;
-            let me = this;
-            this._udpChannel.onmessage = function(e) {
-                //Log.Info("got udp msg", e.data);
-                const u8 = new Uint8Array(e.data);
-                // Got an UDP packet. Do we need reassembly?
-                const id = parseInt(u8[0] +
-                    (u8[1] << 8) +
-                    (u8[2] << 16) +
-                    (u8[3] << 24), 10);
-                const i = parseInt(u8[4] +
-                    (u8[5] << 8) +
-                    (u8[6] << 16) +
-                    (u8[7] << 24), 10);
-                const pieces = parseInt(u8[8] +
-                    (u8[9] << 8) +
-                    (u8[10] << 16) +
-                    (u8[11] << 24), 10);
-                const hash = parseInt(u8[12] +
-                    (u8[13] << 8) +
-                    (u8[14] << 16) +
-                    (u8[15] << 24), 10);
-                // TODO: check the hash. It's the low 32 bits of XXH64, seed 0
-                const frame_id = parseInt(u8[16] +
-                    (u8[17] << 8) +
-                    (u8[18] << 16) +
-                    (u8[19] << 24), 10);
-
-                if (me._transitConnectionState !== me.TransitConnectionStates.Udp) {
-                    me._display.clear();
-                    me._changeTransitConnectionState(me.TransitConnectionStates.Udp);
-                }
-
-                if (pieces == 1) { // Handle it immediately
-                    me._handleUdpRect(u8.slice(20), frame_id);
-                } else { // Use buffer
-                    const now = Date.now();
-
-                    if (udpBuffer.has(id)) {
-                        let item = udpBuffer.get(id);
-                        item.recieved_pieces += 1;
-                        item.data[i] = u8.slice(20);
-                        item.total_bytes += item.data[i].length;
-
-                        if (item.total_pieces == item.recieved_pieces) {
-                            // Message is complete, combile data into a single array
-                            var finaldata = new Uint8Array(item.total_bytes);
-                            let z = 0;
-                            for (let x = 0; x < item.data.length; x++) {
-                                finaldata.set(item.data[x], z);
-                                z += item.data[x].length;
-                            }
-                            udpBuffer.delete(id);
-                            me._handleUdpRect(finaldata, frame_id);
-                        }
-                    } else {
-                        let item = {
-                            total_pieces: pieces,   // number of pieces expected
-                            arrival: now,       //time first piece was recieved
-                            recieved_pieces: 1,     // current number of pieces in data
-                            total_bytes: 0,         // total size of all data pieces combined
-                            data: new Array(pieces)
-                        }
-                        item.data[i] = u8.slice(20);
-                        item.total_bytes = item.data[i].length;
-                        udpBuffer.set(id, item);
-                    }
-                }
-            }
-        }
-
-        if (this._useUdp && typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
-            setTimeout(function() { this._sendUdpUpgrade() }.bind(this), 3000);
-        }
+        setTimeout(function() { this._webrtc._applyWebRTCMediaState('connect') }.bind(this), 3000);
 
         Log.Debug("<< RFB.connect");
     }
@@ -1630,6 +1503,8 @@ export default class RFB extends EventTargetMixin {
 
         this._keyboard.ungrab();
         this._gestures.detach();
+        this._webrtc._stopImageChannel(false);
+        this._webrtc._teardownAllWebRTCScreens();
         if (this._isPrimaryDisplay) {
             this._sock.close();
         } else {
@@ -2219,6 +2094,7 @@ export default class RFB extends EventTargetMixin {
             let size = this._screenSize();
             this._display.resize(size.screens[0].serverWidth, size.screens[0].serverHeight);
             this._display.autoscale(size.screens[0].serverWidth, size.screens[0].serverHeight, size.screens[0].scale);
+            this._webrtc._layoutWebRTCVideos();
 
             let screen = size.screens[0];
             const windowId = new URLSearchParams(document.location.search).get('windowId');
@@ -2512,6 +2388,7 @@ export default class RFB extends EventTargetMixin {
 
                 this._viewportDragPos = {'x': x, 'y': y};
                 this._display.viewportChangePos(deltaX, deltaY);
+                this._webrtc._layoutWebRTCVideos();
             }
 
             // Skip sending mouse events
@@ -3643,6 +3520,7 @@ export default class RFB extends EventTargetMixin {
         // encs.push(encodings.pseudoEncodingHardwareProfile0 + this.hwEncoderProfile);
         encs.push(encodings.pseudoEncodingGOP1 + this.gop);
         encs.push(encodings.pseudoEncodingStreamingVideoQualityLevel0 + this.videoStreamQuality);
+
         encs.push(this.streamMode);
 
         // preferBandwidth choses preset settings. Since we expose all the settings, let's not pass this
@@ -4215,14 +4093,14 @@ export default class RFB extends EventTargetMixin {
             case 180: // KASM binary clipboard
                 return this._handleBinaryClipboard();
 
-            case 181: // KASM UDP upgrade
-                return this._handleUdpUpgrade();
-
             case 182: // KASM unix relay subscription
                 return this._handleSubscribeUnixRelay();
 
             case 183: // KASM unix relay data
                 return this._handleUnixRelay();
+
+            case messages.msgTypeWebrtc:
+                return this._handleWebRTCSignal();
             case messages.msgTypeServerDisconnect: // KASM disconnect notice
                 return this._handleDisconnectNotify();
 
@@ -4272,110 +4150,68 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleUdpRect(data, frame_id) {
-        let frame = {
+        if (data.length < 12) {
+            Log.Warn('Image channel message too short (' + data.length + ' bytes)');
+            return false;
+        }
+        if (!this._imageRectsSeen) {
+            this._imageRectsSeen = true;
+            this._display.clear();
+        }
+
+        const frame = {
             x: (data[0] << 8) + data[1],
             y: (data[2] << 8) + data[3],
             width: (data[4] << 8) + data[5],
             height: (data[6] << 8) + data[7],
             encoding: parseInt((data[8] << 24) + (data[9] << 16) +
-                (data[10] << 8) + data[11], 10)
+                               (data[10] << 8) + data[11], 10)
         };
 
         switch (frame.encoding) {
             case encodings.pseudoEncodingLastRect:
-                this._display.flip(frame_id, frame.x + 1); //Last Rect message, first 16 bytes contain rect count
+                this._display.flip(frame_id, frame.x + 1);
                 if (this._display.pending())
                     this._display.flush(false);
                 break;
             case encodings.encodingTight:
-                let decoder = this._decoders[encodings.encodingUDP];
                 try {
-                    decoder.decodeRect(frame.x, frame.y,
-                        frame.width, frame.height,
-                        data, this._display,
-                        this._fbDepth, frame_id);
+                    this._decoders[encodings.encodingUDP].decodeRect(
+                        frame.x, frame.y, frame.width, frame.height,
+                        data, this._display, this._fbDepth, frame_id);
                 } catch (err) {
                     this._fail("Error decoding rect: " + err);
                     return false;
                 }
                 break;
+            case encodings.encodingCopyRect: {
+                if (data.length < 16) {
+                    Log.Error('CopyRect image-channel rect too short (' + data.length + ' bytes)');
+                    return false;
+                }
+                const srcX = (data[12] << 8) | data[13];
+                const srcY = (data[14] << 8) | data[15];
+                this._display.copyImage(srcX, srcY,
+                    frame.x, frame.y, frame.width, frame.height, frame_id);
+                break;
+            }
             default:
-                Log.Error("Invalid rect encoding via UDP: " + frame.encoding);
+                Log.Error('Invalid rect encoding via image channel: ' + frame.encoding);
                 return false;
         }
-
         return true;
     }
 
-    _sendUdpUpgrade() {
-        if (this._transitConnectionState == this.TransitConnectionStates.Upgrading) {
-            return;
-        }
-        this._changeTransitConnectionState(this.TransitConnectionStates.Upgrading);
+    _handleWebRTCSignal() {
+        if (this._sock.rQwait('WebRTC sig header', 4, 1)) { return false; }
+        const kind     = this._sock.rQshift8();
+        const screenId = this._sock.rQshift8();
+        const len      = this._sock.rQshift16();
+        if (this._sock.rQwait('WebRTC sig payload', len, 5)) { return false; }
+        const payload = len ? this._sock.rQshiftStr(len) : '';
 
-        let peer = this._udpPeer;
-        let sock = this._sock;
-
-        peer.createOffer().then(function(offer) {
-            return peer.setLocalDescription(offer);
-        }).then(function() {
-            const buff = sock._sQ;
-            const offset = sock._sQlen;
-            const str = Uint8Array.from(Array.from(peer.localDescription.sdp).map(letter => letter.charCodeAt(0)));
-
-            buff[offset] = 181; // msg-type
-            buff[offset + 1] = str.length >> 8; // u16 len
-            buff[offset + 2] = str.length;
-
-            buff.set(str, offset + 3);
-
-            sock._sQlen += 3 + str.length;
-            sock.flush();
-        }).catch(function(reason) {
-            Log.Error("Failed to create offer " + reason);
-            this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
-            this._udpConnectFailures++;
-        });
-    }
-
-    _sendUdpDowngrade() {
-        this._changeTransitConnectionState(this.TransitConnectionStates.Downgrading);
-        const buff = this._sock._sQ;
-        const offset = this._sock._sQlen;
-
-        buff[offset] = 181; // msg-type
-        buff[offset + 1] = 0; // u16 len
-        buff[offset + 2] = 0;
-
-        this._sock._sQlen += 3;
-        this._sock.flush();
-    }
-
-    _handleUdpUpgrade() {
-        if (this._sock.rQwait("UdpUgrade header", 2, 1)) { return false; }
-        let len = this._sock.rQshift16();
-        if (this._sock.rQwait("UdpUpgrade payload", len, 3)) { return false; }
-
-        const payload = this._sock.rQshiftStr(len);
-
-        let peer = this._udpPeer;
-
-        var response = JSON.parse(payload);
-        Log.Debug("UDP Upgrade recieved from server: " + payload);
-        peer.setRemoteDescription(new RTCSessionDescription(response.answer)).then(function() {
-            var candidate = new RTCIceCandidate(response.candidate);
-            peer.addIceCandidate(candidate).then(function() {
-                Log.Debug("success in addicecandidate");
-            }.bind(this)).catch(function(err) {
-                Log.Error("Failure in addIceCandidate", err);
-                this._changeTransitConnectionState(this.TransitConnectionStates.Failure)
-                this._udpConnectFailures++;
-            }.bind(this));
-        }.bind(this)).catch(function(e) {
-            Log.Error("Failure in setRemoteDescription", e);
-            this._changeTransitConnectionState(this.TransitConnectionStates.Failure)
-            this._udpConnectFailures++;
-        }.bind(this));
+        this._webrtc._dispatchWebRTCSignal(kind, screenId, payload);
+        return true;
     }
 
     _handleSubscribeUnixRelay() {
@@ -4892,11 +4728,12 @@ export default class RFB extends EventTargetMixin {
         this._sock.rQskipBytes(1);  // number-of-screens
         this._sock.rQskipBytes(3);  // padding
 
+        const screenRects = [];
         for (let i = 0; i < numberOfScreens; i += 1) {
             // Save the id and flags of the first screen
             let sI = this._sock.rQshift32();    // id
-            let x = this._sock.rQshift16();                       // width
-            let y = this._sock.rQshift16();                       // height
+            let x = this._sock.rQshift16();                       // x position
+            let y = this._sock.rQshift16();                       // y position
             let w = this._sock.rQshift16();                       // width
             let h = this._sock.rQshift16();                       // height
             if (i == 0) {
@@ -4907,8 +4744,10 @@ export default class RFB extends EventTargetMixin {
             }
 
             this._display.applyServerResolution(w, h, i);
+            screenRects.push({ x: x, y: y, width: w, height: h });
             Log.Debug(`Server reported screen ${sI} with resolution ${w}x${h} at ${x}x${y}`);
         }
+        this._display.applyServerScreenRects(screenRects);
 
         /*
          * The x-position indicates the reason for the change:
@@ -4967,27 +4806,6 @@ export default class RFB extends EventTargetMixin {
         }
 
         try {
-            if (this._transitConnectionState == this.TransitConnectionStates.Udp || this._transitConnectionState == this.TransitConnectionStates.Failure) {
-                if (this._transitConnectionState == this.TransitConnectionStates.Udp) {
-                    Log.Warn("Implicit UDP Transit Failure, TCP rects recieved while in UDP mode.")
-                    this._udpTransitFailures++;
-                }
-                this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
-                this._display.clear();
-                if (this._useUdp) {
-                    if (this._udpConnectFailures < 3 && this._udpTransitFailures < 3) {
-                        setTimeout(function() {
-                            Log.Warn("Attempting to connect via UDP again after failure.")
-                            this.enableWebRTC = true;
-                        }.bind(this), 3000);
-                    } else {
-                        Log.Warn("UDP connection failures exceeded limit, remaining on TCP transit.")
-                    }
-                }
-            } else if (this._transitConnectionState == this.TransitConnectionStates.Downgrading) {
-                this._display.clear();
-                this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
-            }
             return decoder.decodeRect(this._FBU.x, this._FBU.y,
                 this._FBU.width, this._FBU.height,
                 this._sock, this._display,
@@ -5025,6 +4843,7 @@ export default class RFB extends EventTargetMixin {
         // Adjust the visible viewport based on the new dimensions
         this._updateClip();
         this._updateScale();
+        this._webrtc._layoutWebRTCVideos();
 
         this._updateContinuousUpdates();
 

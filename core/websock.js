@@ -92,6 +92,11 @@ export default class Websock {
         return this._rQlen - this._rQi;
     }
 
+    // Raw channel state. writeWebRTCFrame checks this before sending.
+    get readyState() {
+        return this._websocket ? this._websocket.readyState : undefined;
+    }
+
     rQpeek8() {
         return this._rQ[this._rQi];
     }

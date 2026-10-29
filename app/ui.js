@@ -98,9 +98,12 @@ const UI = {
     currentDisplay: null,
     displayWindows: new Map([['primary', 'primary']]),
     registeredWindows: new Map([['primary', 'primary']]),
+    STATS_INTERVAL_MS: 5000,
     fpsChart: null,
     enhancedMetrics: false,
     bandwidthChart: null,
+    capacityChart: null,
+    lastRxSample: null,
     jitterChart: null,
     rttChart: null,
 
@@ -869,6 +872,9 @@ const UI = {
         const enableStats = perfStatsToggle ? perfStatsToggle.checked : false;
         UI.saveSetting('enable_perf_stats');
 
+        if (!enableStats)
+            UI.lastRxSample = null;
+
         const showPanel = enableStats && !UI.enhancedMetrics;
         document.getElementById("noVNC_connection_stats")?.style.setProperty("visibility", showPanel ? "visible" : "hidden");
         document.getElementById("noVNC_charts_container")?.classList.toggle('visible', showPanel);
@@ -891,7 +897,7 @@ const UI = {
                 if (UI.rfb) {
                     UI.rfb.requestBottleneckStats();
                 }
-            }, 5000);
+            }, UI.STATS_INTERVAL_MS);
         }
     },
 
@@ -1841,7 +1847,21 @@ const UI = {
 
                 updateChart(UI.jitterChart, jitter);
                 updateChart(UI.rttChart, rtt);
-                updateChart(UI.bandwidthChart, bandwidth);
+
+                const now = performance.now();
+                const rxBytes = UI.rfb.statsRxBytes;
+                if (UI.bandwidthChart && UI.capacityChart && UI.lastRxSample) {
+                    const elapsed = (now - UI.lastRxSample.time) / 1000;
+                    const capacity = Number(bandwidth);
+                    const measured = (rxBytes - UI.lastRxSample.bytes) / elapsed;
+                    const valid = (v) => Number.isFinite(v) && v >= 0;
+                    if (elapsed > 0 && valid(capacity) && valid(measured)) {
+                        UI.capacityChart.record(capacity);
+                        UI.bandwidthChart.labelSuffix = ` | Est. capacity: ${UI.capacityChart.formatValue(capacity)}`;
+                        UI.bandwidthChart.update(measured);
+                    }
+                }
+                UI.lastRxSample = { time: now, bytes: rxBytes };
             }
 
             if (UI.enhancedMetrics)
@@ -2090,10 +2110,13 @@ const UI = {
             document.getElementById('noVNC_status').style.visibility = "visible";
         }
 
-        UI.fpsChart = new BasicChart('noVNC_fps_chart_path', 'FPS', 60, 120);
-        UI.bandwidthChart = new BasicChart('noVNC_bandwidth_path', 'Bandwidth', 60, 0, 'bytes/s');
-        UI.rttChart = new BasicChart('noVNC_rtt_path', 'RTT', 60, 0, 'ms');
-        UI.jitterChart = new BasicChart('noVNC_jitter_path', 'Jitter', 60, 0, 'ms');
+        const chartOptions = { sampleSeconds: UI.STATS_INTERVAL_MS / 1000, gridSeconds: 60 };
+        UI.fpsChart = new BasicChart('noVNC_fps_chart_path', 'FPS', 60, 120, '', chartOptions);
+        UI.bandwidthChart = new BasicChart('noVNC_bandwidth_path', 'Bandwidth (measured)', 60, 0, 'bytes/s', chartOptions);
+        UI.capacityChart = new BasicChart('noVNC_bandwidth_capacity_path', '', 60, 0, 'bytes/s', { ...chartOptions, style: BasicChart.Style.LINE, grid: false });
+        UI.bandwidthChart.linkScale(UI.capacityChart);
+        UI.rttChart = new BasicChart('noVNC_rtt_path', 'RTT', 60, 0, 'ms', chartOptions);
+        UI.jitterChart = new BasicChart('noVNC_jitter_path', 'Jitter', 60, 0, 'ms', chartOptions);
 
         //key events for KasmVNC control
         document.addEventListener('keyup', function (event) {
@@ -2119,6 +2142,8 @@ const UI = {
 
         UI.fpsChart = null;
         UI.bandwidthChart = null;
+        UI.capacityChart = null;
+        UI.lastRxSample = null;
         UI.rttChart = null;
         UI.jitterChart = null;
 

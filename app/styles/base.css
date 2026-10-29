@@ -397,6 +397,17 @@ select:active {
     height: 100px;
 }
 
+/* A second chart stacked exactly over the first (shared scale and size) */
+.noVNC_chart_stack {
+    position: relative;
+}
+
+#noVNC_charts_container svg.noVNC_chart_overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+}
+
 /* ----------------------------------------
  * Control Bar
  * ----------------------------------------

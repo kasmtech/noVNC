@@ -4,7 +4,16 @@ class BasicChart {
     static CHART_MAX_POINTS = 60;
     static FPS_CHART_MAX_FPS_VALUE = 120;
 
-    constructor(chartId, name = '', maxPoints = BasicChart.CHART_MAX_POINTS, maxValue = BasicChart.FPS_CHART_MAX_FPS_VALUE, unit = '') {
+    static Style = Object.freeze({
+        AREA: 'area',       // filled area under the series
+        LINE: 'line',       // straight segments, no fill
+        STEP: 'step',       // hold each value until the next sample
+        SMOOTH: 'smooth',   // curve through the samples, no fill
+    });
+
+    constructor(chartId, name = '', maxPoints = BasicChart.CHART_MAX_POINTS, maxValue = BasicChart.FPS_CHART_MAX_FPS_VALUE, unit = '', {
+        style = BasicChart.Style.AREA, grid = true, sampleSeconds = 1, gridSeconds = 5
+    } = {}) {
         this.id = chartId;
         this.name = name;
         this.unit = unit;
@@ -15,6 +24,14 @@ class BasicChart {
         this.height = BasicChart.CHART_HEIGHT;
         this.minValue = null;
         this.maxRecorded = null;
+        this.style = style;
+        this.grid = grid;
+        this.sampleSeconds = sampleSeconds;
+        this.gridSeconds = gridSeconds;
+        this.sampleCount = 0;
+        this.labelSuffix = '';
+        this.group = [this];
+        this.scaleOwner = this;
 
         if (name) {
             this.createLabel();
@@ -52,22 +69,54 @@ class BasicChart {
         if (labelElement) {
             const min = this.minValue !== null ? this.formatValue(this.minValue) : 'N/A';
             const max = this.maxRecorded !== null ? this.formatValue(this.maxRecorded) : 'N/A';
-            labelElement.textContent = `${this.name} - Min: ${min}, Max: ${max}`;
+            labelElement.textContent = `${this.name} - Min: ${min}, Max: ${max}${this.labelSuffix}`;
         }
     }
 
     formatValue(value) {
         if (this.unit === 'bytes/s') {
             const bits = value * 8;
-            return bits >= 1000000
-                ? `${Number((bits / 1000000).toFixed(2))} Mbps`
-                : `${Math.round(bits / 1000)} Kbps`;
+            return bits >= 1000000 ? `${Number((bits / 1000000).toFixed(2))} Mbps` : `${Math.round(bits / 1000)} Kbps`;
         }
         return `${Number(value.toFixed(2))}${this.unit ? ` ${this.unit}` : ''}`;
     }
 
+    linkScale(...others) {
+        const group = [...new Set([...this.group, ...others.flatMap(c => c.group)])];
+        group.forEach(c => {
+            c.group = group;
+            c.scaleOwner = this;
+        });
+        this.setSize(this.width, this.height);
+    }
+
+    setSize(width, height) {
+        for (const c of this.group) {
+            c.width = width;
+            c.height = height;
+            const svg = document.getElementById(c.id)?.closest('svg');
+            if (svg) {
+                svg.setAttribute('width', width);
+                svg.setAttribute('height', height);
+                svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+            }
+            c.render();
+        }
+    }
+
     scaleMaximum() {
-        return Math.max(this.maxValue, ...this.data) || 1;
+        const owner = this.scaleOwner;
+        return Math.max(owner.maxValue, ...owner.data) || 1;
+    }
+
+    render() {
+        const path = document.getElementById(this.id);
+        if (path) {
+            path.setAttribute('d', this.generateChartPoints());
+        }
+        if (this.grid) {
+            this.updateGrid();
+        }
     }
 
     updateGrid() {
@@ -81,6 +130,23 @@ class BasicChart {
             svg.appendChild(grid);
         }
         grid.replaceChildren();
+
+        const stepX = this.width / (this.maxPoints - 1);
+        const samplesPerLine = Math.max(1, Math.round(this.gridSeconds / this.sampleSeconds));
+        const firstSample = this.sampleCount - this.data.length;
+        for (let n = firstSample; n < this.sampleCount; n++) {
+            if (n % samplesPerLine !== 0) continue;
+            const x = (n - firstSample) * stepX;
+            const vline = document.createElementNS(ns, 'line');
+            vline.setAttribute('x1', x);
+            vline.setAttribute('x2', x);
+            vline.setAttribute('y1', 0);
+            vline.setAttribute('y2', this.height);
+            vline.setAttribute('stroke', '#fff');
+            vline.setAttribute('stroke-opacity', '0.3');
+            grid.append(vline);
+        }
+
         for (const fraction of [0.25, 0.5, 0.75, 1]) {
             const y = this.height * (1 - fraction);
             const line = document.createElementNS(ns, 'line');
@@ -108,25 +174,55 @@ class BasicChart {
         if (this.data.length === 0) return '';
 
         const stepX = this.width / (this.maxPoints - 1);
-        const effectiveMaxValue = this.scaleMaximum();
-        const scaleY = this.height / effectiveMaxValue;
+        const scaleY = this.height / this.scaleMaximum();
+        const points = this.data.map((v, i) => [i * stepX, Math.max(0, this.height - v * scaleY)]);
 
-        let d = `M 0 ${this.height}`;
-
-        for (let i = 0; i < this.data.length; i++) {
-            const x = i * stepX;
-            const y = this.height - this.data[i] * scaleY;
-            d += ` L ${x} ${y}`;
-        }
-
-        d += ` L ${(this.data.length - 1) * stepX} ${this.height} L 0 ${this.height} Z`;
-
-        return d;
+        return this.buildPath(points);
     }
 
-    update(value) {
-        if (!Number.isFinite(value) || value < 0) return;
+    buildPath(points) {
+        const [firstX, firstY] = points[0];
+        const [lastX] = points[points.length - 1];
+
+        switch (this.style) {
+            case BasicChart.Style.LINE:
+                return `M ${firstX} ${firstY}` + points.slice(1).map(([x, y]) => ` L ${x} ${y}`).join('');
+
+            case BasicChart.Style.STEP: {
+                let d = `M ${firstX} ${firstY}`;
+                for (let i = 1; i < points.length; i++) {
+                    d += ` L ${points[i][0]} ${points[i - 1][1]} L ${points[i][0]} ${points[i][1]}`;
+                }
+                return d;
+            }
+
+            case BasicChart.Style.SMOOTH: {
+                const clamp = (y) => Math.min(this.height, Math.max(0, y));
+                let d = `M ${firstX} ${firstY}`;
+                for (let i = 0; i < points.length - 1; i++) {
+                    const p0 = points[i - 1] || points[i];
+                    const p1 = points[i];
+                    const p2 = points[i + 1];
+                    const p3 = points[i + 2] || p2;
+                    const c1y = clamp(p1[1] + (p2[1] - p0[1]) / 6);
+                    const c2y = clamp(p2[1] - (p3[1] - p1[1]) / 6);
+                    d += ` C ${p1[0] + (p2[0] - p0[0]) / 6} ${c1y} ${p2[0] - (p3[0] - p1[0]) / 6} ${c2y} ${p2[0]} ${p2[1]}`;
+                }
+                return d;
+            }
+
+            case BasicChart.Style.AREA:
+            default:
+                return `M 0 ${this.height}` + points.map(([x, y]) => ` L ${x} ${y}`).join('') + ` L ${lastX} ${this.height} L 0 ${this.height} Z`;
+        }
+    }
+
+    record(value) {
+        if (!Number.isFinite(value) || value < 0)
+            return false;
+
         this.data.push(value);
+        this.sampleCount++;
         if (this.data.length > this.maxPoints) {
             this.data.shift();
         }
@@ -134,16 +230,20 @@ class BasicChart {
         // Summarize the same rolling window that is plotted.
         this.minValue = Math.min(...this.data);
         this.maxRecorded = Math.max(...this.data);
-        this.updateGrid();
-
-        const path = document.getElementById(this.id);
-        if (path) {
-            path.setAttribute('d', this.generateChartPoints());
-        }
 
         // Update label if it exists
         if (this.name) {
             this.updateLabel();
+        }
+        return true;
+    }
+
+    update(value) {
+        if (!this.record(value))
+            return;
+
+        for (const c of this.group) {
+            c.render();
         }
     }
 }

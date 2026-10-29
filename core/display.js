@@ -1507,19 +1507,24 @@ export default class Display {
                                                     screenLocations: a.screenLocations
                                                 },
                                                 screenLocationIndex: sI
-                                            }, [bitmap]); // Transfer ImageBitmap
+                                            });
                                             perfLogger.end('broadcastChannelSend', broadcastStart);
+                                            // BroadcastChannel posts a copy of the ImageBitmap
+                                            bitmap.close();
 
                                             Log.Debug(`[PRIMARY] ImageBitmap posted to secondary screen ${screenLocation.screenIndex}`);
                                         }).catch((error) => {
                                             perfLogger.end('imageBitmapCreate', bitmapStart);
                                             Log.Error(`[PRIMARY] Failed to create ImageBitmap from VideoFrame: ${error.message}`);
+                                        }).finally(() => {
+                                            a.frame.close();
                                         });
                                     } else {
                                         a.frame.close();
                                     }
                                 } else {
                                     Log.Warn(`[PRIMARY] VideoFrame has null format, skipping`);
+                                    a.frame.close();
                                 }
                                 break;
                             case 'img':

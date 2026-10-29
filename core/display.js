@@ -1185,7 +1185,6 @@ export default class Display {
     */
     _asyncRenderQPush(rect) {
         let frameIx = -1;
-        let oldestFrameID = Number.MAX_SAFE_INTEGER;
         let newestFrameID = 0;
         for (let i=0; i<this._asyncFrameQueue.length; i++) {
             if (rect.frame_id == this._asyncFrameQueue[i][0]) {
@@ -1200,7 +1199,6 @@ export default class Display {
                 frameIx = i;
                 break;
             }
-            oldestFrameID = Math.min(oldestFrameID, this._asyncFrameQueue[i][0]);
             newestFrameID = Math.max(newestFrameID, this._asyncFrameQueue[i][0]);
         }
 
@@ -1226,8 +1224,9 @@ export default class Display {
                 this._asyncFrameComplete(frameIx);
             }
         } else {
-            if (rect.frame_id < oldestFrameID) {
-                //rect is older than any frame in the queue, drop it
+            if (rect.frame_id <= newestFrameID) {
+                //no entry has this frame_id and none is free; only a frame_id above every queued one
+                //gets a new entry, so drop the rect
                 this._droppedRects++;
                 this._closeRectImage(rect);
                 if (rect.type === 'flip') {

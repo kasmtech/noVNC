@@ -9,12 +9,14 @@
 
 import * as Log from '../util/logging.js';
 import Inflator from "../inflator.js";
+import TransparentDecoder from './transparent.js';
 
 export default class UDPDecoder {
     constructor() {
         this._filter = null;
         this._palette = new Uint8Array(1024);  // 256 * 4 (max palette size * max bytes-per-pixel)
         this._directDraw = false; //Draw directly to the canvas without ordering
+        this._transparent = new TransparentDecoder();
 
         this._zlibs = [];
         for (let i = 0; i < 4; i++) {
@@ -38,6 +40,8 @@ export default class UDPDecoder {
             ret = this._basicRect(ctl, x, y, width, height, data, display, depth, frame_id);
         } else if (ctl === 0x0B) {
             ret = this._webpRect(x, y, width, height, data, display, depth, frame_id);
+        } else if (ctl === 0x0D) {
+            ret = this._itRect(x, y, width, height, data, display, depth, frame_id);
         } else {
             throw new Error("Illegal udp compression received (ctl: " +
                 ctl + ")");
@@ -72,6 +76,17 @@ export default class UDPDecoder {
         }
 
         display.imageRect(x, y, width, height, "image/webp", img, frame_id, this._directDraw);
+
+        return true;
+    }
+
+    _itRect(x, y, width, height, data, display, depth, frame_id) {
+        const payload = this._readData(data);
+        if (payload === null) {
+            return false;
+        }
+
+        this._transparent.decode(x, y, width, height, payload, display, frame_id);
 
         return true;
     }

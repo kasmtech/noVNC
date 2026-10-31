@@ -217,6 +217,15 @@ msgstr "本地縮放"
 msgid "Remote Resizing"
 msgstr "遠端調整大小"
 
+msgid "Touch Mode:"
+msgstr "觸控模式："
+
+msgid "Native Touch (Direct)"
+msgstr "原生觸控（直接傳遞）"
+
+msgid "Gesture (Emulation)"
+msgstr "手勢（模擬滑鼠）"
+
 #: ../vnc.html:194
 msgid "Advanced"
 msgstr "進階"
@@ -397,10 +406,10 @@ msgid "Auto Dynamic"
 msgstr "自動動態"
 
 msgid "Off"
-msgstr "離開"
+msgstr "關閉"
 
 msgid "On"
-msgstr "在"
+msgstr "開啟"
 
 msgid "Dynamic Quality Min:"
 msgstr "動態品質最小值："
@@ -442,27 +451,33 @@ msgid "Drag Viewport"
 msgstr "拖曳視角"
 
 msgid "Displays"
-msgstr "「展示」"
+msgstr "顯示器"
+
+msgid "Show Displays"
+msgstr "顯示器設定"
+
+msgid "Native Resolution"
+msgstr "原生解析度"
 
 msgid "Enable Threaded Decoding"
 msgstr "啟用線程解碼"
 
 msgid "Arrange Displays"
-msgstr "排列顯示"
+msgstr "排列顯示器"
 
 msgid ""
 "Drag and drop to arrange displays, new monitors are added to the right hand "
 "side of the previous monitor."
-msgstr "拖放以排列顯示，新顯示器將添加到前一個顯示器的右側。"
+msgstr "拖放以排列顯示器，新顯示器將添加到前一個顯示器的右側。"
 
 msgid "Add Monitor"
-msgstr "添加監視器"
+msgstr "添加顯示器"
 
 msgid "Auto placement"
 msgstr "自動放置"
 
 msgid "Identify"
-msgstr "確認"
+msgstr "識別"
 
 msgid "Done"
 msgstr "完畢"

@@ -397,7 +397,7 @@ select:active {
     height: 100px;
 }
 
-/* A second chart stacked exactly over the first (shared scale and size) */
+/* A second chart stacked over the first (same size, independent scale) */
 .noVNC_chart_stack {
     position: relative;
 }

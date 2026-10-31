@@ -175,6 +175,21 @@ class BasicChart {
 
         const stepX = this.width / (this.maxPoints - 1);
         const scaleY = this.height / this.scaleMaximum();
+        // A missing line sample breaks the path instead of implying zero.
+        if (this.style === BasicChart.Style.LINE) {
+            let path = '';
+            let move = true;
+            this.data.forEach((value, i) => {
+                if (value === null) {
+                    move = true;
+                    return;
+                }
+                const y = Math.max(0, this.height - value * scaleY);
+                path += `${path ? ' ' : ''}${move ? 'M' : 'L'} ${i * stepX} ${y}`;
+                move = false;
+            });
+            return path;
+        }
         const points = this.data.map((v, i) => [i * stepX, Math.max(0, this.height - v * scaleY)]);
 
         return this.buildPath(points);
@@ -218,7 +233,8 @@ class BasicChart {
     }
 
     record(value) {
-        if (!Number.isFinite(value) || value < 0)
+        const gap = value === null && this.style === BasicChart.Style.LINE;
+        if (!gap && (!Number.isFinite(value) || value < 0))
             return false;
 
         this.data.push(value);
@@ -228,8 +244,9 @@ class BasicChart {
         }
 
         // Summarize the same rolling window that is plotted.
-        this.minValue = Math.min(...this.data);
-        this.maxRecorded = Math.max(...this.data);
+        const samples = this.data.filter(sample => sample !== null);
+        this.minValue = samples.length ? Math.min(...samples) : null;
+        this.maxRecorded = samples.length ? Math.max(...samples) : null;
 
         // Update label if it exists
         if (this.name) {

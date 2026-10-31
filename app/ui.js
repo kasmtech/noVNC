@@ -1855,9 +1855,12 @@ const UI = {
                     const capacity = Number(bandwidth);
                     const measured = (rxBytes - UI.lastRxSample.bytes) / elapsed;
                     const valid = (v) => Number.isFinite(v) && v >= 0;
-                    if (elapsed > 0 && valid(capacity) && valid(measured)) {
-                        UI.capacityChart.record(capacity);
-                        UI.bandwidthChart.labelSuffix = ` | Est. capacity: ${UI.capacityChart.formatValue(capacity)}`;
+                    if (elapsed > 0 && valid(measured)) {
+                        const headroom = bandwidth != null && valid(capacity) && capacity > 0
+                            ? Math.max(0, Math.min(100, 100 * (1 - measured / capacity)))
+                            : null;
+                        UI.capacityChart.update(headroom);
+                        UI.bandwidthChart.labelSuffix = ` | Estimated Headroom: ${headroom === null ? 'N/A' : `${Number(headroom.toFixed(2))}%`}`;
                         UI.bandwidthChart.update(measured);
                     }
                 }
@@ -2112,9 +2115,10 @@ const UI = {
 
         const chartOptions = { sampleSeconds: UI.STATS_INTERVAL_MS / 1000, gridSeconds: 60 };
         UI.fpsChart = new BasicChart('noVNC_fps_chart_path', 'FPS', 60, 120, '', chartOptions);
-        UI.bandwidthChart = new BasicChart('noVNC_bandwidth_path', 'Bandwidth (measured)', 60, 0, 'bytes/s', chartOptions);
-        UI.capacityChart = new BasicChart('noVNC_bandwidth_capacity_path', '', 60, 0, 'bytes/s', { ...chartOptions, style: BasicChart.Style.LINE, grid: false });
-        UI.bandwidthChart.linkScale(UI.capacityChart);
+        UI.bandwidthChart = new BasicChart('noVNC_bandwidth_path', 'Bandwidth', 60, 0, 'bytes/s', chartOptions);
+        UI.capacityChart = new BasicChart('noVNC_bandwidth_capacity_path', '', 60, 100, '%', { ...chartOptions, style: BasicChart.Style.LINE, grid: false });
+        UI.bandwidthChart.labelSuffix = ' | Estimated Headroom: N/A';
+        UI.bandwidthChart.updateLabel();
         UI.rttChart = new BasicChart('noVNC_rtt_path', 'RTT', 60, 0, 'ms', chartOptions);
         UI.jitterChart = new BasicChart('noVNC_jitter_path', 'Jitter', 60, 0, 'ms', chartOptions);
 

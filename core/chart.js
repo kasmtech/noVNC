@@ -105,8 +105,13 @@ class BasicChart {
     }
 
     scaleMaximum() {
-        const owner = this.scaleOwner;
-        return Math.max(owner.maxValue, ...owner.data) || 1;
+        let max = this.scaleOwner.maxValue;
+        for (const c of this.group) {
+            for (const v of c.data)
+                if (v > max)
+                    max = v;
+        }
+        return max || 1;
     }
 
     render() {

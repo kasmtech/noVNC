@@ -1850,21 +1850,23 @@ const UI = {
 
                 const now = performance.now();
                 const rxBytes = UI.rfb.statsRxBytes;
+                const tcpRxBytes = UI.rfb.statsTcpRxBytes;
                 if (UI.bandwidthChart && UI.capacityChart && UI.lastRxSample) {
                     const elapsed = (now - UI.lastRxSample.time) / 1000;
                     const capacity = Number(bandwidth);
                     const measured = (rxBytes - UI.lastRxSample.bytes) / elapsed;
+                    const measuredTcp = (tcpRxBytes - UI.lastRxSample.tcpBytes) / elapsed;
                     const valid = (v) => Number.isFinite(v) && v >= 0;
                     if (elapsed > 0 && valid(measured)) {
-                        const headroom = bandwidth != null && valid(capacity) && capacity > 0
-                            ? Math.max(0, Math.min(100, 100 * (1 - measured / capacity)))
+                        const headroom = UI.rfb.statsTcpTransit && bandwidth != null && valid(capacity) && capacity > 0 && valid(measuredTcp)
+                            ? Math.max(0, Math.min(100, 100 * (1 - measuredTcp / capacity)))
                             : null;
                         UI.capacityChart.update(headroom);
                         UI.bandwidthChart.labelSuffix = ` | Estimated Headroom: ${headroom === null ? 'N/A' : `${Number(headroom.toFixed(2))}%`}`;
                         UI.bandwidthChart.update(measured);
                     }
                 }
-                UI.lastRxSample = { time: now, bytes: rxBytes };
+                UI.lastRxSample = {time: now, bytes: rxBytes, tcpBytes: tcpRxBytes};
             }
 
             if (UI.enhancedMetrics)

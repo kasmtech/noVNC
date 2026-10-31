@@ -164,6 +164,7 @@ export default class RFB extends EventTargetMixin {
         this._clipboardBinary = true;
         this._resendClipboardNextUserDrivenEvent = true;
         this._useUdp = true;
+        this._udpRxBytes = 0;
         this._hiDpi = 'hiDpi' in options ? !!options.hiDpi : false;
         this._enableQOI = false;
         this._videoQuality = 2;
@@ -785,6 +786,9 @@ export default class RFB extends EventTargetMixin {
 
     get statsFps() { return this._display.fps; }
     get statsDroppedFps() { return this._display.droppedFps; }
+    get statsRxBytes() {
+        return (this._sock ? this._sock.rxBytes : 0) + this._udpRxBytes;
+    }
 
     get enableWebRTC() { return this._useUdp; }
     set enableWebRTC(value) {
@@ -1523,6 +1527,7 @@ export default class RFB extends EventTargetMixin {
             let me = this;
             this._udpChannel.onmessage = function(e) {
                 //Log.Info("got udp msg", e.data);
+                me._udpRxBytes += e.data.byteLength;
                 const u8 = new Uint8Array(e.data);
                 // Got an UDP packet. Do we need reassembly?
                 const id = parseInt(u8[0] +

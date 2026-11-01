@@ -296,9 +296,6 @@ export class WebGLRenderer {
         // Render quad
         gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
 
-        // Close frame to release resources
-        frame.close();
-
         perfLogger.end('webglRender', renderStart);
     }
 

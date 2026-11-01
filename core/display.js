@@ -29,9 +29,8 @@ export default class Display {
         Log.Debug(">> Display.constructor");
 
         /*
-        For performance reasons we use a multi dimensional array
-        1st Dimension of Array Represents Frames, each element is a Frame
-        2nd Dimension is the contents of a frame and meta data, contains 4 elements
+        Frames waiting to be drawn, ordered by frame id, at most _maxAsyncFrameQueue of them.
+        Each element is a Frame, an array of 6 elements:
             0 - int, FrameID
             1 - int, Rect Count
             2 - Array of Rect objects
@@ -41,6 +40,11 @@ export default class Display {
         */
         this._asyncFrameQueue = [];
         this._maxAsyncFrameQueue = 3;
+        /*
+        Largest frame id dequeued, whether the frame was drawn or dropped. Rects of that frame or of older ones are
+        dropped, so every queued frame is newer and the next frame dequeued has a larger id. Clearing the queue resets it.
+        */
+        this._largestDequeuedFrameID = 0;
         this._clearAsyncQueue();
         this._syncFrameQueue = [];
         this._lastTransparentRectId = "";
@@ -695,8 +699,7 @@ export default class Display {
     * @returns {bool} is the queue full
     */
     pending() {
-        //is the slot in the queue for the newest frame in use
-        return this._asyncFrameQueue[this._maxAsyncFrameQueue - 1][0] > 0;
+        return this._asyncFrameQueue.length >= this._maxAsyncFrameQueue;
     }
 
     /*
@@ -707,7 +710,9 @@ export default class Display {
     */
     flush(onflush_message=true) {
         //force oldest frame to render
-        this._asyncFrameComplete(0, true);
+        if (this._asyncFrameQueue.length > 0) {
+            this._asyncFrameComplete(this._asyncFrameQueue[0], true);
+        }
 
         if (onflush_message)
             this.onflush();
@@ -1076,7 +1081,7 @@ export default class Display {
 
                 //if the secondary display is not in focus, the browser may not call requestAnimationFrame, thus we need to limit our buffer
                 if (this._syncFrameQueue.length > 5000) {
-                    this._syncFrameQueue.shift();
+                    this._closeRectImage(this._syncFrameQueue.shift());
                     this._droppedRects++;
                 }
                 break;
@@ -1114,52 +1119,17 @@ export default class Display {
 
     _pushSyncRects() {
         let drawRectCnt = 0;
-        whileLoop:
         while (this._syncFrameQueue.length > 0) {
-            const a = this._syncFrameQueue[0];
-            const pos = a.screenLocations[0];
-            switch (a.type) {
-                case 'copy':
-                    this.copyImage(pos.oldX, pos.oldY, pos.x, pos.y, a.width, a.height, a.frame_id, true);
+            const rect = this._syncFrameQueue[0];
+            if (rect.type === 'img' && !rect.img.complete) {
+                if (this._syncFrameQueue.length <= 5000) {
                     break;
-                case 'fill':
-                    this.fillRect(pos.x, pos.y, a.width, a.height, a.color, a.frame_id, true);
-                    break;
-                case 'blit':
-                    this.blitImage(pos.x, pos.y, a.width, a.height, a.data, 0, a.frame_id, true);
-                    break;
-                case 'blitQ':
-                    this.blitQoi(pos.x, pos.y, a.width, a.height, a.data, 0, a.frame_id, true);
-                    break;
-                case 'img':
-                    if (a.img.complete) {
-                        this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
-                    } else {
-                        if (this._syncFrameQueue.length > 5000) {
-                            this._syncFrameQueue.shift();
-                            this._droppedRects++;
-                        } else {
-                            break whileLoop;
-                        }
-                    }
-                    break;
-                case 'vid':
-                    this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
-                    a.img.close();
-                    break;
-                case 'bitmap':
-                    this.drawImage(a.img, pos.x, pos.y, a.width, a.height);
-                    a.img.close();
-                    break;
-                case 'video_frame':
-                    this.drawVideoFrame(a.frame, pos.x, pos.y, a.width, a.height);
-                    break;
-                default:
-                    this._syncFrameQueue.shift();
-                    continue;
+                }
+                this._droppedRects++;
+            } else if (this._drawSyncRect(rect)) {
+                drawRectCnt++;
             }
-            drawRectCnt++;
-            this._syncFrameQueue.shift();
+            this._closeRectImage(this._syncFrameQueue.shift());
         }
 
         if (this._renderer?.enableCanvasBuffer && drawRectCnt > 0) {
@@ -1169,6 +1139,34 @@ export default class Display {
 
         if (this._syncFrameQueue.length > 0) {
             window.requestAnimationFrame( () => { this._pushSyncRects(); });
+        }
+    }
+
+    _drawSyncRect(rect) {
+        const pos = rect.screenLocations[0];
+        switch (rect.type) {
+            case 'copy':
+                this.copyImage(pos.oldX, pos.oldY, pos.x, pos.y, rect.width, rect.height, rect.frame_id, true);
+                return true;
+            case 'fill':
+                this.fillRect(pos.x, pos.y, rect.width, rect.height, rect.color, rect.frame_id, true);
+                return true;
+            case 'blit':
+                this.blitImage(pos.x, pos.y, rect.width, rect.height, rect.data, 0, rect.frame_id, true);
+                return true;
+            case 'blitQ':
+                this.blitQoi(pos.x, pos.y, rect.width, rect.height, rect.data, 0, rect.frame_id, true);
+                return true;
+            case 'img':
+            case 'vid':
+            case 'bitmap':
+                this.drawImage(rect.img, pos.x, pos.y, rect.width, rect.height);
+                return true;
+            case 'video_frame':
+                this.drawVideoFrame(rect.frame, pos.x, pos.y, rect.width, rect.height);
+                return true;
+            default:
+                return false;
         }
     }
 
@@ -1191,106 +1189,118 @@ export default class Display {
     Process incoming rects into a frame buffer, assume rects are out of order due to either UDP or parallel processing of decoding
     */
     _asyncRenderQPush(rect) {
-        let frameIx = -1;
-        let oldestFrameID = Number.MAX_SAFE_INTEGER;
-        let newestFrameID = 0;
-        for (let i=0; i<this._asyncFrameQueue.length; i++) {
-            if (rect.frame_id == this._asyncFrameQueue[i][0]) {
-                this._asyncFrameQueue[i][2].push(rect);
-                frameIx = i;
-                break;
-            } else if (this._asyncFrameQueue[i][0] == 0) {
-                let rect_cnt = ((rect.type == "flip") ? rect.rect_cnt : 0);
-                this._asyncFrameQueue[i][0] = rect.frame_id;
-                this._asyncFrameQueue[i][2].push(rect);
-                this._asyncFrameQueue[i][3] = (rect_cnt == 1);
-                frameIx = i;
-                break;
-            }
-            oldestFrameID = Math.min(oldestFrameID, this._asyncFrameQueue[i][0]);
-            newestFrameID = Math.max(newestFrameID, this._asyncFrameQueue[i][0]);
-        }
-
         if (!this._firstRect) { //TODO: Remove this
             this._firstRect = true;
             Log.Info("First rect received.");
         }
 
-        if (frameIx >= 0) {
-            if (rect.type == "flip") {
-                //flip rect contains the rect count for the frame
-                if (this._asyncFrameQueue[frameIx][1] !== 0) {
-                    Log.Warn("Redundant flip rect, current rect_cnt: " + this._asyncFrameQueue[frameIx][1] + ", new rect_cnt: " + rect.rect_cnt );
-                }
-                this._asyncFrameQueue[frameIx][1] += rect.rect_cnt;
-                if (rect.rect_cnt == 0) {
-                    Log.Warn("Invalid rect count");
-                }
-            }
+        if (rect.frame_id <= this._largestDequeuedFrameID) {
+            //the frame of this rect has already been drawn or dropped
+            this._dropLateRect(rect);
+            return;
+        }
 
-            if (this._asyncFrameQueue[frameIx][1] > 0 && this._asyncFrameQueue[frameIx][2].length >= this._asyncFrameQueue[frameIx][1]) {
-                //frame is complete
-                this._asyncFrameComplete(frameIx);
-            }
+        //the entry of this frame, or else the index at which it belongs
+        const queue = this._asyncFrameQueue;
+        let ix = 0;
+        while (ix < queue.length && queue[ix][0] < rect.frame_id) {
+            ix++;
+        }
+        let frame = queue[ix];
+        if (frame && frame[0] == rect.frame_id) {
+            frame[2].push(rect);
         } else {
-            if (rect.frame_id < oldestFrameID) {
-                //rect is older than any frame in the queue, drop it
-                this._droppedRects++;
-                switch (rect.type) {
-                    case 'video_frame':
-                        rect.frame?.close();
-                        break;
-                    case 'flip':
-                        this._lateFlipRect++;
-                        break;
+            if (queue.length >= this._maxAsyncFrameQueue) {
+                if (ix === 0) {
+                    //every queued frame is newer, so drop this rect; the queue stays full until its oldest frame
+                    //is dequeued, and from then on the frame id check drops the other rects of this frame
+                    this._dropLateRect(rect);
+                    return;
                 }
-
-                return;
-            } else if (rect.frame_id > newestFrameID) {
-                //frame is newer than any frame in the queue, drop old frame
-                if (this._asyncFrameQueue[0][3] == true) {
+                //make room by removing the oldest frame
+                const skipped = Math.max(rect.frame_id - queue[queue.length - 1][0] - 1, 0);
+                if (queue[0][3]) {
                     Log.Warn("Forced frame to canvas");
                     this._pushAsyncFrame(true);
-                    this._droppedFrames += (rect.frame_id - (newestFrameID + 1));
+                    this._droppedFrames += skipped;
                     this._forcedFrameCnt++;
                 } else {
                     Log.Warn("Old frame dropped");
-
-                    // Close VideoFrames in the frame being dropped
-                    const droppedFrame = this._asyncFrameQueue[0];
-                    for (const droppedRect of droppedFrame[2]) {
-                        if (droppedRect.type === 'video_frame') {
-                            droppedRect.frame?.close();
-                        }
-                    }
-
-                    this._asyncFrameQueue.shift();
-                    this._droppedFrames += (rect.frame_id - newestFrameID);
+                    this._dropOldestFrame();
+                    this._droppedFrames += skipped + 1;
                 }
-
-                let rect_cnt = ((rect.type == "flip") ? rect.rect_cnt : 0);
-                this._asyncFrameQueue.push([ rect.frame_id, rect_cnt, [ rect ], (rect_cnt == 1), 0, 0 ]);
-
+                ix--;
+            }
+            frame = [ rect.frame_id, 0, [ rect ], false, 0, 0 ];
+            //usually the newest frame, and push() costs less than splice()
+            if (ix === queue.length) {
+                queue.push(frame);
+            } else {
+                queue.splice(ix, 0, frame);
             }
         }
+
+        if (rect.type == "flip") {
+            //flip rect contains the rect count for the frame
+            if (frame[1] !== 0) {
+                Log.Warn("Redundant flip rect, current rect_cnt: " + frame[1] + ", new rect_cnt: " + rect.rect_cnt );
+            }
+            frame[1] += rect.rect_cnt;
+            if (rect.rect_cnt == 0) {
+                Log.Warn("Invalid rect count");
+            }
+        }
+
+        if (frame[1] > 0 && frame[2].length >= frame[1]) {
+            //frame is complete
+            this._asyncFrameComplete(frame);
+        }
+    }
+
+    _dropLateRect(rect) {
+        this._droppedRects++;
+        this._closeRectImage(rect);
+        if (rect.type === 'flip') {
+            this._lateFlipRect++;
+        }
+    }
+
+    _dropOldestFrame() {
+        const droppedFrame = this._asyncFrameQueue.shift();
+        for (const droppedRect of droppedFrame[2]) {
+            this._closeRectImage(droppedRect);
+        }
+        this._largestDequeuedFrameID = droppedFrame[0];
     }
 
     /*
     Clear the async frame buffer
     */
     _clearAsyncQueue() {
-        // Close all VideoFrames in the queue before dropping
         for (const frame of this._asyncFrameQueue) {
             for (const rect of frame[2])
-                if (rect.type === 'video_frame')
-                    rect.frame?.close();
+                this._closeRectImage(rect);
         }
 
         this._droppedFrames += this._asyncFrameQueue.length;
 
         this._asyncFrameQueue = [];
-        for (let i=0; i<this._maxAsyncFrameQueue; i++) {
-            this._asyncFrameQueue.push([ 0, 0, [], false, 0, 0 ])
+        //TCP and UDP number their frames separately
+        this._largestDequeuedFrameID = 0;
+    }
+
+    /*
+    Close the VideoFrame or ImageBitmap of a rect when it leaves a frame queue; draw methods leave it open
+    */
+    _closeRectImage(rect) {
+        switch (rect.type) {
+            case 'vid':
+            case 'bitmap':
+                rect.img.close();
+                break;
+            case 'video_frame':
+                rect.frame?.close();
+                break;
         }
     }
 
@@ -1298,26 +1308,26 @@ export default class Display {
     Pre-processing required before displaying a finished frame
     If marked force, unloaded images will be skipped and the frame will be marked complete and ready for rendering
     */
-    _asyncFrameComplete(frameIx, force=false) {
-        if (frameIx >= this._asyncFrameQueue.length) {
+    _asyncFrameComplete(frame, force=false) {
+        if (!this._asyncFrameQueue.includes(frame)) {
             return;
         }
 
-        let currentFrameRectIx = this._asyncFrameQueue[frameIx][4];
+        let currentFrameRectIx = frame[4];
 
         if (force) {
-            if (this._asyncFrameQueue[frameIx][1] == 0) {
+            if (frame[1] == 0) {
                 this._missingFlipRect++; //at minimum the flip rect is missing
-            } else if (this._asyncFrameQueue[frameIx][1] !== this._asyncFrameQueue[frameIx][2].length) {
-                this._droppedRects += (this._asyncFrameQueue[frameIx][1] - this._asyncFrameQueue[frameIx][2].length);
-                if (this._asyncFrameQueue[frameIx][2].length > this._asyncFrameQueue[frameIx][1]) {
+            } else if (frame[1] !== frame[2].length) {
+                this._droppedRects += (frame[1] - frame[2].length);
+                if (frame[2].length > frame[1]) {
                     Log.Warn("Frame has more rects than the reported rect_cnt.");
                 }
             }
-            while (currentFrameRectIx < this._asyncFrameQueue[frameIx][2].length) {
-                if (this._asyncFrameQueue[frameIx][2][currentFrameRectIx].type == 'img') {
-                    if (this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img && !this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img.complete) {
-                        this._asyncFrameQueue[frameIx][2][currentFrameRectIx].type = 'skip';
+            while (currentFrameRectIx < frame[2].length) {
+                if (frame[2][currentFrameRectIx].type == 'img') {
+                    if (frame[2][currentFrameRectIx].img && !frame[2][currentFrameRectIx].img.complete) {
+                        frame[2][currentFrameRectIx].type = 'skip';
                         this._droppedRects++;
                     }
                 }
@@ -1325,20 +1335,20 @@ export default class Display {
                 currentFrameRectIx++;
             }
         } else {
-            while (currentFrameRectIx < this._asyncFrameQueue[frameIx][2].length) {
-                if (this._asyncFrameQueue[frameIx][2][currentFrameRectIx].type == 'img' && !this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img.complete) {
-                    this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img.addEventListener('load', () => { this._asyncFrameComplete(frameIx); });
-                    this._asyncFrameQueue[frameIx][4] = currentFrameRectIx;
+            while (currentFrameRectIx < frame[2].length) {
+                if (frame[2][currentFrameRectIx].type == 'img' && !frame[2][currentFrameRectIx].img.complete) {
+                    frame[2][currentFrameRectIx].img.addEventListener('load', () => { this._asyncFrameComplete(frame); });
+                    frame[4] = currentFrameRectIx;
                     return;
                 }
 
                 currentFrameRectIx++;
             }
         }
-        this._asyncFrameQueue[frameIx][4] = currentFrameRectIx;
-        this._asyncFrameQueue[frameIx][3] = true;
+        frame[4] = currentFrameRectIx;
+        frame[3] = true;
 
-        if (force && frameIx == 0) {
+        if (force && frame === this._asyncFrameQueue[0]) {
             this._pushAsyncFrame(true);
         } else {
             window.requestAnimationFrame( () => { this._pushAsyncFrame(); });
@@ -1352,14 +1362,16 @@ export default class Display {
         // Record frame-to-frame interval
         perfLogger.recordFrameInterval();
 
+        if (this._asyncFrameQueue.length === 0) {
+            return;
+        }
+
         if (this._asyncFrameQueue[0][3] || force) {
             const frameStart = perfLogger.start('frameProcessing');
 
             let frame = this._asyncFrameQueue[0][2];
             let frameId = this._asyncFrameQueue.shift()[0];
-            if (this._asyncFrameQueue.length < this._maxAsyncFrameQueue) {
-                this._asyncFrameQueue.push([ 0, 0, [], false, 0, 0 ]);
-            }
+            this._largestDequeuedFrameID = frameId;
 
             let secondaryScreenRects = 0;
             let primaryScreenRects = 0;
@@ -1385,16 +1397,12 @@ export default class Display {
                                 this.blitQoi(screenLocation.x, screenLocation.y, a.width, a.height, a.data, 0, a.frame_id, true);
                                 break;
                             case 'img':
+                            case 'vid':
+                            case 'bitmap':
                                 this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
                                 break;
                             case 'clear':
                                 this.clearRect(screenLocation.x, screenLocation.y, a.width, a.height, 0, a.frame_id, true);
-                                break;
-                            case 'vid':
-                                this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
-                                break;
-                            case 'bitmap':
-                                this.drawImage(a.img, screenLocation.x, screenLocation.y, a.width, a.height);
                                 break;
                             case 'video_frame':
                                 this.drawVideoFrame(a.frame, screenLocation.x, screenLocation.y, a.width, a.height);
@@ -1414,31 +1422,13 @@ export default class Display {
                             case 'flip':
                                 break;
                             case 'vid':
-                                secondaryScreenRects++;
-                                if (this._screens[screenLocation.screenIndex]?.channel) {
-                                    this._screens[screenLocation.screenIndex].channel.postMessage({
-                                        eventType: 'rect',
-                                        rect: {
-                                           'type': 'vid',
-                                           'img': a.img,
-                                           'x': a.x,
-                                           'y': a.y,
-                                           'width': a.width,
-                                           'height': a.height,
-                                           'frame_id': a.frame_id,
-                                           'screenLocations': a.screenLocations
-                                        },
-                                        screenLocationIndex: sI
-                                    }, [a.img]);
-                                }
-                                break;
                             case 'bitmap':
                                 secondaryScreenRects++;
                                 if (this._screens[screenLocation.screenIndex].channel) {
                                     this._screens[screenLocation.screenIndex].channel.postMessage({
                                         eventType: 'rect',
                                         rect: {
-                                           'type': 'bitmap',
+                                           'type': a.type,
                                            'img': a.img,
                                            'x': a.x,
                                            'y': a.y,
@@ -1448,7 +1438,7 @@ export default class Display {
                                            'screenLocations': a.screenLocations
                                         },
                                         screenLocationIndex: sI
-                                    }, [a.img]);
+                                    });
                                 }
                                 break;
                             case 'blit':
@@ -1469,49 +1459,15 @@ export default class Display {
                                            'screenLocations': a.screenLocations
                                         },
                                         screenLocationIndex: sI
-                                    }, [buf]);
+                                    });
                                 }
                                 break;
                             case 'video_frame':
                                 secondaryScreenRects++;
-                                if (this._screens[screenLocation.screenIndex]?.encodedFramePort) {
-                                    // Encoded bytes already forwarded by KasmVideoDecoder; release frame.
-                                    if (a.frame)
-                                        a.frame.close();
-                                } else if (a.frame.format !== null) {
-                                    if (this._screens[screenLocation.screenIndex]?.channel) {
-                                        Log.Debug(`[PRIMARY] Converting VideoFrame to ImageBitmap`);
-                                        const bitmapStart = perfLogger.start('imageBitmapCreate');
-                                        createImageBitmap(a.frame).then((bitmap) => {
-                                            perfLogger.end('imageBitmapCreate', bitmapStart);
-
-                                            const broadcastStart = perfLogger.start('broadcastChannelSend');
-                                            this._screens[screenLocation.screenIndex].channel.postMessage({
-                                                eventType: 'rect',
-                                                rect: {
-                                                    type: 'bitmap',
-                                                    img: bitmap,
-                                                    x: a.x,
-                                                    y: a.y,
-                                                    width: a.width,
-                                                    height: a.height,
-                                                    frame_id: a.frame_id,
-                                                    screenLocations: a.screenLocations
-                                                },
-                                                screenLocationIndex: sI
-                                            }, [bitmap]); // Transfer ImageBitmap
-                                            perfLogger.end('broadcastChannelSend', broadcastStart);
-
-                                            Log.Debug(`[PRIMARY] ImageBitmap posted to secondary screen ${screenLocation.screenIndex}`);
-                                        }).catch((error) => {
-                                            perfLogger.end('imageBitmapCreate', bitmapStart);
-                                            Log.Error(`[PRIMARY] Failed to create ImageBitmap from VideoFrame: ${error.message}`);
-                                        });
-                                    } else {
-                                        a.frame.close();
-                                    }
-                                } else {
-                                    Log.Warn(`[PRIMARY] VideoFrame has null format, skipping`);
+                                //a secondary display with an encodedFramePort decodes the stream itself, and rects
+                                //for it hold no frame
+                                if (a.frame && !this._screens[screenLocation.screenIndex].encodedFramePort) {
+                                    this._postVideoFrame(a, this._screens[screenLocation.screenIndex], sI);
                                 }
                                 break;
                             case 'img':
@@ -1556,6 +1512,8 @@ export default class Display {
                         }
                     }
                 }
+                //each screen location has drawn the VideoFrame or ImageBitmap of the rect, or copied it, by now
+                this._closeRectImage(a);
             }
 
             if (this._renderer?.enableCanvasBuffer) {
@@ -1599,7 +1557,7 @@ export default class Display {
             this.onFrameRendered();
 
             // if there is more data in queue, then keep checking
-            if (this._asyncFrameQueue[0][2].length > 0) {
+            if (this._asyncFrameQueue.length > 0) {
                 window.requestAnimationFrame( () => { this._pushAsyncFrame(); });
             }
         } else if (this._asyncFrameQueue[0][1] > 0 && this._asyncFrameQueue[0][1] === this._asyncFrameQueue[0][2].length) {
@@ -1610,6 +1568,49 @@ export default class Display {
                 this._pushAsyncFrame(true);
             }
         }
+    }
+
+    /*
+    Send a VideoFrame that the primary display decoded for a secondary display to it as an ImageBitmap
+    */
+    _postVideoFrame(rect, screen, screenLocationIndex) {
+        if (rect.frame.format === null) {
+            Log.Warn(`[PRIMARY] VideoFrame has null format, skipping`);
+            return;
+        }
+        if (!screen.channel) {
+            return;
+        }
+        Log.Debug(`[PRIMARY] Converting VideoFrame to ImageBitmap`);
+        const bitmapStart = perfLogger.start('imageBitmapCreate');
+        // createImageBitmap() copies the frame before it returns, so the caller can close the frame at once
+        createImageBitmap(rect.frame).then((bitmap) => {
+            perfLogger.end('imageBitmapCreate', bitmapStart);
+
+            const broadcastStart = perfLogger.start('broadcastChannelSend');
+            screen.channel.postMessage({
+                eventType: 'rect',
+                rect: {
+                    type: 'bitmap',
+                    img: bitmap,
+                    x: rect.x,
+                    y: rect.y,
+                    width: rect.width,
+                    height: rect.height,
+                    frame_id: rect.frame_id,
+                    screenLocations: rect.screenLocations
+                },
+                screenLocationIndex
+            });
+            perfLogger.end('broadcastChannelSend', broadcastStart);
+            // BroadcastChannel posts a copy of the ImageBitmap
+            bitmap.close();
+
+            Log.Debug(`[PRIMARY] ImageBitmap posted to secondary screen ${screen.screenIndex}`);
+        }).catch((error) => {
+            perfLogger.end('imageBitmapCreate', bitmapStart);
+            Log.Error(`[PRIMARY] Failed to create ImageBitmap from VideoFrame: ${error.message}`);
+        });
     }
 
     _configureLocalDecoder(codec, width, height, streamMode) {
@@ -1643,16 +1644,14 @@ export default class Display {
                     const meta = this._localDecoderMeta.get(frame.timestamp);
                     this._localDecoderMeta.delete(frame.timestamp);
                     if (meta) {
-                        // drawVideoFrame delegates to the renderer which closes the frame internally.
                         this.drawVideoFrame(frame, meta.x, meta.y, meta.width, meta.height);
                         // Flush back-buffer to visible canvas if double-buffering is active.
                         if (this._renderer?.enableCanvasBuffer) {
                             this._renderer._writeCtxBuffer();
                             this._renderer.drawTransparentOverlayImg();
                         }
-                    } else {
-                        frame.close();
                     }
+                    frame.close();
                 },
                 error: (err) => {
                     Log.Error('Secondary VideoDecoder error:', err);

@@ -53,6 +53,7 @@ export default class Websock {
 
         this._rQi = 0;           // Receive queue index
         this._rQlen = 0;         // Next write position in the receive queue
+        this._rxBytes = 0;       // Total bytes received over the websocket
         this._rQbufferSize = 1024 * 1024 * 4; // Receive queue buffer size (4 MiB)
         // called in init: this._rQ = new Uint8Array(this._rQbufferSize);
         this._rQ = null; // Receive queue
@@ -88,6 +89,10 @@ export default class Websock {
     }
 
     // Receive Queue
+    get rxBytes() {
+        return this._rxBytes;
+    }
+
     get rQlen() {
         return this._rQlen - this._rQi;
     }
@@ -335,6 +340,7 @@ export default class Websock {
     }
 
     _recvMessage(e) {
+        this._rxBytes += e.data.byteLength;
         this._DecodeMessage(e.data);
         if (this.rQlen > 0) {
             this._eventHandlers.message();

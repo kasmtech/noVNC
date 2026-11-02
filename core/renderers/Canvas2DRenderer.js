@@ -245,6 +245,11 @@ export class Canvas2DRenderer {
         videoFrame.close();
     }
 
+    // Copy an area of another canvas to the same area of this one
+    copyCanvas(canvas, x, y, width, height) {
+        this._targetCtx.drawImage(canvas, x, y, width, height, x, y, width, height);
+    }
+
     fillRect(x, y, width, height, color) {
         this._setFillColor(color);
         this._targetCtx.fillRect(x, y, width, height);

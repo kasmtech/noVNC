@@ -54,6 +54,8 @@ export default class Display {
         this._renderMs = 0;
         this._backbuffer = document.createElement('canvas');
         this._target = target;
+        //the element that holds the screen, whose size is the space available to it
+        this._container = target.parentNode;
 
         const canvas2DRenderer = new Canvas2DRenderer(target, this._backbuffer);
 
@@ -83,19 +85,26 @@ export default class Display {
                 webglCanvas.width = 0;
                 webglCanvas.height = 0;
 
-                // Setup WebGL canvas to overlay the 2D canvas
+                // The target canvas and the canvases drawn over it share one box, which takes the
+                // place of the target canvas in the layout, so that they have the same size and position
+                const layers = document.createElement('div');
+                layers.style.position = 'relative';
+                layers.style.margin = target.style.margin;
+                target.style.margin = '0';
+                target.style.display = 'block';
+                this._container.insertBefore(layers, target);
+                layers.appendChild(target);
+
                 webglCanvas.style.position = 'absolute';
                 webglCanvas.style.left = '0';
                 webglCanvas.style.top = '0';
+                webglCanvas.style.width = '100%';
+                webglCanvas.style.height = '100%';
                 webglCanvas.style.pointerEvents = 'none';
                 webglCanvas.style.zIndex = '1';
-                webglCanvas.style.width = '0px';
-                webglCanvas.style.height = '0px';
-
-                // Add WebGL canvas to DOM as a sibling of the target canvas
-                if (target.parentNode) {
-                    target.parentNode.appendChild(webglCanvas);
-                }
+                // shown once it has drawn a video frame
+                webglCanvas.style.visibility = 'hidden';
+                layers.appendChild(webglCanvas);
 
                 this._renderer = new WebGLRenderer(canvas2DRenderer, gl, webglCanvas);
                 Log.Info("WebGL renderer initialized.");
@@ -162,8 +171,8 @@ export default class Display {
             relativePositionX: 0, //offset relative to primary monitor, always 0 for primary
             relativePositionY: 0, //offset relative to primary monitor, always 0 for primary
             pixelRatio: window.devicePixelRatio,
-            containerHeight: this._target.parentNode.offsetHeight,
-            containerWidth: this._target.parentNode.offsetWidth,
+            containerHeight: this._container.offsetHeight,
+            containerWidth: this._container.offsetWidth,
             channel: null,
             x2: 0,
             y2: 0
@@ -300,8 +309,8 @@ export default class Display {
         let i = 0;
 
 
-        //getting parent node size with sub-pixel precision
-        let parentNodeSize = this._target.parentNode.getBoundingClientRect();
+        //getting container size with sub-pixel precision
+        let parentNodeSize = this._container.getBoundingClientRect();
         //recalculate primary display container size
         this._screens[i].containerHeight = Math.floor(parentNodeSize.height / 2) * 2;
         this._screens[i].containerWidth = Math.floor(parentNodeSize.width / 2) * 2;

@@ -28,34 +28,27 @@ export class WebGLRenderer {
         this._lastWidth = 0;
         this._lastHeight = 0;
         this._isWebGL2 = gl instanceof WebGL2RenderingContext;
+        // Whether the WebGL canvas is visible, which it is only while it holds the latest video frame
+        // and nothing has been drawn on the 2D canvas since
+        this._webglShown = false;
+        // The area of the latest video frame, in canvas pixels
+        this._lastVideoRect = null;
 
         // Dedicated watermark canvas above WebGL canvas (z-index: 2) so the
-        // watermark is always visible regardless of video content on the 2D canvas
+        // watermark is always visible regardless of video content on the 2D canvas.
+        // Like the WebGL canvas, it fills the box that it shares with the 2D canvas.
         this._watermarkCanvas = document.createElement('canvas');
         this._watermarkCanvas.width = 0;
         this._watermarkCanvas.height = 0;
         this._watermarkCanvas.style.position = 'absolute';
         this._watermarkCanvas.style.left = '0';
         this._watermarkCanvas.style.top = '0';
+        this._watermarkCanvas.style.width = '100%';
+        this._watermarkCanvas.style.height = '100%';
         this._watermarkCanvas.style.pointerEvents = 'none';
         this._watermarkCanvas.style.zIndex = '2';
-        this._watermarkCanvas.style.width = '0px';
-        this._watermarkCanvas.style.height = '0px';
         this._watermarkCtx = this._watermarkCanvas.getContext('2d');
-        if (webglCanvas.parentNode) {
-            // The watermark canvas is absolutely positioned; it must be contained
-            // by a positioned ancestor to align with the WebGL canvas. If the
-            // direct parent is position:static, warn so the DOM can be fixed.
-            const parent = webglCanvas.parentNode;
-            if (parent instanceof Element) {
-                const parentPos = window.getComputedStyle(parent).position;
-                if (parentPos === 'static') {
-                    Log.Warn('WebGLRenderer: parent element uses position:static; ' +
-                        'watermark overlay may be misaligned. Expected relative/absolute/fixed.');
-                }
-            }
-            parent.appendChild(this._watermarkCanvas);
-        }
+        webglCanvas.parentNode.appendChild(this._watermarkCanvas);
 
         this._logWebGLInfo(gl);
         this._initShaders(gl);
@@ -217,16 +210,6 @@ export class WebGLRenderer {
             this._watermarkCanvas.width = fbWidth;
             this._watermarkCanvas.height = fbHeight;
         }
-        // Keep CSS size in sync with the target canvas on every draw so the
-        // overlay is visible even if drawTransparentOverlayImg runs before any
-        // resize/rescale/viewportChangeSize has had a chance to sync styles.
-        const targetStyle = target.style;
-        if (this._watermarkCanvas.style.width !== targetStyle.width) {
-            this._watermarkCanvas.style.width = targetStyle.width;
-        }
-        if (this._watermarkCanvas.style.height !== targetStyle.height) {
-            this._watermarkCanvas.style.height = targetStyle.height;
-        }
         this._watermarkCtx.clearRect(0, 0, fbWidth, fbHeight);
         if (img.width !== rect.width || img.height !== rect.height) {
             this._watermarkCtx.drawImage(img, rect.x, rect.y, rect.width, rect.height);
@@ -236,18 +219,22 @@ export class WebGLRenderer {
     }
 
     viewportChangeSize(width, height) {
-        const result = this._canvas2D.viewportChangeSize(width, height);
-        const targetStyle = this._canvas2D._target.style;
-        this._watermarkCanvas.style.width = targetStyle.width;
-        this._watermarkCanvas.style.height = targetStyle.height;
-        return result;
+        const changed = this._canvas2D.viewportChangeSize(width, height);
+        if (changed) {
+            // Until the next video frame, show the picture as the 2D canvas keeps it across the
+            // size change, not the WebGL canvas stretched to the new size
+            this._switchTo2DCanvas();
+        }
+        return changed;
     }
 
     rescale(factor, width, height, serverWidth, serverHeight, viewPortWidth) {
         this._canvas2D.rescale(factor, width, height, serverWidth, serverHeight, viewPortWidth);
-        const targetStyle = this._canvas2D._target.style;
-        this._watermarkCanvas.style.width = targetStyle.width;
-        this._watermarkCanvas.style.height = targetStyle.height;
+        // The canvases above the 2D canvas take its size from the box they share, but not the
+        // smoothing it is scaled with
+        const imageRendering = this._canvas2D._target.style.imageRendering;
+        this._webglCanvas.style.imageRendering = imageRendering;
+        this._watermarkCanvas.style.imageRendering = imageRendering;
     }
 
     resize(width, height, screens) {
@@ -255,29 +242,41 @@ export class WebGLRenderer {
     }
 
     blitImage(x, y, width, height, arr, offset) {
+        this._switchTo2DCanvas();
         this._canvas2D.blitImage(x, y, width, height, arr, offset);
     }
 
     blitQoi(arr, x, y) {
+        this._switchTo2DCanvas();
         this._canvas2D.blitQoi(arr, x, y);
     }
 
     clearRect(x, y, width, height) {
+        this._switchTo2DCanvas();
         this._canvas2D.clearRect(x, y, width, height);
     }
 
     copyImage(oldX, oldY, newX, newY, w, h) {
+        this._switchTo2DCanvas();
         this._canvas2D.copyImage(oldX, oldY, newX, newY, w, h);
     }
 
     drawImage(img, x, y, w, h) {
+        this._switchTo2DCanvas();
         this._canvas2D.drawImage(img, x, y, w, h);
     }
 
     drawVideoFrame(frame, x, y, w, h) {
+        const gl = this.gl;
+        if (gl.isContextLost()) {
+            // Nothing drawn with a lost context is shown, so draw on the 2D canvas instead
+            this._switchTo2DCanvas();
+            this._canvas2D.drawVideoFrame(frame, x, y, w, h);
+            return;
+        }
+
         const renderStart = perfLogger.start('webglRender');
 
-        const gl = this.gl;
         const fbWidth = this._canvas2D._target.width;
         const fbHeight = this._canvas2D._target.height;
 
@@ -289,29 +288,56 @@ export class WebGLRenderer {
         // Upload frame to texture (GPU operation)
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
 
-        // Set viewport to video region (Y-flip for WebGL bottom-left origin)
-        const glY = fbHeight - y - h;
-        gl.viewport(x, glY, w, h);
-
-        // Render quad
-        gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+        this._lastVideoRect = { x, y, w, h };
+        this._drawTexture();
 
         // Close frame to release resources
         frame.close();
 
+        if (!this._webglShown) {
+            this._webglCanvas.style.visibility = 'visible';
+            this._webglShown = true;
+        }
+
         perfLogger.end('webglRender', renderStart);
+    }
+
+    _drawTexture() {
+        const gl = this.gl;
+        const { x, y, w, h } = this._lastVideoRect;
+
+        // Set viewport to video region (Y-flip for WebGL bottom-left origin)
+        const glY = this._lastHeight - y - h;
+        gl.viewport(x, glY, w, h);
+
+        // Render quad
+        gl.drawArrays(gl.TRIANGLE_FAN, 0, 4);
+    }
+
+    // Before anything is drawn on the 2D canvas, the latest video frame is copied there from the
+    // WebGL canvas and the WebGL canvas is hidden, so that whatever is drawn next is not covered
+    _switchTo2DCanvas() {
+        if (!this._webglShown) {
+            return;
+        }
+
+        if (!this.gl.isContextLost()) {
+            // The drawing buffer is cleared after it has been shown, but the texture still holds the frame
+            this._drawTexture();
+            const { x, y, w, h } = this._lastVideoRect;
+            this._canvas2D.copyCanvas(this._webglCanvas, x, y, w, h);
+            if (this._canvas2D.enableCanvasBuffer) {
+                this._canvas2D._writeCtxBuffer();
+            }
+        }
+
+        this._webglCanvas.style.visibility = 'hidden';
+        this._webglShown = false;
     }
 
     _resizeWebGLCanvas(fbWidth, fbHeight) {
         this._webglCanvas.width = fbWidth;
         this._webglCanvas.height = fbHeight;
-
-        // Match style dimensions to target canvas
-        const targetStyle = this._canvas2D._target.style;
-        this._webglCanvas.style.width = targetStyle.width;
-        this._webglCanvas.style.height = targetStyle.height;
-        this._watermarkCanvas.style.width = targetStyle.width;
-        this._watermarkCanvas.style.height = targetStyle.height;
 
         // Update viewport
         this.gl.viewport(0, 0, fbWidth, fbHeight);
@@ -322,6 +348,7 @@ export class WebGLRenderer {
     }
 
     fillRect(x, y, width, height, color) {
+        this._switchTo2DCanvas();
         this._canvas2D.fillRect(x, y, width, height, color);
     }
 

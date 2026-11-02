@@ -778,6 +778,18 @@ export default class RFB extends EventTargetMixin {
 
     get statsFps() { return this._display.fps; }
     get statsDroppedFps() { return this._display.droppedFps; }
+    // WebRTC RTP media bytes are not counted (no counters in the WebRTC
+    // controller), so this reports TCP receive bytes only.
+    get statsRxBytes() {
+        return this.statsTcpRxBytes;
+    }
+    get statsTcpRxBytes() {
+        return this._sock ? this._sock.rxBytes : 0;
+    }
+    // True when the stream is not carried over a WebRTC session.
+    get statsTcpTransit() {
+        return !this._webrtc._webrtcSessionActive;
+    }
 
     get enableWebRTC() { return this._webrtc._useUdp; }
     set enableWebRTC(value) {

@@ -2352,6 +2352,36 @@ describe('Remote Frame Buffer Protocol Client', function () {
             });
         });
 
+        describe('Unix Relay Handling', function () {
+            function unixRelayMsg(name, payload) {
+                const data = [183];
+                push8(data, name.length);
+                for (let i = 0; i < name.length; i++) { data.push(name.charCodeAt(i)); }
+                push32(data, payload.length);
+                return data.concat(payload);
+            }
+
+            it('should process every relay message received in one frame', function () {
+                const spy = sinon.spy();
+                client._unixRelays = { printer: spy };
+                const data = unixRelayMsg('printer', [0, 0, 0, 0, 0, 0, 0, 4])
+                    .concat(unixRelayMsg('printer', [0, 0, 0, 1, 0, 0, 0, 1, 42]))
+                    .concat(unixRelayMsg('printer', [0, 0, 0, 2]));
+                client._sock._websocket._receiveData(new Uint8Array(data));
+                expect(spy).to.have.been.calledThrice;
+                expect(Array.from(spy.args[2][0])).to.deep.equal([0, 0, 0, 2]);
+                expect(client._sock.rQlen).to.equal(0);
+            });
+
+            it('should process messages that follow a relay subscription reply', function () {
+                const spy = sinon.spy();
+                client.addEventListener("bell", spy);
+                const data = [182, 1, 2, 'O'.charCodeAt(0), 'k'.charCodeAt(0), 2];
+                client._sock._websocket._receiveData(new Uint8Array(data));
+                expect(spy).to.have.been.calledOnce;
+            });
+        });
+
         describe('Normal Clipboard Handling Receive', function () {
             it('should fire the clipboard callback with the retrieved text on ServerCutText', function () {
                 const expectedStr = 'cheese!';

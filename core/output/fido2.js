@@ -88,9 +88,7 @@ export default (rfb) => {
 
         // Ceremonies can wait for a PIN or touch, so status probes stay out of their way.
         const isCeremony = command === REQUEST_MAKE_CREDENTIAL || command === REQUEST_GET_ASSERTION;
-        if (isCeremony) {
-            statusMonitor.beginActivity();
-        }
+        const activity = isCeremony ? statusMonitor.beginActivity() : null;
         let failed = false;
 
         try {
@@ -118,8 +116,8 @@ export default (rfb) => {
             Log.Error(`fido2: device[${deviceId}]: ${error.message}`);
             sendFido2Response(deviceId, RESPONSE_ERROR, new TextEncoder().encode(error.message));
         } finally {
-            if (isCeremony) {
-                statusMonitor.endActivity(failed);
+            if (activity) {
+                statusMonitor.endActivity(failed, activity);
             }
         }
     });

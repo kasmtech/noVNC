@@ -177,9 +177,8 @@ class PassthroughStatusMonitor {
         this._stopped = false;
 
         this._probing = false;
-        this._reprobe = false;
-        this._activeCount = 0;
-        this._activityStartedAt = 0;   // when the count last went from 0 to above 0
+        this._reprobeKind = null;      // "state" or "failure": a probe to run after this one
+        this._activity = new Set();    // one entry per ceremony or agent exchange in flight
         this._lastActivityEndedAt = 0;
         this._disabledPosted = {};
 
@@ -229,17 +228,31 @@ class PassthroughStatusMonitor {
         document.removeEventListener("visibilitychange", this._onVisibilityChange);
     }
 
+    get _activeCount() {
+        return this._activity.size;
+    }
+
     // A ceremony or agent exchange is starting. No probe runs while any is in flight.
+    // Returns a token to pass to endActivity(). Each one is timed on its own, so a lost
+    // reply cannot cut short a newer one.
     beginActivity() {
-        if (this._activeCount === 0) {
-            this._activityStartedAt = Date.now();
-        }
-        this._activeCount++;
+        const token = { startedAt: Date.now() };
+        this._activity.add(token);
+        return token;
     }
 
     // It finished. A failure triggers one immediate probe so the panel explains why.
-    endActivity(failed = false) {
-        this._activeCount = Math.max(0, this._activeCount - 1);
+    // A token that the watchdog already dropped is ignored.
+    endActivity(failed = false, token = null) {
+        if (token) {
+            this._activity.delete(token);
+        } else {
+            // Callers without a token end the oldest one.
+            const oldest = this._activity.values().next();
+            if (!oldest.done) {
+                this._activity.delete(oldest.value);
+            }
+        }
         this._lastActivityEndedAt = Date.now();
         if (failed) {
             this._requestProbe("failure");
@@ -316,9 +329,12 @@ class PassthroughStatusMonitor {
         }
 
         if (this._probing) {
-            // A state change while probing may add a feature that this probe skipped.
-            if (kind === "state") {
-                this._reprobe = true;
+            // A state change while probing may add a feature that this probe skipped, and
+            // a failure must still be explained once this probe is done. A failure wins.
+            if (kind === "state" || kind === "failure") {
+                if (this._reprobeKind !== "failure") {
+                    this._reprobeKind = kind;
+                }
             }
             return;
         }
@@ -341,14 +357,17 @@ class PassthroughStatusMonitor {
         if (!this._enabled || this._stopped || this._probing || document.hidden) {
             return;
         }
-        if (this._activeCount > 0) {
-            // Ceremonies wait for a PIN or touch and have no timeout, so a call that never
-            // answers must not freeze status forever. Treat old activity as stale.
-            if (Date.now() - this._activityStartedAt < ACTIVITY_STALE_MS) {
-                return;
+        // Ceremonies wait for a PIN or touch and have no timeout, so a call that never
+        // answers must not freeze status forever. Drop activity that is too old.
+        const now = Date.now();
+        for (const activity of this._activity) {
+            if (now - activity.startedAt >= ACTIVITY_STALE_MS) {
+                Log.Warn("passthrough_status: in-flight activity is stale, ignoring it");
+                this._activity.delete(activity);
             }
-            Log.Warn("passthrough_status: in-flight activity is stale, resuming probes");
-            this._activeCount = 0;
+        }
+        if (this._activeCount > 0) {
+            return;
         }
         if (!ignoreQuietPeriod && Date.now() - this._lastActivityEndedAt < QUIET_PERIOD_MS) {
             return;
@@ -385,9 +404,10 @@ class PassthroughStatusMonitor {
             this._post(feature, BUILDERS[feature](isAllowed, probe));
         }
 
-        if (this._reprobe) {
-            this._reprobe = false;
-            this._requestProbe("state");
+        if (this._reprobeKind) {
+            const kind = this._reprobeKind;
+            this._reprobeKind = null;
+            this._requestProbe(kind);
         }
     }
 

@@ -14,6 +14,7 @@ import { encodeUTF8, decodeUTF8, uuidv4 } from './util/strings.js';
 import { hashUInt8Array } from './util/int.js';
 import { dragThreshold, supportsCursorURIs, isTouchDevice, isWindows, isMac, isIOS, isDesktop } from './util/browser.js';
 import { clientToElement } from './util/element.js';
+import { classifySubscribeReply } from './util/unix_relay.js';
 import { setCapture } from './util/events.js';
 import EventTargetMixin from './util/eventtarget.js';
 import Display from "./display.js";
@@ -1283,8 +1284,9 @@ export default class RFB extends EventTargetMixin {
 
     // Result of the server's subscribe reply for a relay:
     //   true  = subscribed
-    //   false = server answered "No such unix channel" (relay not registered)
-    //   null  = no reply yet, or the server did not say (old Xvnc, or no permissions)
+    //   false = the relay cannot be used: the server answered "No such unix channel"
+    //           (not registered) or "No permissions" (viewer without write access)
+    //   null  = no reply yet, or the server did not say (old Xvnc)
     getUnixRelayState(name) {
         const state = this._unixRelayStates[name];
         return state ? state.isAllowed : null;
@@ -4389,11 +4391,7 @@ export default class RFB extends EventTargetMixin {
 
         let isAllowed = null;
         if (name !== null) {
-            if (status) {
-                isAllowed = true;
-            } else if (message === "No such unix channel") {
-                isAllowed = false;
-            }
+            isAllowed = classifySubscribeReply(!!status, message);
 
             const pending = this._unixRelayPending.indexOf(name);
             if (pending !== -1) {

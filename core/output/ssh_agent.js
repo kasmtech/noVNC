@@ -103,7 +103,7 @@ export default (rfb) => {
         }
 
         // No status probe runs while an exchange is in flight or just finished.
-        statusMonitor.beginActivity();
+        const activity = statusMonitor.beginActivity();
         let failed = false;
 
         try {
@@ -119,7 +119,7 @@ export default (rfb) => {
             Log.Error(`ssh_agent: connection[${connectionId}]: ${error.message}`);
             sendSshAgentEvent(connectionId, EVENT_ERROR, new TextEncoder().encode(error.message));
         } finally {
-            statusMonitor.endActivity(failed);
+            statusMonitor.endActivity(failed, activity);
         }
     });
 

@@ -1,5 +1,6 @@
 import * as Log from "../util/logging";
 import {perfLogger} from "../util/performance-logger";
+import { placeOverCanvas, positionHost } from "../util/element.js";
 
 export class WebGLRenderer {
     static vertexShaderSource = `
@@ -42,19 +43,15 @@ export class WebGLRenderer {
         this._watermarkCanvas.style.width = '0px';
         this._watermarkCanvas.style.height = '0px';
         this._watermarkCtx = this._watermarkCanvas.getContext('2d');
-        if (webglCanvas.parentNode) {
-            // The watermark canvas is absolutely positioned; it must be contained
-            // by a positioned ancestor to align with the WebGL canvas. If the
-            // direct parent is position:static, warn so the DOM can be fixed.
-            const parent = webglCanvas.parentNode;
-            if (parent instanceof Element) {
-                const parentPos = window.getComputedStyle(parent).position;
-                if (parentPos === 'static') {
-                    Log.Warn('WebGLRenderer: parent element uses position:static; ' +
-                        'watermark overlay may be misaligned. Expected relative/absolute/fixed.');
-                }
-            }
-            parent.appendChild(this._watermarkCanvas);
+        const host = webglCanvas.parentNode;
+        if (host) {
+            // Both overlays are placed in canvas coordinates within the host,
+            // so the host has to be positioned (see _placeOverlays)
+            positionHost(host);
+            host.appendChild(this._watermarkCanvas);
+            this._overlayObserver = new ResizeObserver(() => this._placeOverlays());
+            this._overlayObserver.observe(host);
+            this._overlayObserver.observe(canvas2D._target);
         }
 
         this._logWebGLInfo(gl);
@@ -217,16 +214,9 @@ export class WebGLRenderer {
             this._watermarkCanvas.width = fbWidth;
             this._watermarkCanvas.height = fbHeight;
         }
-        // Keep CSS size in sync with the target canvas on every draw so the
-        // overlay is visible even if drawTransparentOverlayImg runs before any
-        // resize/rescale/viewportChangeSize has had a chance to sync styles.
-        const targetStyle = target.style;
-        if (this._watermarkCanvas.style.width !== targetStyle.width) {
-            this._watermarkCanvas.style.width = targetStyle.width;
-        }
-        if (this._watermarkCanvas.style.height !== targetStyle.height) {
-            this._watermarkCanvas.style.height = targetStyle.height;
-        }
+        // Keep the overlay on the target canvas on every draw so it is visible
+        // even if drawTransparentOverlayImg runs before any resize/rescale.
+        this._placeOverlays();
         this._watermarkCtx.clearRect(0, 0, fbWidth, fbHeight);
         if (img.width !== rect.width || img.height !== rect.height) {
             this._watermarkCtx.drawImage(img, rect.x, rect.y, rect.width, rect.height);
@@ -237,17 +227,22 @@ export class WebGLRenderer {
 
     viewportChangeSize(width, height) {
         const result = this._canvas2D.viewportChangeSize(width, height);
-        const targetStyle = this._canvas2D._target.style;
-        this._watermarkCanvas.style.width = targetStyle.width;
-        this._watermarkCanvas.style.height = targetStyle.height;
+        this._placeOverlays();
         return result;
     }
 
     rescale(factor, width, height, serverWidth, serverHeight, viewPortWidth) {
         this._canvas2D.rescale(factor, width, height, serverWidth, serverHeight, viewPortWidth);
-        const targetStyle = this._canvas2D._target.style;
-        this._watermarkCanvas.style.width = targetStyle.width;
-        this._watermarkCanvas.style.height = targetStyle.height;
+        this._placeOverlays();
+    }
+
+    // The WebGL frame canvas and the watermark canvas both cover the target
+    // canvas exactly, wherever it sits in the host (centered, panned, scrolled)
+    _placeOverlays() {
+        const target = this._canvas2D?._target;
+        if (!target || !target.parentNode) return;
+        placeOverCanvas(this._webglCanvas, target, target.parentNode);
+        placeOverCanvas(this._watermarkCanvas, target, target.parentNode);
     }
 
     resize(width, height, screens) {
@@ -306,12 +301,8 @@ export class WebGLRenderer {
         this._webglCanvas.width = fbWidth;
         this._webglCanvas.height = fbHeight;
 
-        // Match style dimensions to target canvas
-        const targetStyle = this._canvas2D._target.style;
-        this._webglCanvas.style.width = targetStyle.width;
-        this._webglCanvas.style.height = targetStyle.height;
-        this._watermarkCanvas.style.width = targetStyle.width;
-        this._watermarkCanvas.style.height = targetStyle.height;
+        // Match the target canvas box and position
+        this._placeOverlays();
 
         // Update viewport
         this.gl.viewport(0, 0, fbWidth, fbHeight);
@@ -331,6 +322,11 @@ export class WebGLRenderer {
 
     dispose() {
         const gl = this.gl;
+
+        if (this._overlayObserver) {
+            this._overlayObserver.disconnect();
+            this._overlayObserver = null;
+        }
 
         // Clean up WebGL resources
         if (this._texture) {

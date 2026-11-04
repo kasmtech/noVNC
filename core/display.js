@@ -51,6 +51,11 @@ export default class Display {
         this._fbWidth = 0;
         this._fbHeight = 0;
 
+        // Desktop rectangle of each server screen, by screen index, as
+        // reported in ExtendedDesktopSize. Unlike _screens[0], pan and clip
+        // don't change these.
+        this._serverScreenRects = [];
+
         this._renderMs = 0;
         this._backbuffer = document.createElement('canvas');
         this._target = target;
@@ -172,11 +177,13 @@ export default class Display {
         this._primaryChannel = null;
         this._portRelayWorker = null;      // SharedWorker instance (primary only)
         this._encodedFramePort = null;     // MessagePort from primary (secondary only)
+        this._webrtcRelayQueue = new Map();
         this._localDecoder = null;         // VideoDecoder on secondary
         this._localDecoderCodec = null;
         this._localDecoderW = 0;
         this._localDecoderH = 0;
         this._localDecoderStreamMode = null;
+        this._localDecoderNeedKey = false;
         this._localDecoderMeta = new Map(); // timestamp → {x, y, width, height, frameId}
         this._localDecoderTs = 0;
         this._rfb = rfb;
@@ -399,6 +406,14 @@ export default class Display {
         }
     }
 
+    applyServerScreenRects(rects) {
+        this._serverScreenRects = rects;
+    }
+
+    serverScreenRect(screenIndex) {
+        return this._serverScreenRects[screenIndex] || null;
+    }
+
     applyServerResolution(width, height, screenIndex) {
         const clear = width === 0 && height === 0;
         if (!clear && !(width > 0 && width <= MAX_FB_DIMENSION && height > 0 && height <= MAX_FB_DIMENSION)) {
@@ -449,6 +464,8 @@ export default class Display {
         else if (containerHeight === 0 || containerWidth === 0 || pixelRatio === 0) {
             Log.Warn("Invalid screen configuration.");
         }
+        // A new or reattached screen has not received the current watermark yet
+        this._lastTransparentRectId = "";
         let screenIdx = -1;
 
         //Does the screen already exist?
@@ -519,10 +536,20 @@ export default class Display {
                 this._portRelayWorker.port.start();
                 this._portRelayWorker.port.onmessage = (e) => {
                     if (e.data.type === 'port') {
-                        const screen = this._screens[e.data.screenIndex];
+                        const idx = e.data.screenIndex;
+                        const screen = this._screens[idx];
                         if (screen) {
                             screen.encodedFramePort = e.data.port;
-                            Log.Info(`[PRIMARY] encodedFramePort established for screen ${e.data.screenIndex}`);
+                            screen.encodedFramePort.onmessage = (ev) => {
+                                const w = ev.data && ev.data.webrtc;
+                                if (w && this._rfb && this._rfb._webrtc &&
+                                    typeof this._rfb._webrtc._forwardRelayedWebRTCToServer === 'function') {
+                                    this._rfb._webrtc._forwardRelayedWebRTCToServer(w.kind, w.screenId, w.payload);
+                                }
+                            };
+                            screen.encodedFramePort.start();
+                            Log.Info(`[PRIMARY] encodedFramePort established for screen ${idx}`);
+                            this._flushWebRTCRelayQueue(idx);
                         }
                     }
                 };
@@ -911,6 +938,13 @@ export default class Display {
         };
         this._processRectScreens(rect);
 
+        // The watermark covers the whole framebuffer, so offset it to the viewport
+        const primaryLocation = rect.screenLocations.find((loc) => loc.screenIndex === 0);
+        if (primaryLocation) {
+            rect.x = primaryLocation.x;
+            rect.y = primaryLocation.y;
+        }
+
         if (rect.inPrimary) {
             let imageBmpPromise = createImageBitmap(img);
             imageBmpPromise.then( function(bitmap) {
@@ -1065,11 +1099,14 @@ export default class Display {
                         rect.type = 'img';
                         break;
                     case 'transparent':
+                        rect.x = rect.screenLocations[0].x;
+                        rect.y = rect.screenLocations[0].y;
+                        this._renderer.transparentOverlayRect = rect;
                         let imageBmpPromise = createImageBitmap(rect.arr);
                         imageBmpPromise.then(function (img) {
                             this._renderer.transparentOverlayImg = img;
+                            this._renderer.drawTransparentOverlayImg();
                         }.bind(this));
-                        this._renderer.transparentOverlayRect = rect;
                         break;
                 }
                 this._syncFrameQueue.push(rect);
@@ -1088,7 +1125,15 @@ export default class Display {
             case 'registered':
                 if (!this._isPrimaryDisplay) {
                     const screenIndex = event.data.screenIndex;
+                    const prevScreenIndex = this._screens[0].screenIndex;
                     this._screens[0].screenIndex = screenIndex;
+                    if (typeof prevScreenIndex === 'number' &&
+                        prevScreenIndex !== screenIndex &&
+                        this._rfb &&
+                        this._rfb._webrtc &&
+                        typeof this._rfb._webrtc._teardownStaleSecondaryWebRTC === 'function') {
+                        this._rfb._webrtc._teardownStaleSecondaryWebRTC(screenIndex);
+                    }
                     Log.Info(`Screen with index (${screenIndex}) successfully registered with the primary display.`);
                     if (this._screens.length > 0) {
                         this.resize(this._screens[0].serverWidth, this._screens[0].serverHeight);
@@ -1103,6 +1148,11 @@ export default class Display {
                             this._encodedFramePort.start();
                             this._encodedFramePort.onmessage = this._handleEncodedFrame.bind(this);
                             Log.Info(`[SECONDARY] encodedFramePort established`);
+                            if (this._rfb &&
+                                this._rfb._webrtc &&
+                                typeof this._rfb._webrtc._maybeRequestPendingWebRTCOffer === 'function') {
+                                this._rfb._webrtc._maybeRequestPendingWebRTCOffer();
+                            }
                         }
                     };
                     relayWorker.port.postMessage({type: 'secondary_ready', screenIndex});
@@ -1568,14 +1618,22 @@ export default class Display {
                         this._renderer?.drawTransparentOverlayImg();
                     }
                     const transparentOverlayRect = this._renderer?.transparentOverlayRect;
-                    if (secondaryScreenRects > 0 && this._lastTransparentRectId !== transparentOverlayRect.hash_id) {
-                        for (let sI = 1; sI < transparentOverlayRect.screenLocations.length; sI++) {
-                            if (this._screens[transparentOverlayRect.screenLocations[sI].screenIndex].channel) {
-                                this._screens[transparentOverlayRect.screenLocations[sI].screenIndex].channel.postMessage({ eventType: 'rect', rect: transparentOverlayRect, screenLocationIndex: sI });
+                    // Every secondary gets each new watermark, even on frames without secondary
+                    // rects. The cached screenLocations go stale when removeScreen shifts the
+                    // screen indexes, so locate each secondary from the current screen list.
+                    if (this._lastTransparentRectId !== transparentOverlayRect.hash_id) {
+                        for (let i = 1; i < this._screens.length; i++) {
+                            const screen = this._screens[i];
+                            if (screen.channel) {
+                                const screenRect = {
+                                    ...transparentOverlayRect,
+                                    screenLocations: [{ screenIndex: 0, x: -screen.x, y: -screen.y }]
+                                };
+                                screen.channel.postMessage({ eventType: 'rect', rect: screenRect, screenLocationIndex: 0 });
                             }
                         }
+                        this._lastTransparentRectId = transparentOverlayRect.hash_id;
                     }
-                    this._lastTransparentRectId = transparentOverlayRect.hash_id;
                 }
             }
 
@@ -1624,7 +1682,55 @@ export default class Display {
         });
     }
 
+    relayWebRTCSignal(screenIndex, kind, screenId, payload) {
+        const screen = this._screens[screenIndex];
+        const msg = { webrtc: { kind, screenId, payload } };
+        if (screen && screen.encodedFramePort) {
+            try { screen.encodedFramePort.postMessage(msg); } catch (e) {
+                Log.Warn('relayWebRTCSignal post failed: ' + e);
+            }
+            return;
+        }
+        let q = this._webrtcRelayQueue.get(screenIndex);
+        if (!q) { q = []; this._webrtcRelayQueue.set(screenIndex, q); }
+        q.push(msg);
+    }
+
+    _flushWebRTCRelayQueue(screenIndex) {
+        const q = this._webrtcRelayQueue.get(screenIndex);
+        const screen = this._screens[screenIndex];
+        if (!q || !screen || !screen.encodedFramePort) return;
+        for (const msg of q) {
+            try { screen.encodedFramePort.postMessage(msg); } catch (e) {
+                Log.Warn('relayWebRTCSignal flush failed: ' + e);
+            }
+        }
+        this._webrtcRelayQueue.delete(screenIndex);
+    }
+
+    relayWebRTCSignalUp(kind, screenId, payload) {
+        if (!this._encodedFramePort) {
+            Log.Warn('relayWebRTCSignalUp: no encodedFramePort yet (screen ' +
+                screenId + ')');
+            return;
+        }
+        try {
+            this._encodedFramePort.postMessage({ webrtc: { kind, screenId, payload } });
+        } catch (e) {
+            Log.Warn('relayWebRTCSignalUp post failed: ' + e);
+        }
+    }
+
     _handleEncodedFrame(e) {
+        if (e.data && e.data.webrtc) {
+            const w = e.data.webrtc;
+            if (this._rfb &&
+                this._rfb._webrtc &&
+                typeof this._rfb._webrtc._onRelayedWebRTCSignal === 'function') {
+                this._rfb._webrtc._onRelayedWebRTCSignal(w.kind, w.screenId, w.payload);
+            }
+            return;
+        }
         const { codec, keyFrame, streamMode, data, x, y, width, height, frameId } = e.data;
 
         // Reconfigure decoder on first use or when codec/dimensions/streaming mode change
@@ -1664,6 +1770,12 @@ export default class Display {
             this._localDecoderH = height;
             this._localDecoderStreamMode = streamMode;
             this._configureLocalDecoder(codec, width, height, streamMode);
+            this._localDecoderNeedKey = true;
+        }
+
+        if (this._localDecoderNeedKey) {
+            if (!keyFrame) return;
+            this._localDecoderNeedKey = false;
         }
 
         const ts = ++this._localDecoderTs;

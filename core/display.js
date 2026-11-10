@@ -187,6 +187,9 @@ export default class Display {
 
         this.onflush = () => {  }; // A flush request has finished
         this.onFrameRendered = () => {};  // A frame has been painted to canvas
+        this.onrectslost = (x, y, width, height) => {  }; // Rects were dropped before reaching the canvas
+
+        this._lostBounds = null;
 
         this._broadcastChannel = new BroadcastChannel(`channel_${this.screenID}`);
         if (!this._isPrimaryDisplay) {
@@ -1188,6 +1191,42 @@ export default class Display {
     }
 
     /*
+    A rect is about to be discarded without reaching the canvas. The server
+    believes the client has it, so nothing will repaint that area until it
+    changes again. Collect the lost areas and report their bounds once per
+    task, so the owner can ask the server to send them again.
+    */
+    markRectLost(x, y, width, height) {
+        if (!(width > 0 && height > 0)) {
+            return;
+        }
+
+        if (this._lostBounds === null) {
+            this._lostBounds = { left: x, top: y, right: x + width, bottom: y + height };
+            setTimeout(() => {
+                const b = this._lostBounds;
+                this._lostBounds = null;
+                this.onrectslost(b.left, b.top, b.right - b.left, b.bottom - b.top);
+            }, 0);
+        } else {
+            const b = this._lostBounds;
+            b.left = Math.min(b.left, x);
+            b.top = Math.min(b.top, y);
+            b.right = Math.max(b.right, x + width);
+            b.bottom = Math.max(b.bottom, y + height);
+        }
+    }
+
+    _rectLost(rect) {
+        switch (rect.type) {
+            case 'flip':
+            case 'transparent':
+                return;
+        }
+        this.markRectLost(rect.x, rect.y, rect.width, rect.height);
+    }
+
+    /*
     Process incoming rects into a frame buffer, assume rects are out of order due to either UDP or parallel processing of decoding
     */
     _asyncRenderQPush(rect) {
@@ -1236,6 +1275,7 @@ export default class Display {
             if (rect.frame_id < oldestFrameID) {
                 //rect is older than any frame in the queue, drop it
                 this._droppedRects++;
+                this._rectLost(rect);
                 switch (rect.type) {
                     case 'video_frame':
                         rect.frame?.close();
@@ -1262,6 +1302,7 @@ export default class Display {
                         if (droppedRect.type === 'video_frame') {
                             droppedRect.frame?.close();
                         }
+                        this._rectLost(droppedRect);
                     }
 
                     this._asyncFrameQueue.shift();
@@ -1319,6 +1360,7 @@ export default class Display {
                     if (this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img && !this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img.complete) {
                         this._asyncFrameQueue[frameIx][2][currentFrameRectIx].type = 'skip';
                         this._droppedRects++;
+                        this._rectLost(this._asyncFrameQueue[frameIx][2][currentFrameRectIx]);
                     }
                 }
 

@@ -178,7 +178,9 @@ export default class TightDecoder {
                 this._processRectQ();
             } else {
                 Log.Warn("QOI queue exceeded limit.");
-                this._qoiRects.splice(0, 500);
+                for (const lost of this._qoiRects.splice(0, 500)) {
+                    display.markRectLost(lost.x, lost.y, lost.width, lost.height);
+                }
             }
             
         }

@@ -46,6 +46,8 @@ export default class Display {
         this._lastTransparentRectId = "";
 
         this._flushing = false;
+        this._flushTimeout = null;
+        this._maxFlushWait = 500; // ms to wait for the oldest frame's decodes before forcing it
 
         // the full frame buffer (logical canvas) size
         this._fbWidth = 0;
@@ -703,12 +705,28 @@ export default class Display {
     }
 
     /*
-    * Force the oldest frame in the queue to render, whether ready or not.
+    * Make room in the queue by rendering the oldest frame.
     * @param {bool} onflush_message - The caller wants an onflush event triggered once complete. This is
     *   useful for TCP, allowing the websocket to block until we are ready to process the next frame.
     *   UDP cannot block and thus no need to notify the caller when complete.
+    *
+    * With TCP the oldest frame has all its rects already read and is only waiting on async decodes
+    * (QOI workers, images). Forcing it out now would discard those rects when they finish, so wait
+    * for it to be drawn. Force it only if that takes too long, e.g. because requestAnimationFrame
+    * does not run in a hidden tab.
     */
     flush(onflush_message=true) {
+        if (onflush_message && this._asyncFrameQueue[0][1] > 0) {
+            this._flushing = true;
+            clearTimeout(this._flushTimeout);
+            this._flushTimeout = setTimeout(() => {
+                if (this._flushing) {
+                    this._asyncFrameComplete(0, true);
+                }
+            }, this._maxFlushWait);
+            return;
+        }
+
         //force oldest frame to render
         this._asyncFrameComplete(0, true);
 
@@ -732,6 +750,7 @@ export default class Display {
             clearInterval(this._frameStatsInterval);
             this._frameStatsInterval = null;
         }
+        clearTimeout(this._flushTimeout);
         this.clear();
 
         if (this._renderer) {
@@ -1633,6 +1652,7 @@ export default class Display {
 
             if (this._flushing) {
                 this._flushing = false;
+                clearTimeout(this._flushTimeout);
                 this.onflush();
             }
 

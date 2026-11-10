@@ -327,6 +327,7 @@ export default class RFB extends EventTargetMixin {
         }
         this._display.onflush = this._onFlush.bind(this);
         this._display.onFrameRendered = this._onFrameRendered.bind(this);
+        this._display.onrectslost = this._onRectsLost.bind(this);
 
         // populate decoder array with objects
         this._decoders[encodings.encodingRaw] = new RawDecoder();
@@ -4280,6 +4281,24 @@ export default class RFB extends EventTargetMixin {
         if (this._sock.rQlen > 0) {
             this._handleMessage();
         }
+    }
+
+    // The display dropped rects (late decodes, dropped or forced frames).
+    // Ask for that area again; a non-incremental request makes the server
+    // resend it even though it hasn't changed.
+    _onRectsLost(x, y, width, height) {
+        if (this._rfbConnectionState !== 'connected') { return; }
+
+        const left = Math.max(0, x);
+        const top = Math.max(0, y);
+        const right = Math.min(this._fbWidth, x + width);
+        const bottom = Math.min(this._fbHeight, y + height);
+        if (right <= left || bottom <= top) { return; }
+
+        Log.Debug("Requesting refresh of lost area " + left + "," + top + " " +
+                  (right - left) + "x" + (bottom - top));
+        RFB.messages.fbUpdateRequest(this._sock, false, left, top,
+                                     right - left, bottom - top);
     }
 
     _handleUdpRect(data, frame_id) {

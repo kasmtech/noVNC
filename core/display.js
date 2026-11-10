@@ -46,6 +46,8 @@ export default class Display {
         this._lastTransparentRectId = "";
 
         this._flushing = false;
+        this._flushTimeout = null;
+        this._maxFlushWait = 500; // ms to wait for the oldest frame's decodes before forcing it
 
         // the full frame buffer (logical canvas) size
         this._fbWidth = 0;
@@ -187,6 +189,9 @@ export default class Display {
 
         this.onflush = () => {  }; // A flush request has finished
         this.onFrameRendered = () => {};  // A frame has been painted to canvas
+        this.onrectslost = (x, y, width, height) => {  }; // Rects were dropped before reaching the canvas
+
+        this._lostBounds = null;
 
         this._broadcastChannel = new BroadcastChannel(`channel_${this.screenID}`);
         if (!this._isPrimaryDisplay) {
@@ -700,12 +705,28 @@ export default class Display {
     }
 
     /*
-    * Force the oldest frame in the queue to render, whether ready or not.
+    * Make room in the queue by rendering the oldest frame.
     * @param {bool} onflush_message - The caller wants an onflush event triggered once complete. This is
     *   useful for TCP, allowing the websocket to block until we are ready to process the next frame.
     *   UDP cannot block and thus no need to notify the caller when complete.
+    *
+    * With TCP the oldest frame has all its rects already read and is only waiting on async decodes
+    * (QOI workers, images). Forcing it out now would discard those rects when they finish, so wait
+    * for it to be drawn. Force it only if that takes too long, e.g. because requestAnimationFrame
+    * does not run in a hidden tab.
     */
     flush(onflush_message=true) {
+        if (onflush_message && this._asyncFrameQueue[0][1] > 0) {
+            this._flushing = true;
+            clearTimeout(this._flushTimeout);
+            this._flushTimeout = setTimeout(() => {
+                if (this._flushing) {
+                    this._asyncFrameComplete(0, true);
+                }
+            }, this._maxFlushWait);
+            return;
+        }
+
         //force oldest frame to render
         this._asyncFrameComplete(0, true);
 
@@ -729,6 +750,7 @@ export default class Display {
             clearInterval(this._frameStatsInterval);
             this._frameStatsInterval = null;
         }
+        clearTimeout(this._flushTimeout);
         this.clear();
 
         if (this._renderer) {
@@ -1188,6 +1210,42 @@ export default class Display {
     }
 
     /*
+    A rect is about to be discarded without reaching the canvas. The server
+    believes the client has it, so nothing will repaint that area until it
+    changes again. Collect the lost areas and report their bounds once per
+    task, so the owner can ask the server to send them again.
+    */
+    markRectLost(x, y, width, height) {
+        if (!(width > 0 && height > 0)) {
+            return;
+        }
+
+        if (this._lostBounds === null) {
+            this._lostBounds = { left: x, top: y, right: x + width, bottom: y + height };
+            setTimeout(() => {
+                const b = this._lostBounds;
+                this._lostBounds = null;
+                this.onrectslost(b.left, b.top, b.right - b.left, b.bottom - b.top);
+            }, 0);
+        } else {
+            const b = this._lostBounds;
+            b.left = Math.min(b.left, x);
+            b.top = Math.min(b.top, y);
+            b.right = Math.max(b.right, x + width);
+            b.bottom = Math.max(b.bottom, y + height);
+        }
+    }
+
+    _rectLost(rect) {
+        switch (rect.type) {
+            case 'flip':
+            case 'transparent':
+                return;
+        }
+        this.markRectLost(rect.x, rect.y, rect.width, rect.height);
+    }
+
+    /*
     Process incoming rects into a frame buffer, assume rects are out of order due to either UDP or parallel processing of decoding
     */
     _asyncRenderQPush(rect) {
@@ -1236,6 +1294,7 @@ export default class Display {
             if (rect.frame_id < oldestFrameID) {
                 //rect is older than any frame in the queue, drop it
                 this._droppedRects++;
+                this._rectLost(rect);
                 switch (rect.type) {
                     case 'video_frame':
                         rect.frame?.close();
@@ -1262,6 +1321,7 @@ export default class Display {
                         if (droppedRect.type === 'video_frame') {
                             droppedRect.frame?.close();
                         }
+                        this._rectLost(droppedRect);
                     }
 
                     this._asyncFrameQueue.shift();
@@ -1319,6 +1379,7 @@ export default class Display {
                     if (this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img && !this._asyncFrameQueue[frameIx][2][currentFrameRectIx].img.complete) {
                         this._asyncFrameQueue[frameIx][2][currentFrameRectIx].type = 'skip';
                         this._droppedRects++;
+                        this._rectLost(this._asyncFrameQueue[frameIx][2][currentFrameRectIx]);
                     }
                 }
 
@@ -1591,6 +1652,7 @@ export default class Display {
 
             if (this._flushing) {
                 this._flushing = false;
+                clearTimeout(this._flushTimeout);
                 this.onflush();
             }
 

@@ -1786,7 +1786,13 @@ const UI = {
             let fps = UI.rfb.statsFps;
             const bottleneckStats = UI.getSetting('enable_perf_stats');
             if (bottleneckStats) {
-                document.getElementById("noVNC_connection_stats").textContent = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
+                const sm = UI.rfb.streamMode;
+                const codecName = (sm === encodings.pseudoEncodingStreamingModeJpegWebp)
+                    ? "JPEG/WEBP"
+                    : (CODEC_VARIANT_NAMES[sm] || ("Codec " + sm));
+                const codecTag = " | Codec: " + codecName + " " + UI.rfb._fbWidth + "x" + UI.rfb._fbHeight
+                    + " Q:" + UI.rfb.videoStreamQuality + " @" + UI.rfb.frameRate + "fps";
+                document.getElementById("noVNC_connection_stats").textContent = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps + codecTag;
                 if (UI.fpsChart) {
                     UI.fpsChart.update(Number(fps));
                 }

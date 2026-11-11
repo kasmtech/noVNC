@@ -1790,9 +1790,18 @@ const UI = {
                 const codecName = (sm === encodings.pseudoEncodingStreamingModeJpegWebp)
                     ? "JPEG/WEBP"
                     : (CODEC_VARIANT_NAMES[sm] || ("Codec " + sm));
-                const codecTag = " | Codec: " + codecName + " " + UI.rfb._fbWidth + "x" + UI.rfb._fbHeight
+                let codecLine = "Codec: " + codecName + " " + UI.rfb._fbWidth + "x" + UI.rfb._fbHeight
                     + " Q:" + UI.rfb.videoStreamQuality + " @" + UI.rfb.frameRate + "fps";
-                document.getElementById("noVNC_connection_stats").textContent = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps + codecTag;
+                if (obj.length >= 8) {
+                    const algoNames = ["off", "scream", "loss", "hybrid", "scream-ref", "nada"];
+                    const modeNames = ["ConstQual", "Capped", "CBR"];
+                    const algo = algoNames[obj[4]] || ("algo" + obj[4]);
+                    const mode = modeNames[obj[5]] || ("mode" + obj[5]);
+                    codecLine += " | RC: " + algo + " " + mode + " " + obj[6] + "kbps q=" + obj[7] + "ms";
+                }
+                UI._statsConnLine = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
+                UI._statsCodecLine = codecLine;
+                document.getElementById("noVNC_connection_stats").innerHTML = UI._statsConnLine + (UI._statsLatencyTag || "") + "<br>" + UI._statsCodecLine;
                 if (UI.fpsChart) {
                     UI.fpsChart.update(Number(fps));
                 }
@@ -1828,9 +1837,9 @@ const UI = {
         if (UI.getSetting('enable_latency_stats')) {
             const stats = document.getElementById("noVNC_connection_stats");
             if (stats) {
-                const tag = " | Latency: " + d.latest.toFixed(1) + "ms (min " + d.min.toFixed(1) + "ms, p95 " + d.p95.toFixed(1) + "ms)";
+                UI._statsLatencyTag = " | Latency: " + d.latest.toFixed(1) + "ms (min " + d.min.toFixed(1) + "ms, p95 " + d.p95.toFixed(1) + "ms)";
                 if (stats.style.visibility === "visible") {
-                    stats.innerHTML = stats.innerHTML.replace(/ \| Latency:.*$/, '') + tag;
+                    stats.innerHTML = (UI._statsConnLine || "") + UI._statsLatencyTag + (UI._statsCodecLine ? "<br>" + UI._statsCodecLine : "");
                 }
             }
         }

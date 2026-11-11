@@ -1785,8 +1785,14 @@ const UI = {
             console.log(e.detail.text);
             let obj = JSON.parse(e.detail.text);
             let fps = UI.rfb.statsFps;
+            VNC-706const sm = UI.rfb.streamMode;
+            const codecName = (sm === encodings.pseudoEncodingStreamingModeJpegWebp)
+                ? "JPEG/WEBP"
+                : (CODEC_VARIANT_NAMES[sm] || ("Codec " + sm));
+            const codecTag = " | Codec: " + codecName + " " + UI.rfb._fbWidth + "x" + UI.rfb._fbHeight
+                + " Q:" + UI.rfb.videoStreamQuality + " @" + UI.rfb.frameRate + "fps";
             if (!WebUtil.isInsideKasmVDI()) {
-                document.getElementById("noVNC_connection_stats").textContent = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
+                document.getElementById("noVNC_connection_stats").textContent = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps + codecTag;
                 if (UI.fpsChart) {
                     UI.fpsChart.update(Number(fps));
                 }

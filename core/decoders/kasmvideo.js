@@ -223,6 +223,9 @@ export default class KasmVideoDecoder {
                 return true;
 
             this._configureDecoder(screen, codec, codecTypeId);
+
+            if (codecTypeId !== this._rfb.streamMode)
+                this._rfb.streamMode = codecTypeId;
         }
 
         const vidChunk = new EncodedVideoChunk({

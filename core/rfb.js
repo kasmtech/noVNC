@@ -3548,6 +3548,7 @@ export default class RFB extends EventTargetMixin {
 
         RFB.messages.pixelFormat(this._sock, this._fbDepth, true);
         RFB.messages.videoEncodersRequest(this._sock, this.videoCodecs);
+        this._sendNetworkType();
         this._sendEncodings();
         RFB.messages.fbUpdateRequest(this._sock, false, 0, 0, this._fbWidth, this._fbHeight);
 
@@ -3584,6 +3585,48 @@ export default class RFB extends EventTargetMixin {
         if (match && parseInt(match[1]) >= 23)
             return true;
         return false;
+    }
+
+    _sendNetworkType() {
+        const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        let type = 0, eff = 0, saveData = false, downlinkKbps = 0, rttMs = 0;
+        if (c) {
+            const typeMap = { ethernet: 1, wifi: 2, cellular: 3 };
+            const effMap = { 'slow-2g': 1, '2g': 2, '3g': 3, '4g': 4 };
+            if (typeMap[c.type] !== undefined) {
+                type = typeMap[c.type];
+            } else if (c.type && c.type !== 'unknown' && c.type !== 'none') {
+                type = 4;
+            }
+            eff = effMap[c.effectiveType] || 0;
+            saveData = !!c.saveData;
+            downlinkKbps = Number.isFinite(c.downlink) ? Math.round(c.downlink * 1000) : 0;
+            rttMs = Number.isFinite(c.rtt) ? Math.round(c.rtt) : 0;
+        }
+        try {
+            const params = new URLSearchParams(window.location.search);
+            const typeOverride = { lan: 1, ethernet: 1, wifi: 2, cellular: 3, mobile: 3, other: 4 };
+            const effOverride = { 'slow-2g': 1, '2g': 2, '3g': 3, '4g': 4 };
+            const nt = (params.get('netType') || '').toLowerCase();
+            const et = (params.get('effType') || '').toLowerCase();
+            if (typeOverride[nt] !== undefined) type = typeOverride[nt];
+            if (effOverride[et] !== undefined) eff = effOverride[et];
+            if (params.get('saveData') === '1') saveData = true;
+            if (nt || et) Log.Info("network type override: netType=" + nt + " effType=" + et);
+        } catch (e) { /* no URL params */ }
+        try {
+            RFB.messages.networkType(this._sock, type, eff, saveData, downlinkKbps, rttMs);
+        } catch (e) {
+            Log.Warn("Failed to send network type hint: " + e);
+        }
+        if (c && !this._netTypeListenerAdded) {
+            this._netTypeListenerAdded = true;
+            c.addEventListener('change', () => {
+                if (this._rfbConnectionState === 'connected') {
+                    this._sendNetworkType();
+                }
+            });
+        }
     }
 
     _sendEncodings() {
@@ -5735,6 +5778,27 @@ RFB.messages = {
         }
 
         sock._sQlen += j - offset;
+        sock.flush();
+    },
+
+    networkType(sock, type, effectiveType, saveData, downlinkKbps, rttMs) {
+        const buff = sock._sQ;
+        const offset = sock._sQlen;
+
+        buff[offset] = messages.msgTypeNetworkType;
+        buff[offset + 1] = type & 0xff;
+        buff[offset + 2] = effectiveType & 0xff;
+        buff[offset + 3] = saveData ? 1 : 0;
+        buff[offset + 4] = (downlinkKbps >> 24) & 0xff;
+        buff[offset + 5] = (downlinkKbps >> 16) & 0xff;
+        buff[offset + 6] = (downlinkKbps >> 8) & 0xff;
+        buff[offset + 7] = downlinkKbps & 0xff;
+        buff[offset + 8] = (rttMs >> 24) & 0xff;
+        buff[offset + 9] = (rttMs >> 16) & 0xff;
+        buff[offset + 10] = (rttMs >> 8) & 0xff;
+        buff[offset + 11] = rttMs & 0xff;
+
+        sock._sQlen += 12;
         sock.flush();
     },
 

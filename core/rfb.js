@@ -1486,11 +1486,43 @@ export default class RFB extends EventTargetMixin {
 
         // WebRTC UDP datachannel inits
         if (typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
+            this._setupUdpPeer();
+        }
+
+        if (this._useUdp && typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
+            setTimeout(function() { this._sendUdpUpgrade() }.bind(this), 3000);
+        }
+
+        Log.Debug("<< RFB.connect");
+    }
+
+    _setupUdpPeer() {
+        if (this._udpStaleTimer) {
+            clearInterval(this._udpStaleTimer);
+            this._udpStaleTimer = null;
+        }
+        if (this._udpChannel) {
+            try {
+                this._udpChannel.onmessage = null;
+                this._udpChannel.onerror = null;
+                this._udpChannel.close();
+            } catch (e) { /* ignore */ }
+            this._udpChannel = null;
+        }
+        if (this._udpPeer) {
+            try { this._udpPeer.close(); } catch (e) { /* ignore */ }
+            this._udpPeer = null;
+        }
+
+        {
             this._udpBuffer = new Map();
 
             this._udpPeer = new RTCPeerConnection({
                 iceServers: [{
-                    urls: ["stun:stun.l.google.com:19302"]
+                    urls: [
+                        "stun:" + window.location.hostname + ":3478",
+                        "stun:stun.l.google.com:19302"
+                    ]
                 }]
             });
             let peer = this._udpPeer;
@@ -1590,15 +1622,15 @@ export default class RFB extends EventTargetMixin {
             }
         }
 
-        if (this._useUdp && typeof RTCPeerConnection !== 'undefined' && this._isPrimaryDisplay) {
-            setTimeout(function() { this._sendUdpUpgrade() }.bind(this), 3000);
-        }
-
-        Log.Debug("<< RFB.connect");
+        this._udpStaleTimer = setInterval(() => this._checkUdpStaleFrames(), 100);
     }
 
     _disconnect() {
         Log.Debug(">> RFB.disconnect");
+        if (this._udpStaleTimer) {
+            clearInterval(this._udpStaleTimer);
+            this._udpStaleTimer = null;
+        }
         this._cursor.detach();
         this._canvas.removeEventListener("gesturestart", this._eventHandlers.handleGesture);
         this._canvas.removeEventListener("gesturemove", this._eventHandlers.handleGesture);
@@ -1854,6 +1886,41 @@ export default class RFB extends EventTargetMixin {
 
     _requestFullRefresh() {
         RFB.messages.fbUpdateRequest(this._sock, false, 0, 0, this._fbWidth, this._fbHeight);
+    }
+
+    // The UDP datachannel is unreliable (maxRetransmits: 0). A multi-piece frame
+    // that loses a piece never completes, so it sits in _udpBuffer forever (a
+    // leak) while the video decoder either stalls or decodes deltas that
+    // reference the missing frame and faults into image mode. Periodically drop
+    // such stale frames, put the video decoder into keyframe-recovery so it
+    // skips the now-undecodable deltas, and ask the server - over the reliable
+    // TCP control channel, so the request itself always arrives - to re-encode a
+    // fresh keyframe. Throttled so sustained loss can't cause a request storm.
+    _checkUdpStaleFrames() {
+        if (this._transitConnectionState !== this.TransitConnectionStates.Udp)
+            return;
+        if (!this._udpBuffer || this._udpBuffer.size === 0)
+            return;
+
+        const now = Date.now();
+        const STALE_MS = 250;
+        let lost = false;
+        for (const [id, item] of this._udpBuffer) {
+            if ((now - item.arrival) > STALE_MS) {
+                this._udpBuffer.delete(id);
+                lost = true;
+            }
+        }
+        if (!lost)
+            return;
+
+        const KEYFRAME_MIN_INTERVAL_MS = 1000;
+        if (!this._udpLastKeyframeReq ||
+            (now - this._udpLastKeyframeReq) > KEYFRAME_MIN_INTERVAL_MS) {
+            this._udpLastKeyframeReq = now;
+            Log.Warn("UDP: loss detected; requesting keyframe refresh");
+            this._requestFullRefresh();
+        }
     }
 
     // Gets the the size of the available screen
@@ -4342,6 +4409,26 @@ export default class RFB extends EventTargetMixin {
                     return false;
                 }
                 break;
+            case encodings.encodingKasmVideo:
+                let vpos = 12;
+                const vreader = {
+                    rQwait: (_msg, num) => (vpos + num) > data.length,
+                    rQshift8: () => data[vpos++],
+                    rQshiftBytes: (len) => {
+                        const r = data.subarray(vpos, vpos + len);
+                        vpos += len;
+                        return r;
+                    },
+                };
+                try {
+                    this._decoders[encodings.encodingKasmVideo].decodeRect(
+                        frame.x, frame.y, frame.width, frame.height,
+                        vreader, this._display, this._fbDepth, frame_id);
+                } catch (err) {
+                    this._fail("Error decoding video rect via UDP: " + err);
+                    return false;
+                }
+                break;
             default:
                 Log.Error("Invalid rect encoding via UDP: " + frame.encoding);
                 return false;
@@ -4355,6 +4442,8 @@ export default class RFB extends EventTargetMixin {
             return;
         }
         this._changeTransitConnectionState(this.TransitConnectionStates.Upgrading);
+
+        this._setupUdpPeer();
 
         let peer = this._udpPeer;
         let sock = this._sock;
@@ -4406,14 +4495,18 @@ export default class RFB extends EventTargetMixin {
         var response = JSON.parse(payload);
         Log.Debug("UDP Upgrade recieved from server: " + payload);
         peer.setRemoteDescription(new RTCSessionDescription(response.answer)).then(function() {
-            var candidate = new RTCIceCandidate(response.candidate);
-            peer.addIceCandidate(candidate).then(function() {
-                Log.Debug("success in addicecandidate");
-            }.bind(this)).catch(function(err) {
-                Log.Error("Failure in addIceCandidate", err);
-                this._changeTransitConnectionState(this.TransitConnectionStates.Failure)
-                this._udpConnectFailures++;
-            }.bind(this));
+            if (response.candidate) {
+                try {
+                    var candidate = new RTCIceCandidate(response.candidate);
+                    peer.addIceCandidate(candidate).then(function() {
+                        Log.Debug("success in addicecandidate");
+                    }).catch(function(err) {
+                        Log.Debug("addIceCandidate skipped (candidate already in answer SDP): " + err);
+                    });
+                } catch (err) {
+                    Log.Debug("addIceCandidate skipped: " + err);
+                }
+            }
         }.bind(this)).catch(function(e) {
             Log.Error("Failure in setRemoteDescription", e);
             this._changeTransitConnectionState(this.TransitConnectionStates.Failure)

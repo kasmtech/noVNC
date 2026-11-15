@@ -208,12 +208,14 @@ select:active {
   margin-top: 3px;
 }
 
-:root:not(.noVNC_touch) input[type=button]:hover:not(:disabled),
-:root:not(.noVNC_touch) input[type=color]:hover:not(:disabled),
-:root:not(.noVNC_touch) input[type=reset]:hover:not(:disabled),
-:root:not(.noVNC_touch) input[type=submit]:hover:not(:disabled),
-:root:not(.noVNC_touch) select:hover:not(:disabled) {
-  background: linear-gradient(to top, rgb(255, 255, 255), rgb(250, 250, 250));
+@media (hover: hover) {
+  input[type=button]:hover:not(:disabled),
+  input[type=color]:hover:not(:disabled),
+  input[type=reset]:hover:not(:disabled),
+  input[type=submit]:hover:not(:disabled),
+  select:hover:not(:disabled) {
+    background: linear-gradient(to top, rgb(255, 255, 255), rgb(250, 250, 250));
+  }
 }
 
 /* ----------------------------------------
@@ -357,6 +359,12 @@ select:active {
   z-index: 1000;
 }
 
+/* Statistics overlays must not intercept session mouse or touch input. */
+#noVNC_connection_stats,
+#noVNC_charts_container {
+    pointer-events: none;
+}
+
 /* Create a container for all charts */
 #noVNC_charts_container {
     position: fixed;
@@ -364,6 +372,8 @@ select:active {
     right: 0;
     display: flex;
     flex-direction: column;
+    width: 300px;
+    max-width: 100vw;
     gap: 10px; /* spacing between charts */
     z-index: 1000;
     visibility: hidden;
@@ -380,6 +390,24 @@ select:active {
 #noVNC_bandwidth_chart {
     background: #9fa5a2d4;
     display: flex;
+    flex-direction: column;
+}
+
+#noVNC_charts_container svg {
+    display: block;
+    width: 100%;
+    height: 100px;
+}
+
+/* A second chart stacked over the first (same size, independent scale) */
+.noVNC_chart_stack {
+    position: relative;
+}
+
+#noVNC_charts_container svg.noVNC_chart_overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
 }
 
 /* ----------------------------------------
@@ -576,14 +604,23 @@ select:active {
 }
 /* Android browsers don't properly update hover state if touch events
  * are intercepted, but focus should be safe to display */
-:root:not(.noVNC_touch) .noVNC_button.noVNC_selected:hover,
 .noVNC_button.noVNC_selected:focus {
   border-color: rgba(0, 0, 0, 0.4);
   background: rgba(153, 151, 157, 0.68);
 }
-:root:not(.noVNC_touch) .noVNC_button_div:hover,
 .noVNC_button_div:focus {
   background: rgba(255, 255, 255, 0.2);
+}
+
+@media (hover: hover) {
+  .noVNC_button.noVNC_selected:hover {
+    border-color: rgba(0, 0, 0, 0.4);
+    background: rgba(153, 151, 157, 0.68);
+  }
+
+  .noVNC_button_div:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
 }
 .noVNC_button.noVNC_hidden {
   display: none;

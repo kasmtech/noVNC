@@ -17,12 +17,13 @@ import { clientToElement } from './util/element.js';
 import { classifySubscribeReply } from './util/unix_relay.js';
 import { setCapture } from './util/events.js';
 import EventTargetMixin from './util/eventtarget.js';
-import Display from "./display.js";
+import Display, { MAX_FB_DIMENSION } from "./display.js";
 import Inflator from "./inflator.js";
 import Deflator from "./deflator.js";
 import Keyboard from "./input/keyboard.js";
 import initializePrinterRelay from "./output/printer.js";
 import initializeSmartcardRelay from "./output/smartcard.js";
+import * as WebUtil from "../app/webutil.js";
 import initializeFido2Relay from "./output/fido2.js";
 import initializeSshAgentRelay from "./output/ssh_agent.js";
 import GestureHandler from "./input/gesturehandler.js";
@@ -166,6 +167,7 @@ export default class RFB extends EventTargetMixin {
         this._clipboardBinary = true;
         this._resendClipboardNextUserDrivenEvent = true;
         this._useUdp = true;
+        this._udpRxBytes = 0;
         this._hiDpi = 'hiDpi' in options ? !!options.hiDpi : false;
         this._enableQOI = false;
         this._videoQuality = 2;
@@ -691,6 +693,11 @@ export default class RFB extends EventTargetMixin {
             return;
         }
 
+        if (value > MAX_FB_DIMENSION) {
+            Log.Warn("Clamping max video resolution width " + value + " to " + MAX_FB_DIMENSION);
+            value = MAX_FB_DIMENSION;
+        }
+
         if (this._maxVideoResolutionX === value) {
             return;
         }
@@ -704,6 +711,11 @@ export default class RFB extends EventTargetMixin {
         if (!Number.isInteger(value) || value < 100 ) {
             Log.Error("max video resolution must be an integer greater than 100");
             return;
+        }
+
+        if (value > MAX_FB_DIMENSION) {
+            Log.Warn("Clamping max video resolution height " + value + " to " + MAX_FB_DIMENSION);
+            value = MAX_FB_DIMENSION;
         }
 
         if (this._maxVideoResolutionY === value) {
@@ -777,6 +789,15 @@ export default class RFB extends EventTargetMixin {
 
     get statsFps() { return this._display.fps; }
     get statsDroppedFps() { return this._display.droppedFps; }
+    get statsRxBytes() {
+        return this.statsTcpRxBytes + this._udpRxBytes;
+    }
+    get statsTcpRxBytes() {
+        return this._sock ? this._sock.rxBytes : 0;
+    }
+    get statsTcpTransit() {
+        return this._transitConnectionState === this.TransitConnectionStates.Tcp;
+    }
 
     get enableWebRTC() { return this._useUdp; }
     set enableWebRTC(value) {
@@ -1140,6 +1161,14 @@ export default class RFB extends EventTargetMixin {
 
     blur() {
         this._keyboard.blur();
+    }
+
+    isLocalEditableFocused() {
+        const el = document.activeElement;
+        if (!el || el.id === 'noVNC_keyboardinput')
+            return false;
+
+        return el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA';
     }
 
     checkLocalClipboard() {
@@ -1530,6 +1559,7 @@ export default class RFB extends EventTargetMixin {
             let me = this;
             this._udpChannel.onmessage = function(e) {
                 //Log.Info("got udp msg", e.data);
+                me._udpRxBytes += e.data.byteLength;
                 const u8 = new Uint8Array(e.data);
                 // Got an UDP packet. Do we need reassembly?
                 const id = parseInt(u8[0] +
@@ -1695,6 +1725,8 @@ export default class RFB extends EventTargetMixin {
                 Log.Debug("Window focused while user switched between tabs.");
             }
 
+            if (this._keyboard.enableIME && this.focusOnClick && !this._viewOnly && (WebUtil.isInsideKasmVDI() || !this.isLocalEditableFocused()))
+                this.focus();
         }
 
         if (document.visibilityState === "visible" && this._lastVisibilityState === "hidden") {
@@ -1821,6 +1853,16 @@ export default class RFB extends EventTargetMixin {
                 return;
             }
 
+            const screensBefore = this._display.snapshotScreens();
+            const candidate = this._screenSize(undefined, true);
+
+            if (!this._validateDimensions(candidate.serverWidth, candidate.serverHeight)) {
+                Log.Warn("Not requesting remote resize to " + candidate.serverWidth + "x" + candidate.serverHeight + " (max " + MAX_FB_DIMENSION + ")");
+                this._display.restoreScreens(screensBefore);
+
+                return;
+            }
+
             //zero out the server reported resolution
             for (let i=0; i < this._display.screens.length; i++) {
                 this._display.applyServerResolution(0, 0, this._display.screens[i].screenIndex);
@@ -1852,8 +1894,8 @@ export default class RFB extends EventTargetMixin {
     }
 
     // Gets the the size of the available screen
-    _screenSize (limited) {
-        return this._display.getScreenSize(this.videoQuality, this.forcedResolutionX, this.forcedResolutionY, this._hiDpi, limited, !this._resizeSession, this._streamMode);
+    _screenSize (limited, ignoreServerReported) {
+        return this._display.getScreenSize(this.videoQuality, this.forcedResolutionX, this.forcedResolutionY, this._hiDpi, limited, !this._resizeSession, this._streamMode, ignoreServerReported);
     }
 
     _fixScrollbars() {
@@ -2072,7 +2114,11 @@ export default class RFB extends EventTargetMixin {
                         this.dispatchEvent(new CustomEvent("screenregistered", {}));
                         Log.Info(`Secondary monitor (${event.data.screenID}) has been removed.`);
                         const size = this._screenSize();
-                        RFB.messages.setDesktopSize(this._sock, size, this._screenFlags);
+                        if (this._validateDimensions(size.serverWidth, size.serverHeight)) {
+                            RFB.messages.setDesktopSize(this._sock, size, this._screenFlags);
+                        } else {
+                            Log.Warn("Not requesting remote resize to " + size.serverWidth + "x" + size.serverHeight + " (max " + MAX_FB_DIMENSION + ")");
+                        }
                         this._sendEncodings();
                         this._updateContinuousUpdates();
                         this.dispatchEvent(new CustomEvent("screenregistered", {}));
@@ -2365,8 +2411,8 @@ export default class RFB extends EventTargetMixin {
         const mappedButton = this.mouseButtonMapper.get(ev.button);
         switch (ev.type) {
             case 'mousedown':
-                if (this._display.screens.length === 0 || window.self === window.top) {
-                    ev.preventDefault();
+                if (this._display.screens.length === 0 || window.self === window.top || this._keyboard.enableIME) {
+                	ev.preventDefault();
                 }
                 setCapture(this._canvas);
 
@@ -3521,7 +3567,12 @@ export default class RFB extends EventTargetMixin {
 
         // we're past the point where we could backtrack, so it's safe to call this
         this._setDesktopName(name);
-        this._resize(width, height);
+
+        if (!this._resize(width, height)) {
+            return this._fail("Server sent unsupported framebuffer size: " +
+                width + "x" + height +
+                " (max " + MAX_FB_DIMENSION + ")");
+        }
 
         if (!this._viewOnly) { this._keyboard.grab(); }
 
@@ -5019,7 +5070,18 @@ export default class RFB extends EventTargetMixin {
             this._fbWidth, this._fbHeight);
     }
 
+    _validateDimensions(width, height) {
+        return width > 0 && width <= MAX_FB_DIMENSION &&
+            height > 0 && height <= MAX_FB_DIMENSION;
+    }
+
     _resize(width, height) {
+        if (!this._validateDimensions(width, height)) {
+            Log.Warn("Rejecting resize to " + width + "x" + height +
+                " (max " + MAX_FB_DIMENSION + ")");
+            return false;
+        }
+
         this._fbWidth = width;
         this._fbHeight = height;
 
@@ -5030,6 +5092,8 @@ export default class RFB extends EventTargetMixin {
         this._updateScale();
 
         this._updateContinuousUpdates();
+
+        return true;
     }
 
     _xvpOp(ver, op) {

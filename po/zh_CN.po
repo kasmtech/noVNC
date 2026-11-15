@@ -189,7 +189,7 @@ msgstr "设置"
 
 #: ../vnc.html:175
 msgid "Shared Mode"
-msgstr "分享模式"
+msgstr "共享模式"
 
 #: ../vnc.html:178
 msgid "View Only"
@@ -214,6 +214,15 @@ msgstr "本地缩放"
 #: ../vnc.html:189
 msgid "Remote Resizing"
 msgstr "远程调整大小"
+
+msgid "Touch Mode:"
+msgstr "触摸模式："
+
+msgid "Native Touch (Direct)"
+msgstr "原生触摸（直接传递）"
+
+msgid "Gesture (Emulation)"
+msgstr "手势（模拟鼠标）"
 
 #: ../vnc.html:194
 msgid "Advanced"
@@ -320,7 +329,7 @@ msgid "Prefer Local Cursor"
 msgstr "首选本地光标"
 
 msgid "Translate keyboard shortcuts"
-msgstr "翻译键盘快捷键"
+msgstr "转换键盘快捷键"
 
 msgid "Enable WebRTC UDP Transit"
 msgstr "启用 WebRTC UDP 传输"
@@ -440,27 +449,33 @@ msgid "Drag Viewport"
 msgstr "拖动视口"
 
 msgid "Displays"
-msgstr "「展示」"
+msgstr "显示器"
+
+msgid "Show Displays"
+msgstr "显示器设置"
+
+msgid "Native Resolution"
+msgstr "原生分辨率"
 
 msgid "Enable Threaded Decoding"
 msgstr "启用线程解码"
 
 msgid "Arrange Displays"
-msgstr "排列显示"
+msgstr "排列显示器"
 
 msgid ""
 "Drag and drop to arrange displays, new monitors are added to the right hand "
 "side of the previous monitor."
-msgstr "拖放以排列显示，新显示器将添加到前一个显示器的右侧。"
+msgstr "拖放以排列显示器，新显示器将添加到前一个显示器的右侧。"
 
 msgid "Add Monitor"
-msgstr "添加监视器"
+msgstr "添加显示器"
 
 msgid "Auto placement"
 msgstr "自动放置"
 
 msgid "Identify"
-msgstr "确认"
+msgstr "识别"
 
 msgid "Done"
 msgstr "完毕"

@@ -217,6 +217,15 @@ msgstr ""
 msgid "Remote Resizing"
 msgstr ""
 
+msgid "Touch Mode:"
+msgstr ""
+
+msgid "Native Touch (Direct)"
+msgstr ""
+
+msgid "Gesture (Emulation)"
+msgstr ""
+
 #: ../vnc.html:194
 msgid "Advanced"
 msgstr ""
@@ -442,6 +451,12 @@ msgid "Drag Viewport"
 msgstr ""
 
 msgid "Displays"
+msgstr ""
+
+msgid "Show Displays"
+msgstr ""
+
+msgid "Native Resolution"
 msgstr ""
 
 msgid "Enable Threaded Decoding"

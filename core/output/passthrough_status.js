@@ -7,7 +7,8 @@
 //
 // Reasons a feature can report: ok, policy_disabled, extension_missing,
 // extension_unresponsive, extension_outdated, unsupported_platform,
-// native_client_unreachable, native_client_outdated, status_probe_failed (the native
+// native_client_unreachable, native_client_outdated, native_client_busy (connected, but
+// every probe timed out), status_probe_failed (the native
 // client answered but its probe for this feature failed), backend_unavailable,
 // agent_not_configured, agent_unreachable.
 import * as Log from "../util/logging.js";
@@ -99,6 +100,9 @@ const failingLink = (status, probe) => {
     }
 
     status.isNativeClientConnected = true;
+    if (result.nativeClientReason === "native_client_busy") {
+        return "native_client_busy";
+    }
     return null;
 };
 

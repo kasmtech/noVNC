@@ -1785,7 +1785,7 @@ const UI = {
             let obj = JSON.parse(e.detail.text);
             let fps = UI.rfb.statsFps;
             const bottleneckStats = UI.getSetting('enable_perf_stats');
-            if (bottleneckStats) {
+            if (!WebUtil.isInsideKasmVDI()) {
                 const sm = UI.rfb.streamMode;
                 const codecName = (sm === encodings.pseudoEncodingStreamingModeJpegWebp)
                     ? "JPEG/WEBP"

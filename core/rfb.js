@@ -1526,6 +1526,7 @@ export default class RFB extends EventTargetMixin {
 
         {
             this._udpBuffer = new Map();
+            this._udpLastId = null;
 
             this._udpPeer = new RTCPeerConnection({
                 iceServers: [{
@@ -1595,6 +1596,17 @@ export default class RFB extends EventTargetMixin {
                     me._changeTransitConnectionState(me.TransitConnectionStates.Udp);
                 }
 
+                const uid = (u8[0] | (u8[1] << 8) | (u8[2] << 16) | (u8[3] << 24)) >>> 0;
+                if (me._udpLastId !== null) {
+                    const diff = (uid - me._udpLastId) | 0;
+                    if (diff > 1 && diff < 0x100000)
+                        me._maybeRequestUdpKeyframe();
+                    if (diff > 0 || diff < -0x100000)
+                        me._udpLastId = uid;
+                } else {
+                    me._udpLastId = uid;
+                }
+
                 if (pieces == 1) { // Handle it immediately
                     me._handleUdpRect(u8.slice(20), frame_id);
                 } else { // Use buffer
@@ -1602,9 +1614,11 @@ export default class RFB extends EventTargetMixin {
 
                     if (udpBuffer.has(id)) {
                         let item = udpBuffer.get(id);
-                        item.recieved_pieces += 1;
-                        item.data[i] = u8.slice(20);
-                        item.total_bytes += item.data[i].length;
+                        if (item.data[i] === undefined) {
+                            item.recieved_pieces += 1;
+                            item.data[i] = u8.slice(20);
+                            item.total_bytes += item.data[i].length;
+                        }
 
                         if (item.total_pieces == item.recieved_pieces) {
                             // Message is complete, combile data into a single array
@@ -1899,6 +1913,19 @@ export default class RFB extends EventTargetMixin {
         RFB.messages.fbUpdateRequest(this._sock, false, 0, 0, this._fbWidth, this._fbHeight);
     }
 
+    _maybeRequestUdpKeyframe() {
+        const now = Date.now();
+        this._expectingTcpKeyframeUntil = now + 2000;
+        const KEYFRAME_MIN_INTERVAL_MS = 1000;
+        if (this._udpLastKeyframeReq &&
+            (now - this._udpLastKeyframeReq) <= KEYFRAME_MIN_INTERVAL_MS)
+            return;
+        this._udpLastKeyframeReq = now;
+        Log.Warn("UDP: loss detected; requesting keyframe refresh");
+        this._decoders[encodings.encodingKasmVideo]?.enterRecovery?.();
+        this._requestFullRefresh();
+    }
+
     // The UDP datachannel is unreliable (maxRetransmits: 0). A multi-piece frame
     // that loses a piece never completes, so it sits in _udpBuffer forever (a
     // leak) while the video decoder either stalls or decodes deltas that
@@ -1925,13 +1952,7 @@ export default class RFB extends EventTargetMixin {
         if (!lost)
             return;
 
-        const KEYFRAME_MIN_INTERVAL_MS = 1000;
-        if (!this._udpLastKeyframeReq ||
-            (now - this._udpLastKeyframeReq) > KEYFRAME_MIN_INTERVAL_MS) {
-            this._udpLastKeyframeReq = now;
-            Log.Warn("UDP: loss detected; requesting keyframe refresh");
-            this._requestFullRefresh();
-        }
+        this._maybeRequestUdpKeyframe();
     }
 
     // Gets the the size of the available screen
@@ -5115,20 +5136,27 @@ export default class RFB extends EventTargetMixin {
 
         try {
             if (this._transitConnectionState == this.TransitConnectionStates.Udp || this._transitConnectionState == this.TransitConnectionStates.Failure) {
-                if (this._transitConnectionState == this.TransitConnectionStates.Udp) {
-                    Log.Warn("Implicit UDP Transit Failure, TCP rects recieved while in UDP mode.")
-                    this._udpTransitFailures++;
-                }
-                this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
-                this._display.clear();
-                if (this._useUdp) {
-                    if (this._udpConnectFailures < 3 && this._udpTransitFailures < 3) {
-                        setTimeout(function() {
-                            Log.Warn("Attempting to connect via UDP again after failure.")
-                            this.enableWebRTC = true;
-                        }.bind(this), 3000);
-                    } else {
-                        Log.Warn("UDP connection failures exceeded limit, remaining on TCP transit.")
+                const expectedKeyframe =
+                    this._transitConnectionState == this.TransitConnectionStates.Udp &&
+                    this._FBU.encoding === encodings.encodingKasmVideo &&
+                    this._expectingTcpKeyframeUntil &&
+                    Date.now() < this._expectingTcpKeyframeUntil;
+                if (!expectedKeyframe) {
+                    if (this._transitConnectionState == this.TransitConnectionStates.Udp) {
+                        Log.Warn("Implicit UDP Transit Failure, TCP rects recieved while in UDP mode.")
+                        this._udpTransitFailures++;
+                    }
+                    this._changeTransitConnectionState(this.TransitConnectionStates.Tcp);
+                    this._display.clear();
+                    if (this._useUdp) {
+                        if (this._udpConnectFailures < 3 && this._udpTransitFailures < 3) {
+                            setTimeout(function() {
+                                Log.Warn("Attempting to connect via UDP again after failure.")
+                                this.enableWebRTC = true;
+                            }.bind(this), 3000);
+                        } else {
+                            Log.Warn("UDP connection failures exceeded limit, remaining on TCP transit.")
+                        }
                     }
                 }
             } else if (this._transitConnectionState == this.TransitConnectionStates.Downgrading) {

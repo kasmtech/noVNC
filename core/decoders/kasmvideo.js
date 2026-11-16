@@ -35,6 +35,13 @@ export default class KasmVideoDecoder {
     }
 
     // ===== Public Methods =====
+    enterRecovery() {
+        if (!this._decoderRecovery) {
+            this._decoderRecovery = true;
+            this._skippedFrames = 0;
+        }
+    }
+
     decodeRect(x, y, width, height, sock, display, depth, frameId) {
         if (this._ctl === null) {
             if (sock.rQwait("KasmVideo screen and compression-control", 2)) {

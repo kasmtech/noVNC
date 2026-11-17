@@ -9,6 +9,7 @@
  */
 
 import * as Log from '../util/logging.js';
+import { DEFAULT_ICE_CONFIG, parseIceConfig } from '../transport/ice_config.js';
 import { encodings } from '../encodings.js';
 import { placeOverCanvas, positionHost } from '../util/element.js';
 import WebRTCVideoTransport from '../transport/webrtc_video.js';
@@ -32,7 +33,7 @@ export default class WebRTCController {
         this._pendingWebRTCOfferRequest = null;
         this._webrtcSessionActive = false;
         this._webrtcSessionCodec = null;
-        this._webrtcIceServers = [];
+        this._webrtcIceConfig = DEFAULT_ICE_CONFIG;
         this._webrtcIceServersRaw = '';
 
         this._imageChannel = null;
@@ -202,7 +203,7 @@ export default class WebRTCController {
         if (this._imageChannel || this._imageChannelFailures >= IMAGE_CHANNEL_MAX_FAILURES) return;
         Log.Info('Requesting image DataChannel (reason=' + reason + ')');
         this._imageChannel = new WebRTCImageTransport(
-            this, this._makeImageSignaling(), this._webrtcIceServers,
+            this, this._makeImageSignaling(), this._webrtcIceConfig,
             (data, frameId) => this._rfb._handleUdpRect(data, frameId),
             () => this._onImageChannelLoss());
         this._imageOfferTimer = setTimeout(() => {
@@ -259,7 +260,7 @@ export default class WebRTCController {
                 clearTimeout(this._imageOfferTimer);
                 this._imageOfferTimer = null;
             }
-            this._imageChannel.setIceServers(this._webrtcIceServers);
+            this._imageChannel.setIceConfig(this._webrtcIceConfig);
         }
         this._imageChannel.signaling.deliver(kind, payload);
     }
@@ -336,36 +337,9 @@ export default class WebRTCController {
 
     _storeWebRTCIceServers(payload) {
         this._webrtcIceServersRaw = payload || '';
-        this._webrtcIceServers = this._webrtcIceServersRaw.split('\n')
-            .map(s => s.trim()).filter(Boolean)
-            .map(raw => WebRTCController._parseIceServer(raw))
-            .filter(Boolean);
-        Log.Debug('WebRTC ICE servers: ' +
-            JSON.stringify(this._webrtcIceServers.map(s => s.urls)));
-    }
-
-    static _parseIceServer(raw) {
-        const m = /^(turns?):(?:([^@/:]+):([^@/]*)@)(.+)$/i.exec(raw);
-        if (!m) {
-            if (/^turns?:/i.test(raw)) {
-                Log.Warn('Ignoring TURN server without full credentials');
-                return null;
-            }
-            return { urls: raw };
-        }
-        let username, credential;
-        try {
-            username = decodeURIComponent(m[2]);
-            credential = decodeURIComponent(m[3]);
-        } catch (e) {
-            Log.Warn('Ignoring TURN server with malformed credentials');
-            return null;
-        }
-        if (!username || !credential) {
-            Log.Warn('Ignoring TURN server without full credentials');
-            return null;
-        }
-        return { urls: m[1] + ':' + m[4], username, credential };
+        this._webrtcIceConfig = parseIceConfig(this._webrtcIceServersRaw);
+        Log.Debug('WebRTC ICE servers (' + this._webrtcIceConfig.iceTransportPolicy + '): ' +
+            JSON.stringify(this._webrtcIceConfig.iceServers.map(s => s.urls)));
     }
 
     _localWebRTCScreenId() {
@@ -394,7 +368,7 @@ export default class WebRTCController {
             const pending = !!slot.live;
             const sig = makeSignaling(screenId);
             const transport = new WebRTCVideoTransport(this, screenId, sig,
-                { pending, iceServers: this._webrtcIceServers });
+                { pending, iceConfig: this._webrtcIceConfig });
             if (pending) {
                 if (slot.pending) { try { slot.pending.stop(); } catch (e) {} }
                 slot.pending = transport;

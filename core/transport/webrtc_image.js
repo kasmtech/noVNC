@@ -15,6 +15,7 @@
 
 import * as Log from '../util/logging.js';
 import { WebRTCSignalKind } from './webrtc_signaling.js';
+import { DEFAULT_ICE_CONFIG } from './ice_config.js';
 
 export const IMAGE_CHANNEL_HEADER_SIZE = 16;
 
@@ -25,11 +26,11 @@ const LOSS_CHECK_INTERVAL_MS = 250;
 const MAX_PIECES = 65536;
 
 export default class WebRTCImageTransport {
-    constructor(controller, signaling, iceServers, onRect, onLoss) {
+    constructor(controller, signaling, iceConfig, onRect, onLoss) {
         this._controller = controller;
         this._signaling = signaling;
         this._signaling.onMessage((kind, payload) => this._onSignal(kind, payload));
-        this._iceServers = iceServers || [];
+        this._iceConfig = iceConfig || DEFAULT_ICE_CONFIG;
         this._onRect = onRect;
         this._onLoss = onLoss;
 
@@ -52,7 +53,7 @@ export default class WebRTCImageTransport {
     get isOpen() { return this._open; }
     get signaling() { return this._signaling; }
 
-    setIceServers(iceServers) { this._iceServers = iceServers || []; }
+    setIceConfig(iceConfig) { this._iceConfig = iceConfig || DEFAULT_ICE_CONFIG; }
 
     stop() {
         this._closed = true;
@@ -99,7 +100,7 @@ export default class WebRTCImageTransport {
             return;
         }
         try {
-            this._pc = new RTCPeerConnection({ iceServers: this._iceServers });
+            this._pc = new RTCPeerConnection({ ...this._iceConfig });
         } catch (e) {
             Log.Error('Image-channel RTCPeerConnection construction failed: ' + e);
             this._fail('pc-construct-failed');

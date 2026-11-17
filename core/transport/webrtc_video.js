@@ -27,6 +27,7 @@
 
 import * as Log from '../util/logging.js';
 import { WebRTCSignalKind } from './webrtc_signaling.js';
+import { DEFAULT_ICE_CONFIG } from './ice_config.js';
 
 const FALLBACK_GRACE_MS = 5000;
 
@@ -37,13 +38,13 @@ export default class WebRTCVideoTransport {
         this._signaling = signaling;
         this._signaling.onMessage((kind, payload) => this._onSignal(kind, payload));
 
-        this._opts = Object.assign({ pending: false, iceServers: [] }, opts || {});
+        this._opts = Object.assign({ pending: false, iceConfig: DEFAULT_ICE_CONFIG }, opts || {});
 
         this._pc = null;
         this._video = null;
         this._failureTimer = null;
         this._negotiated = false;
-        this._iceServers = this._opts.iceServers || [];
+        this._iceConfig = this._opts.iceConfig || DEFAULT_ICE_CONFIG;
 
         this._remoteDescriptionSet = false;
         this._pendingRemoteCandidates = [];
@@ -106,7 +107,7 @@ export default class WebRTCVideoTransport {
         }
         try {
             this._pc = new RTCPeerConnection({
-                iceServers: this._iceServers,
+                ...this._iceConfig,
                 bundlePolicy: 'max-bundle',
             });
         } catch (e) {

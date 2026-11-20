@@ -41,6 +41,7 @@ export default class WebRTCController {
         this._imageChannelFailures = 0;
         this._imageOfferTimer = null;
         this._imageLastRefresh = 0;
+        this._imageRefreshTimer = null;
 
         this._webrtcLayer = null;
         this._webrtcLayerObserver = null;
@@ -226,6 +227,7 @@ export default class WebRTCController {
             clearTimeout(this._imageOfferTimer);
             this._imageOfferTimer = null;
         }
+        this._cancelImageRefresh();
         if (!this._imageChannel) return;
         const wasActive = this._imageChannelActive;
         try { this._imageChannel.stop(); } catch (e) {}
@@ -279,6 +281,7 @@ export default class WebRTCController {
             clearTimeout(this._imageOfferTimer);
             this._imageOfferTimer = null;
         }
+        this._cancelImageRefresh();
         const wasActive = this._imageChannelActive;
         this._imageChannel = null;
         this._imageChannelActive = false;
@@ -292,10 +295,26 @@ export default class WebRTCController {
 
     _onImageChannelLoss() {
         const now = Date.now();
-        if (now - this._imageLastRefresh < IMAGE_CHANNEL_REFRESH_COOLDOWN_MS) return;
+        const wait = this._imageLastRefresh + IMAGE_CHANNEL_REFRESH_COOLDOWN_MS - now;
+        if (wait > 0) {
+            if (!this._imageRefreshTimer) {
+                this._imageRefreshTimer = setTimeout(() => {
+                    this._imageRefreshTimer = null;
+                    this._onImageChannelLoss();
+                }, wait);
+            }
+            return;
+        }
         this._imageLastRefresh = now;
         Log.Warn('Image DataChannel lost a message; requesting full refresh');
         this._rfb._requestFullRefresh();
+    }
+
+    _cancelImageRefresh() {
+        if (this._imageRefreshTimer) {
+            clearTimeout(this._imageRefreshTimer);
+            this._imageRefreshTimer = null;
+        }
     }
 
     _dispatchWebRTCSignal(kind, screenId, payload) {

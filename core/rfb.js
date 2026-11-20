@@ -4166,10 +4166,6 @@ export default class RFB extends EventTargetMixin {
             Log.Warn('Image channel message too short (' + data.length + ' bytes)');
             return false;
         }
-        if (!this._imageRectsSeen) {
-            this._imageRectsSeen = true;
-            this._display.clear();
-        }
 
         const frame = {
             x: (data[0] << 8) + data[1],
@@ -4179,6 +4175,14 @@ export default class RFB extends EventTargetMixin {
             encoding: parseInt((data[8] << 24) + (data[9] << 16) +
                                (data[10] << 8) + data[11], 10)
         };
+
+        if (frame.encoding === encodings.pseudoEncodingImageChannelMarker) {
+            return true;
+        }
+        if (!this._imageRectsSeen) {
+            this._imageRectsSeen = true;
+            this._display.clear();
+        }
 
         switch (frame.encoding) {
             case encodings.pseudoEncodingLastRect:

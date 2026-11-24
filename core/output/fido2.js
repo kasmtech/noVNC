@@ -64,6 +64,32 @@ const decodeJson = (payload) => (payload.length === 0 ? {} : JSON.parse(new Text
 
 const KASM_FIDO2_EXTENSION_ID = "cjkohjfgidilbllbjkdhpoeonjanpomo";
 
+// FIDO2 requests currently waiting on the extension. A request can sit in a
+// PIN dialog or wait for a touch on the client for minutes; when the session
+// ends nobody can answer it, so the dialog is torn down instead (see below).
+let inFlight = 0;
+
+// Asks the extension to cancel every FIDO2 request this page has in flight.
+// The extension only cancels requests made by this same document.
+const cancelInFlight = (reason) => {
+    if (inFlight === 0) {
+        return;
+    }
+    Log.Info(`fido2: cancelling ${inFlight} in-flight request(s) (${reason})`);
+    try {
+        chrome.runtime.sendMessage(
+            KASM_FIDO2_EXTENSION_ID,
+            { deviceId: "fido2-relay", completionId: Date.now().toString() + Math.random().toString(36), type: "ctap_cancel", args: "" },
+            () => void chrome.runtime.lastError // read to silence "unchecked lastError"; older extensions reject the type
+        );
+    } catch (err) {
+        Log.Warn(`fido2: cancel failed: ${err.message}`);
+    }
+};
+
+let pageHideHooked = false;
+const hookedRfbs = new WeakSet();
+
 const callExtension = (type, params) => {
     return new Promise((resolve, reject) => {
         const message = {
@@ -87,12 +113,26 @@ const callExtension = (type, params) => {
             }
         };
 
-        chrome.runtime.sendMessage(KASM_FIDO2_EXTENSION_ID, message, onResponse);
+        inFlight++;
+        chrome.runtime.sendMessage(KASM_FIDO2_EXTENSION_ID, message, (response) => {
+            inFlight--;
+            onResponse(response);
+        });
     });
 };
 
 export default (rfb) => {
     Log.Debug("fido2.initializeFido2Relay");
+
+    // Called on every (re)connect of the same RFB, so hook each target once.
+    if (!hookedRfbs.has(rfb)) {
+        hookedRfbs.add(rfb);
+        rfb.addEventListener("disconnect", () => cancelInFlight("session disconnected"));
+    }
+    if (!pageHideHooked) {
+        pageHideHooked = true;
+        window.addEventListener("pagehide", () => cancelInFlight("page unloading"));
+    }
 
     const sendFido2Response = (deviceId, command, payload = new Uint8Array(0)) => {
         Log.Debug(

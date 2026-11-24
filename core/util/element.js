@@ -10,6 +10,46 @@
  * HTML element utility functions
  */
 
+/*
+ * Top-left corner of a canvas in the content coordinates of its scrolling
+ * host. An absolutely positioned child of the host placed here covers the
+ * canvas and scrolls with it. Requires the host to be positioned (see
+ * positionHost).
+ */
+export function canvasOriginInHost(canvas, host) {
+    const c = canvas.getBoundingClientRect();
+    const h = host.getBoundingClientRect();
+    return {
+        x: c.left - h.left - host.clientLeft + host.scrollLeft,
+        y: c.top - h.top - host.clientTop + host.scrollTop,
+    };
+}
+
+/*
+ * Absolutely positioned children resolve against the nearest positioned
+ * ancestor, so the host needs to be one for canvasOriginInHost offsets to
+ * line up.
+ */
+export function positionHost(host) {
+    if (getComputedStyle(host).position === 'static') {
+        host.style.position = 'relative';
+    }
+}
+
+/*
+ * Sizes and places an absolutely positioned element over a canvas, in the
+ * content coordinates of the canvas's scrolling host so it scrolls with it.
+ */
+export function placeOverCanvas(el, canvas, host) {
+    positionHost(host);
+    const origin = canvasOriginInHost(canvas, host);
+    const box = canvas.getBoundingClientRect();
+    el.style.left = origin.x + 'px';
+    el.style.top = origin.y + 'px';
+    el.style.width = box.width + 'px';
+    el.style.height = box.height + 'px';
+}
+
 export function clientToElement(x, y, elem) {
     const bounds = elem.getBoundingClientRect();
     let pos = { x: 0, y: 0 };

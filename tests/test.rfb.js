@@ -4222,3 +4222,38 @@ describe('RFB messages', function () {
         });
     });
 });
+
+describe('Refreshing lost rects', function () {
+    let rfb;
+    beforeEach(function () {
+        // Only the state _onRectsLost uses, so no connection is needed
+        rfb = { _rfbConnectionState: 'connected', _sock: {},
+                _fbWidth: 100, _fbHeight: 50 };
+        sinon.stub(RFB.messages, 'fbUpdateRequest');
+    });
+    afterEach(function () {
+        RFB.messages.fbUpdateRequest.restore();
+    });
+
+    it('should send a non-incremental update request for the lost area', function () {
+        RFB.prototype._onRectsLost.call(rfb, 10, 20, 30, 15);
+        expect(RFB.messages.fbUpdateRequest).to.have.been.calledOnce;
+        expect(RFB.messages.fbUpdateRequest).to.have.been.calledWith(rfb._sock, false, 10, 20, 30, 15);
+    });
+
+    it('should clip the request to the framebuffer', function () {
+        RFB.prototype._onRectsLost.call(rfb, -5, 40, 200, 20);
+        expect(RFB.messages.fbUpdateRequest).to.have.been.calledWith(rfb._sock, false, 0, 40, 100, 10);
+    });
+
+    it('should not send a request for an area outside the framebuffer', function () {
+        RFB.prototype._onRectsLost.call(rfb, 120, 0, 10, 10);
+        expect(RFB.messages.fbUpdateRequest).to.not.have.been.called;
+    });
+
+    it('should not send a request when not connected', function () {
+        rfb._rfbConnectionState = 'disconnecting';
+        RFB.prototype._onRectsLost.call(rfb, 0, 0, 10, 10);
+        expect(RFB.messages.fbUpdateRequest).to.not.have.been.called;
+    });
+});

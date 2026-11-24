@@ -396,4 +396,150 @@ describe('Display/Canvas Helper', function () {
             expect(display.drawImage).to.have.been.calledWith({ complete: true }, 3, 4);
         });
     });
+
+    // These need a canvas inside a sized container, which the constructor
+    // reads its dimensions from.
+    function makeAttachedDisplay() {
+        const container = document.createElement('div');
+        container.style.width = '16px';
+        container.style.height = '16px';
+        document.body.appendChild(container);
+        const canvas = document.createElement('canvas');
+        container.appendChild(canvas);
+        const display = new Display(canvas);
+        display.resize(16, 16);
+        display.clear();
+        return { display, container };
+    }
+
+    function rect(frameId, x, y, width, height, type='fill') {
+        return { type, frame_id: frameId, x, y, width, height,
+                 color: [0, 0, 0], screenLocations: [] };
+    }
+
+    describe('lost rects', function () {
+        let display, container, clock;
+        beforeEach(function () {
+            ({ display, container } = makeAttachedDisplay());
+            display.onrectslost = sinon.spy();
+            clock = sinon.useFakeTimers();
+        });
+        afterEach(function () {
+            clock.restore();
+            display.dispose();
+            container.remove();
+        });
+
+        it('should report the bounds of lost rects once, after the current task', function () {
+            display.markRectLost(2, 3, 4, 5);
+            display.markRectLost(8, 1, 2, 2);
+            expect(display.onrectslost).to.not.have.been.called;
+            clock.tick(0);
+            expect(display.onrectslost).to.have.been.calledOnce;
+            expect(display.onrectslost).to.have.been.calledWith(2, 1, 8, 7);
+
+            display.markRectLost(0, 0, 1, 1);
+            clock.tick(0);
+            expect(display.onrectslost).to.have.been.calledTwice;
+            expect(display.onrectslost.secondCall).to.have.been.calledWith(0, 0, 1, 1);
+        });
+
+        it('should ignore empty rects', function () {
+            display.markRectLost(1, 1, 0, 4);
+            clock.tick(0);
+            expect(display.onrectslost).to.not.have.been.called;
+        });
+
+        it('should report rects older than every queued frame', function () {
+            for (let id = 5; id <= 7; id++) {
+                display._asyncRenderQPush(rect(id, 0, 0, 1, 1));
+            }
+            display._asyncRenderQPush(rect(4, 2, 2, 3, 3));
+            display._asyncRenderQPush({ type: 'flip', frame_id: 4, rect_cnt: 2,
+                                        screenLocations: [] });
+            clock.tick(0);
+            expect(display.onrectslost).to.have.been.calledOnce;
+            expect(display.onrectslost).to.have.been.calledWith(2, 2, 3, 3);
+        });
+
+        it('should report the rects of a dropped frame', function () {
+            display._asyncRenderQPush(rect(5, 1, 1, 2, 2));
+            display._asyncRenderQPush(rect(5, 6, 6, 2, 2));
+            display._asyncRenderQPush(rect(6, 0, 0, 1, 1));
+            display._asyncRenderQPush(rect(7, 0, 0, 1, 1));
+            display._asyncRenderQPush(rect(8, 0, 0, 1, 1));
+            clock.tick(0);
+            expect(display.onrectslost).to.have.been.calledOnce;
+            expect(display.onrectslost).to.have.been.calledWith(1, 1, 7, 7);
+        });
+
+        it('should report images skipped when a frame is forced', function () {
+            const img = { complete: false, addEventListener: sinon.spy() };
+            display._asyncRenderQPush({ type: 'img', frame_id: 5, x: 4, y: 4,
+                                        width: 8, height: 8, img,
+                                        screenLocations: [] });
+            display._asyncFrameComplete(0, true);
+            clock.tick(0);
+            expect(display.onrectslost).to.have.been.calledOnce;
+            expect(display.onrectslost).to.have.been.calledWith(4, 4, 8, 8);
+        });
+    });
+
+    describe('flushing the frame queue', function () {
+        let display, container, clock;
+        beforeEach(function () {
+            ({ display, container } = makeAttachedDisplay());
+            display.onflush = sinon.spy();
+            clock = sinon.useFakeTimers();
+        });
+        afterEach(function () {
+            clock.restore();
+            display.dispose();
+            container.remove();
+        });
+
+        // A frame whose rects have all arrived, but one is still decoding
+        function queueDecodingFrame() {
+            const img = { complete: false, addEventListener: sinon.spy() };
+            display._asyncRenderQPush({ type: 'img', frame_id: 5, x: 0, y: 0,
+                                        width: 4, height: 4, img,
+                                        screenLocations: [] });
+            display._asyncRenderQPush({ type: 'flip', frame_id: 5, rect_cnt: 2,
+                                        screenLocations: [] });
+            return img;
+        }
+
+        it('should wait for the oldest frame to be drawn before signalling', function () {
+            const img = queueDecodingFrame();
+            display.flush();
+            expect(display.onflush).to.not.have.been.called;
+            expect(display._asyncFrameQueue[0][0]).to.equal(5);
+
+            img.complete = true;
+            display._asyncFrameComplete(0);
+            display._pushAsyncFrame();
+            expect(display.onflush).to.have.been.calledOnce;
+            expect(display._asyncFrameQueue[0][0]).to.equal(0);
+
+            clock.tick(1000);
+            expect(display.onflush).to.have.been.calledOnce;
+        });
+
+        it('should force the oldest frame if it is not drawn in time', function () {
+            queueDecodingFrame();
+            display.flush();
+            clock.tick(499);
+            expect(display.onflush).to.not.have.been.called;
+            clock.tick(1);
+            expect(display.onflush).to.have.been.calledOnce;
+            expect(display._asyncFrameQueue[0][0]).to.equal(0);
+        });
+
+        it('should force the oldest frame at once if its rect count is unknown', function () {
+            display._asyncRenderQPush(rect(5, 0, 0, 1, 1));
+            display.flush();
+            expect(display.onflush).to.have.been.calledOnce;
+            expect(display._asyncFrameQueue[0][0]).to.equal(0);
+        });
+    });
 });

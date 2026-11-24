@@ -13,6 +13,7 @@ export const messages = {
     msgTypeTouchEvent: 193,
     msgTypeTextInputFocus: 194,
     msgTypeTextInputFields: 195,
+    msgTypeWebrtc: 196,
     msgTypeUserAddedToSession: 253,
     msgTypeUserRemovedFromSession: 254
 };

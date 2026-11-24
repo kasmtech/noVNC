@@ -41,6 +41,7 @@ export const encodings = {
     pseudoEncodingKasmDisconnectNotify: -1885,
     pseudoEncodingDirectMouse: -1884,
     pseudoEncodingTouch: -1883,
+    pseudoEncodingImageChannelMarker: -1882,
 
     pseudoEncodingHardwareProfile0: -1170,
     pseudoEncodingHardwareProfile4: -1166,

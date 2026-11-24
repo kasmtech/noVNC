@@ -1,5 +1,6 @@
 import * as Log from "../util/logging";
 import { perfLogger } from '../util/performance-logger.js';
+import { placeOverCanvas } from "../util/element.js";
 import {clampDimension} from "../display";
 
 export class Canvas2DRenderer {
@@ -33,6 +34,13 @@ export class Canvas2DRenderer {
 
         this._transparentOverlayImg = null;
         this._transparentOverlayRect = null;
+
+        // Watermark overlay, created on first use. It is a sibling of the
+        // canvas, stacked above the WebRTC video layer, so the watermark stays
+        // visible while video plays.
+        this._overlayCanvas = null;
+        this._overlayCtx = null;
+        this._overlayObserver = null;
     }
 
     get width() {
@@ -59,10 +67,6 @@ export class Canvas2DRenderer {
             //copy current visible canvas to backbuffer
             let saveImg = this._visibleCtx.getImageData(0, 0, this._target.width, this._target.height);
             this._drawCtx.putImageData(saveImg, 0, 0);
-
-            if (this._transparentOverlayImg) {
-                this.drawImage(this._transparentOverlayImg, this._transparentOverlayRect.x, this._transparentOverlayRect.y, this._transparentOverlayRect.width, this._transparentOverlayRect.height, true);
-            }
         } else if (!value && this._target) {
             //copy backbuffer to canvas to clear any overlays
             let saveImg = this._drawCtx.getImageData(0, 0, this._target.width, this._target.height);
@@ -96,8 +100,65 @@ export class Canvas2DRenderer {
     }
 
     drawTransparentOverlayImg() {
-        if (this._transparentOverlayImg) {
-            this.drawImage(this._transparentOverlayImg, this._transparentOverlayRect.x, this._transparentOverlayRect.y, this._transparentOverlayRect.width, this._transparentOverlayRect.height, true);
+        if (!this._overlayCanvas && !this._transparentOverlayImg) {
+            return;
+        }
+        this._ensureOverlay();
+        this._drawOverlay();
+    }
+
+    _ensureOverlay() {
+        if (this._overlayCanvas) {
+            return;
+        }
+        const host = this._target.parentNode;
+        if (!host) {
+            return;
+        }
+
+        this._overlayCanvas = document.createElement('canvas');
+        this._overlayCanvas.style.position = 'absolute';
+        this._overlayCanvas.style.pointerEvents = 'none';
+        this._overlayCanvas.style.zIndex = '2';
+        this._overlayCtx = this._overlayCanvas.getContext('2d');
+        host.appendChild(this._overlayCanvas);
+
+        // Re-place the overlay whenever the canvas or its host changes size,
+        // since either one moves the canvas within the host
+        this._overlayObserver = new ResizeObserver(() => this._drawOverlay());
+        this._overlayObserver.observe(host);
+        this._overlayObserver.observe(this._target);
+    }
+
+    _drawOverlay() {
+        const overlay = this._overlayCanvas;
+        const host = this._target.parentNode;
+        if (!overlay || !host) {
+            return;
+        }
+
+        // The overlay covers the visible canvas exactly, so the watermark
+        // rect is interpreted in the same coordinates as before
+        placeOverCanvas(overlay, this._target, host);
+        if (overlay.width !== this._target.width) {
+            overlay.width = this._target.width;
+        }
+        if (overlay.height !== this._target.height) {
+            overlay.height = this._target.height;
+        }
+
+        const ctx = this._overlayCtx;
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+
+        const img = this._transparentOverlayImg;
+        const rect = this._transparentOverlayRect;
+        if (!img || !rect) {
+            return;
+        }
+        if (img.width !== rect.width || img.height !== rect.height) {
+            ctx.drawImage(img, rect.x, rect.y, rect.width, rect.height);
+        } else {
+            ctx.drawImage(img, rect.x, rect.y);
         }
     }
 
@@ -229,8 +290,8 @@ export class Canvas2DRenderer {
                             newX, newY, w, h);
     }
 
-    drawImage(img, x, y, w, h, overlay = false) {
-        const ctx = (overlay && this._enableCanvasBuffer) ? this._visibleCtx : this._targetCtx;
+    drawImage(img, x, y, w, h) {
+        const ctx = this._targetCtx;
         if (img.width !== w || img.height !== h) {
             ctx.drawImage(img, x, y, w, h);
         } else {
@@ -272,6 +333,15 @@ export class Canvas2DRenderer {
     dispose() {
         if (this._visibleCtx && this._target) {
             this._visibleCtx.clearRect(0, 0, this._target.width, this._target.height);
+        }
+        if (this._overlayObserver) {
+            this._overlayObserver.disconnect();
+            this._overlayObserver = null;
+        }
+        if (this._overlayCanvas) {
+            this._overlayCanvas.remove();
+            this._overlayCanvas = null;
+            this._overlayCtx = null;
         }
     }
 }

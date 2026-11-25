@@ -11,11 +11,19 @@ const REQUEST_GET_ASSERTION = 0x02;
 const REQUEST_LIST_DEVICES = 0x03;
 const RESPONSE_ACK = 0x80;
 const RESPONSE_ERROR = 0x81;
+// Sent the moment a request arrives, before the extension is asked anything.
+// Tells the container bridge a viewer that can answer is subscribed; without
+// it the bridge reports the relay unavailable and the page falls back to the
+// browser's own WebAuthn.
+const RESPONSE_PENDING = 0x82;
 
-// Same version-marker convention as smartcard.js's v1 header, so a future
-// legacy-less-capable bridge/client pairing can still be told apart:
-// [0x10][command (1)][device_id (1)][U32 length (4)][payload]
-const PROTOCOL_VERSION_V1 = 0x10;
+// v2 header, shared with virtual-smartcard-bridge's fido2_bridge.py:
+// [0x11][command (1)][device_id (1)][U32 request_id (4)][U32 length (4)][payload]
+// Every reply echoes the request's request_id. Xvnc hands relay replies to
+// whichever bridge process sent most recently, so the bridge uses the id to
+// drop a late answer that was meant for an earlier request.
+const PROTOCOL_VERSION_V2 = 0x11;
+const HEADER_LENGTH = 11;
 
 const commandToString = (command) => {
     return {
@@ -24,39 +32,48 @@ const commandToString = (command) => {
         [REQUEST_LIST_DEVICES]: "REQUEST_LIST_DEVICES",
         [RESPONSE_ACK]: "RESPONSE_ACK",
         [RESPONSE_ERROR]: "RESPONSE_ERROR",
+        [RESPONSE_PENDING]: "RESPONSE_PENDING",
     }[command] || `0x${command.toString(16).toUpperCase()}`;
 };
 
-// createRelayPacket: fido2.js only sends responses (RESPONSE_ACK / RESPONSE_ERROR).
-const createRelayPacket = (command, deviceId, payload = new Uint8Array(0)) => {
-    if (command !== RESPONSE_ACK && command !== RESPONSE_ERROR) {
+const writeU32 = (packet, offset, value) => {
+    packet[offset] = (value >>> 24) & 0xff;
+    packet[offset + 1] = (value >>> 16) & 0xff;
+    packet[offset + 2] = (value >>> 8) & 0xff;
+    packet[offset + 3] = value & 0xff;
+};
+
+const readU32 = (data, offset) =>
+    ((data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3]) >>> 0;
+
+// createRelayPacket: fido2.js only sends responses.
+const createRelayPacket = (command, deviceId, requestId, payload = new Uint8Array(0)) => {
+    if (command !== RESPONSE_ACK && command !== RESPONSE_ERROR && command !== RESPONSE_PENDING) {
         throw new Error("invalid_relay_response");
     }
-    const packet = new Uint8Array(7 + payload.length);
-    packet[0] = PROTOCOL_VERSION_V1;
+    const packet = new Uint8Array(HEADER_LENGTH + payload.length);
+    packet[0] = PROTOCOL_VERSION_V2;
     packet[1] = command;
     packet[2] = deviceId;
-    const len = payload.length;
-    packet[3] = (len >>> 24) & 0xff;
-    packet[4] = (len >>> 16) & 0xff;
-    packet[5] = (len >>> 8) & 0xff;
-    packet[6] = len & 0xff;
-    packet.set(payload, 7);
+    writeU32(packet, 3, requestId);
+    writeU32(packet, 7, payload.length);
+    packet.set(payload, HEADER_LENGTH);
     return packet;
 };
 
 // parseRelayPacket: the container-side fido2 bridge sends requests.
 const parseRelayPacket = (data) => {
-    if (!data || data.length < 7 || data[0] !== PROTOCOL_VERSION_V1) {
+    if (!data || data.length < HEADER_LENGTH || data[0] !== PROTOCOL_VERSION_V2) {
         throw new Error("relay_packet_invalid");
     }
     const command = data[1];
     const deviceId = data[2];
-    const payloadLength = ((data[3] << 24) | (data[4] << 16) | (data[5] << 8) | data[6]) >>> 0;
-    if (data.length < 7 + payloadLength) {
+    const requestId = readU32(data, 3);
+    const payloadLength = readU32(data, 7);
+    if (data.length < HEADER_LENGTH + payloadLength) {
         throw new Error("relay_packet_incomplete");
     }
-    return { command, deviceId, payload: data.slice(7, 7 + payloadLength) };
+    return { command, deviceId, requestId, payload: data.slice(HEADER_LENGTH, HEADER_LENGTH + payloadLength) };
 };
 
 const encodeJson = (value) => new TextEncoder().encode(JSON.stringify(value ?? {}));
@@ -134,26 +151,30 @@ export default (rfb) => {
         window.addEventListener("pagehide", () => cancelInFlight("page unloading"));
     }
 
-    const sendFido2Response = (deviceId, command, payload = new Uint8Array(0)) => {
+    const sendFido2Response = (deviceId, requestId, command, payload = new Uint8Array(0)) => {
         Log.Debug(
-            `fido2.response: device[${deviceId}] command=${commandToString(command)}, payloadLen=${payload.length}`
+            `fido2.response: device[${deviceId}] request=${requestId.toString(16)} command=${commandToString(command)}, payloadLen=${payload.length}`
         );
-        const packet = createRelayPacket(command, deviceId, payload);
+        const packet = createRelayPacket(command, deviceId, requestId, payload);
         rfb.sendUnixRelayData("fido2", packet);
     };
 
     rfb.subscribeUnixRelay("fido2", async (data) => {
-        let command, deviceId, payload;
+        let command, deviceId, requestId, payload;
         try {
-            ({ command, deviceId, payload } = parseRelayPacket(data));
+            ({ command, deviceId, requestId, payload } = parseRelayPacket(data));
         } catch (err) {
             Log.Error(`fido2: failed to parse relay packet: ${err.message}`);
             return;
         }
 
         Log.Debug(
-            `fido2.request: device[${deviceId}] command=${commandToString(command)}, payloadLen=${payload.length}`
+            `fido2.request: device[${deviceId}] request=${requestId.toString(16)} command=${commandToString(command)}, payloadLen=${payload.length}`
         );
+
+        // Confirm receipt first: the extension call below can sit in a PIN
+        // dialog for minutes.
+        sendFido2Response(deviceId, requestId, RESPONSE_PENDING);
 
         try {
             let result;
@@ -174,10 +195,10 @@ export default (rfb) => {
                     throw new Error(`unknown_command: 0x${command.toString(16)}`);
             }
 
-            sendFido2Response(deviceId, RESPONSE_ACK, encodeJson(result));
+            sendFido2Response(deviceId, requestId, RESPONSE_ACK, encodeJson(result));
         } catch (error) {
             Log.Error(`fido2: device[${deviceId}]: ${error.message}`);
-            sendFido2Response(deviceId, RESPONSE_ERROR, new TextEncoder().encode(error.message));
+            sendFido2Response(deviceId, requestId, RESPONSE_ERROR, new TextEncoder().encode(error.message));
         }
     });
 };

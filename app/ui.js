@@ -104,6 +104,7 @@ const UI = {
     bandwidthChart: null,
     capacityChart: null,
     lastRxSample: null,
+    rxHistory: [],
     jitterChart: null,
     rttChart: null,
 
@@ -697,12 +698,14 @@ const UI = {
             const value = UI.getSettingElement('framerate_image_mode').value;
             UI.getSettingElement('framerate_streaming_mode').value = value;
             WebUtil.writeSetting('framerate_streaming_mode', value);
-            UI.updateQuality();
+            // Pass the slider's value on: without it the quality presets fall back to their own frame rate (24 or 60)
+            // and put the slider back where it was.
+            UI.updateQuality(parseInt(value));
         });
         UI.addSettingChangeHandler('framerate_streaming_mode', () => {
             const value = UI.getSettingElement('framerate_streaming_mode').value;
             WebUtil.writeSetting('framerate_streaming_mode', value);
-            UI.updateQuality();
+            UI.updateQuality(parseInt(value));
         });
         UI.addSettingChangeHandler('compression');
         UI.addSettingChangeHandler('compression', UI.updateCompression);
@@ -874,6 +877,7 @@ const UI = {
 
         if (!enableStats)
             UI.lastRxSample = null;
+            UI.rxHistory = [];
 
         const showPanel = enableStats && !UI.enhancedMetrics;
         document.getElementById("noVNC_connection_stats")?.style.setProperty("visibility", showPanel ? "visible" : "hidden");
@@ -1792,12 +1796,23 @@ const UI = {
                     : (CODEC_VARIANT_NAMES[sm] || ("Codec " + sm));
                 let codecLine = "Codec: " + codecName + " " + UI.rfb._fbWidth + "x" + UI.rfb._fbHeight
                     + " Q:" + UI.rfb.videoStreamQuality + " @" + UI.rfb.frameRate + "fps";
+                if (obj.length >= 14 && Number(obj[13]) > 0 && Number(obj[13]) !== Number(UI.rfb.frameRate)) {
+                    // The server lowers the rate when the link worsens: show what it is really sending at, and the
+                    // rate the slider asked for.
+                    codecLine = codecLine.replace(/ @\d+fps/, " @" + obj[13] + "fps (set " + UI.rfb.frameRate + ")");
+                }
                 if (obj.length >= 8) {
                     const algoNames = ["off", "scream", "loss", "hybrid", "scream-ref", "nada"];
                     const modeNames = ["ConstQual", "Capped", "CBR"];
                     const algo = algoNames[obj[4]] || ("algo" + obj[4]);
                     const mode = modeNames[obj[5]] || ("mode" + obj[5]);
                     codecLine += " | RC: " + algo + " " + mode + " " + obj[6] + "kbps q=" + obj[7] + "ms";
+                }
+                if (obj.length >= 13) {
+                    // obj[8] = congestion controller's current target (kbit/s); obj[9..12] = image-mode adapter state
+                    codecLine += " | target: " + obj[8] + "kbps";
+                    if (obj[9])
+                        codecLine += " | IMG: q<=" + obj[10] + " scale " + obj[11] + "% min-interval " + obj[12] + "ms";
                 }
                 UI._statsConnLine = "CPU: " + obj[0] + "/" + obj[1] + " | Network: " + obj[2] + "/" + obj[3] + " | FPS: " + UI.rfb.statsFps + " Dropped FPS: " + UI.rfb.statsDroppedFps;
                 UI._statsCodecLine = codecLine;
@@ -1850,7 +1865,7 @@ const UI = {
             return;
 
         try {
-            const [jitter, rtt, bandwidth] = JSON.parse(e.detail.text);
+            const [jitter, rtt, bandwidth, baseRtt] = JSON.parse(e.detail.text);
 
             if (UI.getSetting('enable_perf_stats')) {
 
@@ -1873,9 +1888,27 @@ const UI = {
                     const measuredTcp = (tcpRxBytes - UI.lastRxSample.tcpBytes) / elapsed;
                     const valid = (v) => Number.isFinite(v) && v >= 0;
                     if (elapsed > 0 && valid(measured)) {
-                        const headroom = UI.rfb.statsTcpTransit && bandwidth != null && valid(capacity) && capacity > 0 && valid(measuredTcp)
-                            ? Math.max(0, Math.min(100, 100 * (1 - measuredTcp / capacity)))
-                            : null;
+                        // A single 5 s throughput sample is bursty and the server's capacity figure (congestion window / base RTT)
+                        // jumps whenever the window changes, so smooth the usage over 30 s and never report a capacity below the
+                        // highest throughput actually observed in the last 60 s.
+                        let headroom = null;
+                        if (valid(measuredTcp)) {
+                            UI.rxHistory.push({time: now, rate: measuredTcp, span: elapsed});
+                            while (UI.rxHistory.length && now - UI.rxHistory[0].time > 60000) UI.rxHistory.shift();
+                        }
+                        if (UI.rfb.statsTcpTransit && bandwidth != null && valid(capacity) && capacity > 0 && valid(measuredTcp)) {
+                            const recent = UI.rxHistory.filter((h) => now - h.time <= 30000);
+                            const span = recent.reduce((a, h) => a + h.span, 0);
+                            const usage = span > 0 ? recent.reduce((a, h) => a + h.rate * h.span, 0) / span : measuredTcp;
+                            const peak = UI.rxHistory.reduce((a, h) => Math.max(a, h.rate), 0);
+                            const cap = Math.max(capacity, peak);
+                            headroom = Math.max(0, Math.min(100, 100 * (1 - usage / cap)));
+                            // Queueing (current RTT well above the base RTT) means the bottleneck link is saturated, whatever
+                            // the window-based capacity figure says: it is inflated while packets sit in the queue.
+                            if (Number(baseRtt) > 0 && Number(rtt) > Number(baseRtt) * 1.5 + 20) {
+                                headroom = Math.min(headroom, 2);
+                            }
+                        }
                         UI.capacityChart.update(headroom);
                         UI.bandwidthChart.labelSuffix = ` | Estimated Headroom: ${headroom === null ? 'N/A' : `${Number(headroom.toFixed(2))}%`}`;
                         UI.bandwidthChart.update(measured);
@@ -2167,6 +2200,7 @@ const UI = {
         UI.bandwidthChart = null;
         UI.capacityChart = null;
         UI.lastRxSample = null;
+        UI.rxHistory = [];
         UI.rttChart = null;
         UI.jitterChart = null;
 

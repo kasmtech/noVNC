@@ -17,6 +17,7 @@ import { encodings } from "./encodings.js";
 import {Canvas2DRenderer} from "./renderers/Canvas2DRenderer";
 import {WebGLRenderer} from "./renderers/WebGLRenderer";
 import { perfLogger } from './util/performance-logger.js';
+import { computeScreenDimensions } from './util/display-size.js';
 
 export const MAX_FB_DIMENSION = 8192;
 
@@ -297,80 +298,51 @@ export default class Display {
         return [x, y];
     }
 
-    getScreenSize(resolutionQuality, max_width, max_height, hiDpi, disableLimit, disableScaling, streamMode, ignoreServerReported = false) {
-        let data = {
+    getScreenSize(resolutionQuality, maxWidth, maxHeight, hiDpi, disableLimit, disableScaling, streamMode, ignoreServerReported = false) {
+        const data = {
             screens: null,
             serverWidth: 0,
             serverHeight: 0
-        }
+        };
 
         let i = 0;
 
-
         //getting parent node size with sub-pixel precision
-        let parentNodeSize = this._target.parentNode.getBoundingClientRect();
-        //recalculate primary display container size
-        this._screens[i].containerHeight = Math.floor(parentNodeSize.height / 2) * 2;
-        this._screens[i].containerWidth = Math.floor(parentNodeSize.width / 2) * 2;
-        this._screens[i].pixelRatio = window.devicePixelRatio;
-        this._screens[i].width = this._screens[i].containerWidth;
-        this._screens[i].height = this._screens[i].containerHeight;
+        const parentNodeSize = this._target.parentNode.getBoundingClientRect();
+        const screen = this._screens[i];
+        const computed = computeScreenDimensions({
+            parentWidth: parentNodeSize.width,
+            parentHeight: parentNodeSize.height,
+            devicePixelRatio: window.devicePixelRatio,
+            resolutionQuality,
+            maxWidth,
+            maxHeight,
+            hiDpi,
+            disableLimit,
+            disableScaling,
+            streamMode,
+            ignoreServerReported,
+            serverReportedWidth: screen.serverReportedWidth,
+            serverReportedHeight: screen.serverReportedHeight,
+            currentServerWidth: screen.serverWidth,
+            currentServerHeight: screen.serverHeight,
+            antiAliasing: this._renderer?.antiAliasing
+        });
 
-        //calculate server-side and client-side resolution of each screen
-        let width = max_width || this._screens[i].containerWidth;
-        let height = max_height || this._screens[i].containerHeight;
-        let scale = 1;
-
-        //max the resolution of a single screen to 1280
-        if (
-            !ignoreServerReported &&
-            (this._screens[i].serverReportedWidth > 0 && this._screens[i].serverReportedHeight > 0) &&
-            (
-                disableScaling ||
-                (this._screens[i].serverReportedWidth !== this._screens[i].serverWidth || this._screens[i].serverReportedHeight !== this._screens[i].serverHeight)
-            ) &&
-            (!max_width && !max_height)
-        ) {
-            height = this._screens[i].serverReportedHeight;
-            width = this._screens[i].serverReportedWidth;
-        }
-        else if (width > 1280 && !disableLimit && resolutionQuality == 1 && streamMode == encodings.pseudoEncodingStreamingModeJpegWebp) {
-            height = Math.floor(1280 * (height/width)); //keeping the aspect ratio of original resolution, shrink y to match x
-            width = 1280;
-        }
-        //hard coded 720p
-        else if (resolutionQuality == 0 && !disableLimit && streamMode == encodings.pseudoEncodingStreamingModeJpegWebp) {
-            width = 1280;
-            height = 720;
-        }
-        //force full resolution on a high DPI monitor where the OS is scaling
-        else if (hiDpi) {
-            width = Math.floor(width * this._screens[i].pixelRatio);
-            height = Math.floor(height * this._screens[i].pixelRatio);
-            scale = 1 / this._screens[i].pixelRatio;
-        }
-        //physically small device with high DPI
-        else if (this._renderer?.antiAliasing === 0 && this._screens[i].pixelRatio > 1 && width < 1000 & width > 0) {
-            Log.Info('Device Pixel ratio: ' + this._screens[i].pixelRatio + ' Reported Resolution: ' + width + 'x' + height);
-            let targetDevicePixelRatio = 1.5;
-            if (this._screens[i].pixelRatio > 2) { targetDevicePixelRatio = 2; }
-            let scaledWidth = (width * this._screens[i].pixelRatio) * (1 / targetDevicePixelRatio);
-            let scaleRatio = scaledWidth / width;
-            width = width * scaleRatio;
-            height = height * scaleRatio;
-            scale = 1 / scaleRatio;
-            Log.Info('Small device with hDPI screen detected, auto scaling at ' + scaleRatio + ' to ' + width + 'x' + height);
+        if (computed.smallDeviceAutoScale) {
+            const { reportedWidth, reportedHeight, scaleRatio } = computed.smallDeviceAutoScale;
+            Log.Info('Device Pixel ratio: ' + computed.pixelRatio + ' Reported Resolution: ' + reportedWidth + 'x' + reportedHeight);
+            Log.Info('Small device with hDPI screen detected, auto scaling at ' + scaleRatio + ' to ' + computed.serverWidth + 'x' + computed.serverHeight);
         }
 
-        let clientServerRatioH = this._screens[i].containerHeight / height;
-        let clientServerRatioW = this._screens[i].containerWidth / width;
-
-        this._screens[i].height = Math.floor(height * clientServerRatioH);
-        this._screens[i].width = Math.floor(width * clientServerRatioW);
-        this._screens[i].serverWidth = width;
-        this._screens[i].serverHeight = height;
-        this._screens[i].scale = Math.min(clientServerRatioH, clientServerRatioW);
-
+        screen.containerHeight = computed.containerHeight;
+        screen.containerWidth = computed.containerWidth;
+        screen.pixelRatio = computed.pixelRatio;
+        screen.height = computed.height;
+        screen.width = computed.width;
+        screen.serverWidth = computed.serverWidth;
+        screen.serverHeight = computed.serverHeight;
+        screen.scale = computed.scale;
 
         for (i = 0; i < this._screens.length; i++) {
             this._screens[i].x2 = this._screens[i].x + this._screens[i].serverWidth;

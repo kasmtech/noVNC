@@ -7,6 +7,9 @@
         "ecmaVersion": 2020,
         "sourceType": "module"
     },
+    "globals": {
+        "__KASMVNC_VERSION__": "readonly"
+    },
     "extends": "eslint:recommended",
     "rules": {
         // Unsafe or confusing stuff that we forbid

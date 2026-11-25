@@ -25,7 +25,6 @@ import settings from './images/settings.svg';
 import tab from './images/tab.svg';
 import toggleExtraKeys from './images/toggleextrakeys.svg';
 import windows from './images/windows.svg';
-import packageInfo from '../package.json';
 
 const controlPanelAssets = {
     alt,
@@ -67,7 +66,7 @@ export function applyControlPanelAssets() {
     style.setProperty('--noVNC-control-panel-font-family', "'Orbitron', 'OrbitronTTF', sans-serif");
 
     document.querySelectorAll('.noVNC_version')
-        .forEach(element => element.innerText = packageInfo.version);
+        .forEach(element => element.innerText = __KASMVNC_VERSION__);
 }
 
 export function applyKeyboardControlAssets() {

@@ -14,7 +14,7 @@ import { encodeUTF8, decodeUTF8, uuidv4 } from './util/strings.js';
 import { hashUInt8Array } from './util/int.js';
 import { dragThreshold, supportsCursorURIs, isTouchDevice, isWindows, isMac, isIOS, isDesktop } from './util/browser.js';
 import { clientToElement } from './util/element.js';
-import { setCapture } from './util/events.js';
+import { setCapture, releaseCapture, isCaptureProxyEvent } from './util/events.js';
 import EventTargetMixin from './util/eventtarget.js';
 import Display, { MAX_FB_DIMENSION } from "./display.js";
 import Inflator from "./inflator.js";
@@ -226,6 +226,7 @@ export default class RFB extends EventTargetMixin {
         this._mousePos = {};
         this._mouseButtonMask = 0;
         this._mouseLastMoveTime = 0;
+        this._heldPointerPos = null;
         this._pointerLock = false;
         this._directMouseEnabled = false;
         this._directMouseRemainder = { x: 0, y: 0 };
@@ -1541,6 +1542,9 @@ export default class RFB extends EventTargetMixin {
         this._display.dispose();
         clearTimeout(this._resizeTimeout);
         clearTimeout(this._mouseMoveTimer);
+        this._mouseMoveTimer = null;
+        this._heldPointerPos = null;
+        releaseCapture();
         window.localStorage.removeItem('lastWindow')
         Log.Debug("<< RFB.disconnect");
     }
@@ -1978,19 +1982,28 @@ export default class RFB extends EventTargetMixin {
                     break;
                 case 'mousemove':
                     coords = this._display.getServerRelativeCoordinates(event.data.screenIndex, event.data.args[0], event.data.args[1]);
+                    if (!event.data.args[2] && isDesktop()) {
+                        this._viewportDragging = false;
+                        if (this._mouseButtonMask !== 0) {
+                            this._releaseStuckButtons(this._mouseButtonMask, coords[0], coords[1]);
+                        } else if (document.captureElement === this._canvas) {
+                            releaseCapture();
+                        }
+                    }
+                    if (this._mouseMoveTimer !== null) {
+                        clearTimeout(this._mouseMoveTimer);
+                        this._mouseMoveTimer = null;
+                    }
                     this._mouseLastScreenIndex = event.data.screenIndex;
                     this._mousePos = { 'x': coords[0], 'y': coords[1] };
-                    if (this._mouseButtonMask !== 0 && !event.data.args[2]) {
-                        this._mouseButtonMask = 0;
-                    }
-                    RFB.messages.pointerEventClamped(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
+                    this._sendServerPointer(this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
 
                     //simulate a left click
                     if (event.data.args[3]) {
                         this._mouseButtonMask |= 0x1;
-                        RFB.messages.pointerEventClamped(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
+                        this._sendServerPointer(this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
                         this._mouseButtonMask &= ~0x1;
-                        RFB.messages.pointerEventClamped(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
+                        this._sendServerPointer(this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
                         Log.Debug('Simulated Left Click on secondary display.');
                     }
 
@@ -1998,18 +2011,37 @@ export default class RFB extends EventTargetMixin {
                     break;
                 case 'mousedown':
                     coords = this._display.getServerRelativeCoordinates(event.data.screenIndex, event.data.args[0], event.data.args[1]);
+                    this._viewportDragging = false;
+                    if (this._mouseButtonMask & event.data.args[2]) {
+                        this._releaseStuckButtons(event.data.args[2], coords[0], coords[1]);
+                    }
+                    if (document.captureElement === this._canvas) {
+                        releaseCapture();
+                    }
+                    if (this._mouseMoveTimer !== null) {
+                        clearTimeout(this._mouseMoveTimer);
+                        this._mouseMoveTimer = null;
+                    }
                     this._mouseLastScreenIndex = event.data.screenIndex;
                     this._mousePos = { 'x': coords[0], 'y': coords[1] };
                     this._mouseButtonMask |= event.data.args[2];
-                    RFB.messages.pointerEventClamped(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
+                    this._sendServerPointer(this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
                     this._setLastActive();
                     break;
                 case 'mouseup':
                     coords = this._display.getServerRelativeCoordinates(event.data.screenIndex, event.data.args[0], event.data.args[1]);
+                    if (this._mouseMoveTimer !== null) {
+                        clearTimeout(this._mouseMoveTimer);
+                        this._mouseMoveTimer = null;
+                    }
                     this._mouseLastScreenIndex = event.data.screenIndex;
                     this._mousePos = { 'x': coords[0], 'y': coords[1] };
                     this._mouseButtonMask &= ~event.data.args[2];
-                    RFB.messages.pointerEventClamped(this._sock, this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
+                    if (this._mouseButtonMask === 0) {
+                        this._heldPointerPos = null;
+                        releaseCapture();
+                    }
+                    this._sendServerPointer(this._mousePos.x, this._mousePos.y, this._mouseButtonMask);
                     this._setLastActive();
                     break;
                 case 'scroll':
@@ -2265,7 +2297,9 @@ export default class RFB extends EventTargetMixin {
                 if (this._display.screens.length === 0 || window.self === window.top || this._keyboard.enableIME) {
                 	ev.preventDefault();
                 }
-                setCapture(this._canvas);
+                if (this.isConnected && !this._pointerLock && (!this._viewOnly || this.dragViewport)) {
+                    setCapture(this._canvas);
+                }
 
                 // Translate CMD+Click into CTRL+click on MacOs
                 if (
@@ -2293,8 +2327,21 @@ export default class RFB extends EventTargetMixin {
                 ev.preventDefault();
                 if (this._isPrimaryDisplay) {
                     this._handleMouseButton(pos.x, pos.y, false, xvncButtonToMask(mappedButton));
+                    if (this._mouseButtonMask !== 0 && this._hasReliableButtons(ev) && ev.buttons === 0) {
+                        this._releaseStuckButtons(
+                            this._mouseButtonMask,
+                            this._display.absX(pos.x),
+                            this._display.absY(pos.y)
+                        );
+                    }
+                    if (!this._viewportDragging && this._mouseButtonMask === 0) {
+                        releaseCapture();
+                    }
                 } else {
                     this._proxyRFBMessage('mouseup', [ pos.x, pos.y, xvncButtonToMask(mappedButton) ]);
+                    if (typeof ev.buttons !== 'number' || ev.buttons === 0 || !isDesktop()) {
+                        releaseCapture();
+                    }
                 }
 
                 Log.Debug('Mouse Up');
@@ -2302,6 +2349,9 @@ export default class RFB extends EventTargetMixin {
             case 'mousemove':
                 ev.preventDefault();
                 if (this._isPrimaryDisplay && this._pointerLock && this._directMouseEnabled) {
+                    if (this._mouseButtonMask !== 0 && this._hasReliableButtons(ev) && ev.buttons === 0) {
+                        this._releaseStuckButtons(this._mouseButtonMask, 0, 0);
+                    }
                     // Direct drive: convert display-pixel deltas to server-pixel
                     // deltas by dividing by the viewport scale factor.  Accumulate
                     // the sub-pixel remainder so there is no drift at non-1x scales.
@@ -2328,8 +2378,19 @@ export default class RFB extends EventTargetMixin {
                     const canvasBounds = this._canvas.getBoundingClientRect();
                     this._cursor.move(newX + canvasBounds.left, newY + canvasBounds.top);
                 } else if (this._isPrimaryDisplay) {
-                    this._handleMouseMove(pos.x, pos.y, (ev.buttons > 0));
+                    const buttonsReliable = this._hasReliableButtons(ev);
+                    if (buttonsReliable && ev.buttons === 0) {
+                        this._viewportDragging = false;
+                        if (this._mouseButtonMask === 0 && document.captureElement === this._canvas) {
+                            releaseCapture();
+                        }
+                    }
+                    const down = buttonsReliable ? (ev.buttons > 0) : (this._mouseButtonMask !== 0);
+                    this._handleMouseMove(pos.x, pos.y, down);
                 } else {
+                    if (isDesktop() && ev.buttons === 0) {
+                        releaseCapture();
+                    }
                     this._proxyRFBMessage('mousemove', [ pos.x, pos.y, (ev.buttons > 0), this._sendLeftClickonNextMove ]);
                     this._sendLeftClickonNextMove = false;
                 }
@@ -2340,8 +2401,16 @@ export default class RFB extends EventTargetMixin {
         }
     }
 
-    _handleMouseButton(x, y, down, bmask) {
-        if (this.dragViewport) {
+    _hasReliableButtons(ev) {
+        return isDesktop() && typeof ev.buttons === 'number' && (
+            Boolean(ev.isTrusted) ||
+            isCaptureProxyEvent(ev) ||
+            this._display.screens.length > 1
+        );
+    }
+
+    _handleMouseButton(x, y, down, bmask, simulated = false) {
+        if (this.dragViewport || (!down && this._viewportDragging)) {
             if (down && !this._viewportDragging) {
                 this._viewportDragging = true;
                 this._viewportDragPos = {'x': x, 'y': y};
@@ -2365,6 +2434,25 @@ export default class RFB extends EventTargetMixin {
             }
         }
 
+        if (!this.isConnected || this._viewOnly) {
+            if (!down) {
+                this._mouseButtonMask &= ~bmask;
+                if (this._mouseButtonMask === 0) {
+                    this._heldPointerPos = null;
+                }
+            }
+            return;
+        }
+
+        if (down && (this._mouseButtonMask & bmask) && !simulated) {
+            this._releaseStuckButtons(
+                bmask,
+                this._display.absX(x),
+                this._display.absY(y),
+                false
+            );
+        }
+
         // Flush waiting move event first
         if (this._mouseMoveTimer !== null) {
             clearTimeout(this._mouseMoveTimer);
@@ -2381,15 +2469,19 @@ export default class RFB extends EventTargetMixin {
             }
         } else {
             this._mouseButtonMask &= ~bmask;
+            if (this._mouseButtonMask === 0) {
+                this._heldPointerPos = null;
+            }
         }
 
+        this._mousePos = { 'x': x, 'y': y };
         this._sendMouse(x, y, this._mouseButtonMask);
 
         //marked true on canvas going into focus
         this._sendLeftClickonNextMove = false;
     }
 
-    _handleMouseMove(x, y, down, simulated=false) {
+    _handleMouseMove(x, y, down, simulated = false) {
         if (this._viewportDragging) {
             const deltaX = this._viewportDragPos.x - x;
             const deltaY = this._viewportDragPos.y - y;
@@ -2407,11 +2499,15 @@ export default class RFB extends EventTargetMixin {
             return;
         }
 
-        // With multiple displays, it is possible to end up in a state where we lost the mouseup event
-        // If a mouse move indicates no buttons are down but the current state shows something down, lets clear the plate
-        if (this._display.screens.length > 1 && this._mouseButtonMask !== 0 && !down && !simulated && isDesktop()) {
-            this._mouseButtonMask = 0;
-            Log.Debug('Mouse event button down mismatch with current mask, resetting mask to 0.')
+        // If a mouse move indicates no buttons are down but our mask still has
+        // buttons set (missed mouseup), release them at the held position first.
+        if (this._mouseButtonMask !== 0 && !down && !simulated && isDesktop()) {
+            this._releaseStuckButtons(
+                this._mouseButtonMask,
+                this._display.absX(x),
+                this._display.absY(y)
+            );
+            Log.Debug('Mouse event button down mismatch with current mask, resetting mask to 0.');
         }
 
         this._mousePos = { 'x': x, 'y': y };
@@ -2435,8 +2531,8 @@ export default class RFB extends EventTargetMixin {
         //this was added to aid multi-display, not requiring two clicks when switching between displays
         if (this._sendLeftClickonNextMove && this._display.screens.length > 1) {
             this._sendLeftClickonNextMove = false;
-            this._handleMouseButton(this._mousePos.x, this._mousePos.y, true, 0x1);
-            this._handleMouseButton(this._mousePos.x, this._mousePos.y, false, 0x1);
+            this._handleMouseButton(this._mousePos.x, this._mousePos.y, true, 0x1, true);
+            this._handleMouseButton(this._mousePos.x, this._mousePos.y, false, 0x1, true);
         }
     }
 
@@ -2453,6 +2549,7 @@ export default class RFB extends EventTargetMixin {
             document.mozPointerLockElement === this._canvas
         ) {
             this._pointerLock = true;
+            releaseCapture();
             this._cursor.setEmulateCursor(true);
         } else {
             this._pointerLock = false;
@@ -2476,11 +2573,49 @@ export default class RFB extends EventTargetMixin {
 
         if (this._pointerLock && this._directMouseEnabled) {
             // Direct drive: button state changes only (movement is sent raw from _handleMouse)
+            this._heldPointerPos = null;
             this._sendDirectMouse(0, 0, mask, 0, 0);
         } else {
-            RFB.messages.pointerEventClamped(this._sock, this._display.absX(x), this._display.absY(y), mask);
+            this._sendServerPointer(this._display.absX(x), this._display.absY(y), mask);
         }
 
+    }
+
+    _sendServerPointer(sx, sy, mask) {
+        if (!this.isConnected || this._viewOnly || !this._isPrimaryDisplay) {
+            if (!mask) {
+                this._heldPointerPos = null;
+            }
+            return;
+        }
+        this._heldPointerPos = mask ? { 'x': sx, 'y': sy } : null;
+        RFB.messages.pointerEventClamped(this._sock, sx, sy, mask);
+    }
+
+    _releaseStuckButtons(bmaskToClear, fallbackServerX, fallbackServerY, shouldReleaseCapture = true) {
+        if (!(this._mouseButtonMask & bmaskToClear)) {
+            return;
+        }
+        const prevHeldPos = this._heldPointerPos;
+        this._mouseButtonMask &= ~bmaskToClear;
+        if (this._mouseButtonMask === 0) {
+            this._heldPointerPos = null;
+            if (shouldReleaseCapture) {
+                releaseCapture();
+            }
+            if (this._mouseMoveTimer !== null) {
+                clearTimeout(this._mouseMoveTimer);
+                this._mouseMoveTimer = null;
+            }
+        }
+        if (this._pointerLock && this._directMouseEnabled) {
+            this._heldPointerPos = null;
+            this._sendDirectMouse(0, 0, this._mouseButtonMask, 0, 0);
+        } else {
+            const relX = prevHeldPos ? prevHeldPos.x : fallbackServerX;
+            const relY = prevHeldPos ? prevHeldPos.y : fallbackServerY;
+            this._sendServerPointer(relX, relY, this._mouseButtonMask);
+        }
     }
 
     _sendScroll(x, y, dX, dY) {
@@ -2770,7 +2905,7 @@ export default class RFB extends EventTargetMixin {
 
     _fakeMouseButton(x, y, down, mask) {
         if (this._isPrimaryDisplay) {
-            this._handleMouseButton(x, y, down, mask);
+            this._handleMouseButton(x, y, down, mask, true);
         } else {
             if (down) {
                 this._proxyRFBMessage('mousedown', [ x, y, mask ]);

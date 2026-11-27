@@ -10,6 +10,8 @@
  * Cross-browser event and position routines
  */
 
+import { isDesktop } from './browser.js';
+
 export function getPointerEvent(e) {
     return e.changedTouches ? e.changedTouches[0] : e.touches ? e.touches[0] : e;
 }
@@ -22,7 +24,13 @@ export function stopEvent(e) {
 // Emulate Element.setCapture() when not supported
 let _captureRecursion = false;
 let _elementForUnflushedEvents = null;
+let _proxiedEvent = null;
 document.captureElement = null;
+
+export function isCaptureProxyEvent(e) {
+    return e !== null && e === _proxiedEvent;
+}
+
 function _captureProxy(e) {
     // Recursion protection as we'll see our own event
     if (_captureRecursion) return;
@@ -31,12 +39,16 @@ function _captureProxy(e) {
     const newEv = new e.constructor(e.type, e);
 
     _captureRecursion = true;
-    if (document.captureElement) {
-        document.captureElement.dispatchEvent(newEv);
-    } else {
-        _elementForUnflushedEvents.dispatchEvent(newEv);
+    _proxiedEvent = newEv;
+    try {
+        const target = document.captureElement || _elementForUnflushedEvents;
+        if (target) {
+            target.dispatchEvent(newEv);
+        }
+    } finally {
+        _proxiedEvent = null;
+        _captureRecursion = false;
     }
-    _captureRecursion = false;
 
     // Avoid double events
     e.stopPropagation();
@@ -46,8 +58,9 @@ function _captureProxy(e) {
         e.preventDefault();
     }
 
-    // Implicitly release the capture on button release
-    if (e.type === "mouseup") {
+    // Implicitly release capture once all buttons are released (including missed mouseup on desktop)
+    if ((e.type === "mouseup" && (typeof e.buttons !== "number" || e.buttons === 0 || !isDesktop())) ||
+        (e.type === "mousemove" && e.buttons === 0 && isDesktop())) {
         releaseCapture();
     }
 }
@@ -55,7 +68,9 @@ function _captureProxy(e) {
 // Follow cursor style of target element
 function _capturedElemChanged() {
     const proxyElem = document.getElementById("noVNC_mouse_capture_elem");
-    proxyElem.style.cursor = window.getComputedStyle(document.captureElement).cursor;
+    if (proxyElem && document.captureElement) {
+        proxyElem.style.cursor = window.getComputedStyle(document.captureElement).cursor;
+    }
 }
 
 const _captureObserver = new MutationObserver(_capturedElemChanged);
@@ -88,8 +103,10 @@ export function setCapture(target) {
             // our blocking element as the target
             proxyElem.addEventListener('contextmenu', _captureProxy);
 
+            proxyElem.addEventListener('mousedown', _captureProxy);
             proxyElem.addEventListener('mousemove', _captureProxy);
             proxyElem.addEventListener('mouseup', _captureProxy);
+            proxyElem.addEventListener('wheel', _captureProxy, { passive: false });
         }
 
         document.captureElement = target;
@@ -108,16 +125,16 @@ export function setCapture(target) {
 }
 
 export function releaseCapture() {
+    if (!document.captureElement) {
+        return;
+    }
+
     if (document.releaseCapture) {
 
         document.releaseCapture();
         document.captureElement = null;
 
     } else {
-        if (!document.captureElement) {
-            return;
-        }
-
         // There might be events already queued. The event proxy needs
         // access to the captured element for these queued events.
         // E.g. contextmenu (right-click) in Microsoft Edge
@@ -130,7 +147,9 @@ export function releaseCapture() {
         _captureObserver.disconnect();
 
         const proxyElem = document.getElementById("noVNC_mouse_capture_elem");
-        proxyElem.style.display = "none";
+        if (proxyElem) {
+            proxyElem.style.display = "none";
+        }
 
         window.removeEventListener('mousemove', _captureProxy);
         window.removeEventListener('mouseup', _captureProxy);

@@ -40,6 +40,11 @@ import {
     frameRateToPseudoEncoding,
     isValidFrameRate,
 } from "./util/frame-rate.js";
+import {
+    buildDprMediaQuery,
+    clampNativeClientOffset,
+    normalizePixelRatio
+} from "./util/display-scaling.js";
 import { messages } from "./messages.js";
 import { MouseButtonMapper, xvncButtonToMask } from "./mousebuttonmapper.js";
 
@@ -207,6 +212,8 @@ export default class RFB extends EventTargetMixin {
         this._resizeTimeout = null;     // resize rate limiting
         this._mouseMoveTimer = null;
         this._forceFullFrameUpdateTimeout = null;
+        this._dprMediaQuery = null;
+        this._dprMediaQueryHandler = null;
 
         // Decoder states
         this._decoders = {};
@@ -1421,6 +1428,7 @@ export default class RFB extends EventTargetMixin {
         // Monitor size changes of the screen
         // FIXME: Use ResizeObserver, or hidden overflow
         window.addEventListener('resize', this._eventHandlers.windowResize);
+        this._watchDevicePixelRatio();
 
         // Always grab focus on some kind of click event
         this._canvas.addEventListener("mousedown", this._eventHandlers.focusCanvas);
@@ -1511,7 +1519,9 @@ export default class RFB extends EventTargetMixin {
         this._canvas.removeEventListener("focus", this._eventHandlers.handleFocusChange);
         window.removeEventListener('resize', this._eventHandlers.windowResize);
         window.removeEventListener('focus', this._eventHandlers.handleFocusChange);
+        window.removeEventListener('mouseover', this._eventHandlers.handleMouseOut);
         document.removeEventListener('visibilitychange', this._eventHandlers.handleVisibilityChange);
+        this._unwatchDevicePixelRatio();
 
         this._keyboard.ungrab();
         this._gestures.detach();
@@ -1631,6 +1641,54 @@ export default class RFB extends EventTargetMixin {
         this.dispatchEvent(new CustomEvent(
             "desktopname",
             { detail: { name: this._fbName } }));
+    }
+
+    _unwatchDevicePixelRatio() {
+        if (this._dprMediaQuery && this._dprMediaQueryHandler) {
+            if (typeof this._dprMediaQuery.removeEventListener === 'function') {
+                this._dprMediaQuery.removeEventListener('change', this._dprMediaQueryHandler);
+            } else if (typeof this._dprMediaQuery.removeListener === 'function') {
+                this._dprMediaQuery.removeListener(this._dprMediaQueryHandler);
+            }
+        }
+        this._dprMediaQuery = null;
+        this._dprMediaQueryHandler = null;
+    }
+
+    _watchDevicePixelRatio() {
+        this._unwatchDevicePixelRatio();
+        if (typeof window.matchMedia !== 'function') {
+            return;
+        }
+        const mq = window.matchMedia(buildDprMediaQuery(window.devicePixelRatio));
+        if (!mq) {
+            return;
+        }
+        const onChange = () => {
+            this._watchDevicePixelRatio();
+            this._handleDprChange();
+        };
+        this._dprMediaQuery = mq;
+        this._dprMediaQueryHandler = onChange;
+        if (typeof mq.addEventListener === 'function') {
+            mq.addEventListener('change', onChange, { once: true });
+        } else if (typeof mq.addListener === 'function') {
+            mq.addListener(onChange);
+        }
+    }
+
+    _handleDprChange() {
+        if (!this.isConnected) {
+            return;
+        }
+        const screen0 = this._display?.screens?.[0];
+        const currentDpr = normalizePixelRatio(window.devicePixelRatio);
+        if (!screen0 || screen0.pixelRatio === currentDpr) {
+            return;
+        }
+        Log.Debug("Window moved to another screen with different pixel ratio (" +
+            screen0.pixelRatio + " -> " + currentDpr + "), updating display.");
+        this._windowResize();
     }
 
     _windowResize(event) {
@@ -2189,19 +2247,7 @@ export default class RFB extends EventTargetMixin {
     }
 
     _handleMouseOut(ev) {
-        if (ev.toElement !== null && ev.relatedTarget === null && ev.fromElement === null) {
-            //mouse was outside of the window and just came in, this is our chance to do things
-            //Ensure the window was not moved to a different screen with a different pixel ratio
-            if (this._display.screens[0].pixelRatio !== window.devicePixelRatio) {
-                Log.Debug("Window moved to another screen with different pixel ratio, sending resize request.");
-                if (this._isPrimaryDisplay && this._display.screens.length > 1) {
-                    //this.refreshSecondaryDisplays();
-                    this.dispatchEvent(new CustomEvent("screenregistered", {}));
-                } else {
-                    this._requestRemoteResize();
-                }
-            }
-        }
+        this._handleDprChange();
     }
 
     _handleMouse(ev) {
@@ -2255,6 +2301,7 @@ export default class RFB extends EventTargetMixin {
         } else {
             pos = clientToElement(ev.clientX, ev.clientY,
                 this._canvas);
+            pos = this._clampSecondaryPointer(pos.x, pos.y, ev.clientX, ev.clientY);
         }
 
         this._mouseLastScreenIndex = this._display.screenIndex;
@@ -2483,6 +2530,23 @@ export default class RFB extends EventTargetMixin {
 
     }
 
+    _clampSecondaryPointer(x, y, clientX, clientY) {
+        if (this._isPrimaryDisplay || !this._display?._nativeSurfaceActive) {
+            return { x, y };
+        }
+        const vp = this._display.screens?.[0];
+        const scale = this._display.scale;
+        if (!vp || !(scale > 0)) {
+            return { x, y };
+        }
+        const inWindowX = clientX === undefined || (clientX >= 0 && clientX <= window.innerWidth);
+        const inWindowY = clientY === undefined || (clientY >= 0 && clientY <= window.innerHeight);
+        return {
+            x: inWindowX ? clampNativeClientOffset(x, scale, vp.serverWidth) : x,
+            y: inWindowY ? clampNativeClientOffset(y, scale, vp.serverHeight) : y
+        };
+    }
+
     _sendScroll(x, y, dX, dY) {
         if (!this.isConnected || this._viewOnly)  // View only, skip mouse events
             return;
@@ -2492,7 +2556,8 @@ export default class RFB extends EventTargetMixin {
         } else if (this._isPrimaryDisplay) {
             RFB.messages.pointerEventClamped(this._sock, this._display.absX(x), this._display.absY(y), 0, dX, dY);
         } else {
-            this._proxyRFBMessage('scroll', [ x, y, dX, dY ]);
+            const clamped = this._clampSecondaryPointer(x, y);
+            this._proxyRFBMessage('scroll', [ clamped.x, clamped.y, dX, dY ]);
         }
     }
 
@@ -2762,6 +2827,12 @@ export default class RFB extends EventTargetMixin {
             this._gestureFirstDoubleTapEv = ev;
         }
         this._gestureLastTapTime = Date.now();
+        pos = this._clampSecondaryPointer(
+            pos.x,
+            pos.y,
+            this._gestureFirstDoubleTapEv.detail.clientX,
+            this._gestureFirstDoubleTapEv.detail.clientY
+        );
 
         this._fakeMouseMove(this._gestureFirstDoubleTapEv, pos.x, pos.y);
         this._fakeMouseButton(pos.x, pos.y, true, bmask);
@@ -2789,6 +2860,7 @@ export default class RFB extends EventTargetMixin {
 
         let pos = clientToElement(ev.detail.clientX, ev.detail.clientY,
             this._canvas);
+        pos = this._clampSecondaryPointer(pos.x, pos.y, ev.detail.clientX, ev.detail.clientY);
         switch (ev.type) {
             case 'gesturestart':
                 switch (ev.detail.type) {

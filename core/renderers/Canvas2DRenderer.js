@@ -2,6 +2,7 @@ import * as Log from "../util/logging";
 import { perfLogger } from '../util/performance-logger.js';
 import { placeOverCanvas } from "../util/element.js";
 import {clampDimension} from "../display";
+import { resolveImageRendering } from "../util/display-scaling.js";
 
 export class Canvas2DRenderer {
     constructor(canvas, backbuffer) {
@@ -176,11 +177,19 @@ export class Canvas2DRenderer {
             saveImg = this._visibleCtx.getImageData(0, 0, canvas.width, canvas.height);
         }
 
+        // Resizing a canvas resets its 2D context state (including fillStyle).
+        if (!this._enableCanvasBuffer) {
+            this._prevDrawStyle = "";
+        }
         canvas.width = width;
         canvas.height = height;
 
         if (saveImg) {
             this._visibleCtx.putImageData(saveImg, 0, 0);
+        }
+
+        if (this._overlayCanvas) {
+            this._drawOverlay();
         }
 
         return true;
@@ -196,15 +205,22 @@ export class Canvas2DRenderer {
 
         Log.Info('Pixel Ratio: ' + window.devicePixelRatio + ', VNC Scale: ' + factor + 'VNC Res: ' + serverWidth + 'x' + serverHeight + 'y');
 
-        const pixR = Math.abs(Math.ceil(window.devicePixelRatio));
         const isFirefox = navigator.userAgent.toLowerCase().indexOf('firefox') > -1;
+        const targetRendering = resolveImageRendering(
+            this.antiAliasing,
+            factor,
+            window.devicePixelRatio,
+            viewPortWidth,
+            isFirefox
+        );
 
-        if (this.antiAliasing === 2 || (this.antiAliasing === 0 && factor === 1 && style.imageRendering !== 'pixelated' && pixR === window.devicePixelRatio && viewPortWidth > 0)) {
-            style.imageRendering = ((!isFirefox) ? 'pixelated' : 'crisp-edges');
-            Log.Debug('Smoothing disabled');
-        } else if (this.antiAliasing === 1 || (this.antiAliasing === 0 && factor !== 1 && style.imageRendering !== 'auto')) {
-            style.imageRendering = 'auto'; //auto is really smooth (blurry) using trilinear of linear
-            Log.Debug('Smoothing enabled');
+        if (targetRendering && style.imageRendering !== targetRendering) {
+            style.imageRendering = targetRendering;
+            if (targetRendering === 'auto') {
+                Log.Debug('Smoothing enabled');
+            } else {
+                Log.Debug('Smoothing disabled');
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 import * as Log from "../util/logging";
 import {perfLogger} from "../util/performance-logger";
 import { placeOverCanvas, positionHost } from "../util/element.js";
+import { isCrispScale, resolveWebGLTextureFilter } from "../util/display-scaling.js";
 
 export class WebGLRenderer {
     static vertexShaderSource = `
@@ -28,6 +29,10 @@ export class WebGLRenderer {
         this._webglCanvas = webglCanvas;
         this._lastWidth = 0;
         this._lastHeight = 0;
+        this._serverWidth = 0;
+        this._serverHeight = 0;
+        this._isCrispScale = false;
+        this._textureFilter = gl.LINEAR;
         this._isWebGL2 = gl instanceof WebGL2RenderingContext;
 
         // Dedicated watermark canvas above WebGL canvas (z-index: 2) so the
@@ -122,6 +127,7 @@ export class WebGLRenderer {
         gl.bindTexture(gl.TEXTURE_2D, this._texture);
 
         // Use NEAREST for pixel-perfect rendering if applicable, or LINEAR for smoothing
+        this._textureFilter = gl.LINEAR;
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -227,12 +233,25 @@ export class WebGLRenderer {
 
     viewportChangeSize(width, height) {
         const result = this._canvas2D.viewportChangeSize(width, height);
-        this._placeOverlays();
+        if (result && this._canvas2D.transparentOverlayImg && this._canvas2D.transparentOverlayRect) {
+            this.drawTransparentOverlayImg();
+        } else {
+            this._placeOverlays();
+        }
         return result;
     }
 
     rescale(factor, width, height, serverWidth, serverHeight, viewPortWidth) {
+        this._serverWidth = serverWidth;
+        this._serverHeight = serverHeight;
         this._canvas2D.rescale(factor, width, height, serverWidth, serverHeight, viewPortWidth);
+        this._isCrispScale = isCrispScale(factor, window.devicePixelRatio);
+        if (this._webglCanvas) {
+            const targetRendering = this._canvas2D._target.style.imageRendering;
+            if (this._webglCanvas.style.imageRendering !== targetRendering) {
+                this._webglCanvas.style.imageRendering = targetRendering;
+            }
+        }
         this._placeOverlays();
     }
 
@@ -281,6 +300,15 @@ export class WebGLRenderer {
             this._resizeWebGLCanvas(fbWidth, fbHeight);
         }
 
+        const contentW = Math.max(this._serverWidth, x + w);
+        const contentH = Math.max(this._serverHeight, y + h);
+        if (this._serverWidth > 0 && this._serverHeight > 0 &&
+            (fbWidth > contentW || fbHeight > contentH)) {
+            this._clearPaddingStrip(fbWidth, fbHeight, contentW, contentH);
+        }
+
+        this._syncTextureFilter(frame, w, h);
+
         // Upload frame to texture (GPU operation)
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, frame);
 
@@ -295,6 +323,40 @@ export class WebGLRenderer {
         frame.close();
 
         perfLogger.end('webglRender', renderStart);
+    }
+
+    _clearPaddingStrip(fbWidth, fbHeight, contentW, contentH) {
+        const gl = this.gl;
+        gl.enable(gl.SCISSOR_TEST);
+        gl.clearColor(40 / 255, 40 / 255, 40 / 255, 1.0);
+        if (fbWidth > contentW) {
+            gl.scissor(contentW, 0, fbWidth - contentW, fbHeight);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+        }
+        if (fbHeight > contentH) {
+            gl.scissor(0, 0, fbWidth, fbHeight - contentH);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+        }
+        gl.disable(gl.SCISSOR_TEST);
+    }
+
+    _syncTextureFilter(frame, w, h) {
+        const gl = this.gl;
+        const mode = resolveWebGLTextureFilter(
+            this.antiAliasing,
+            this._isCrispScale,
+            frame ? frame.displayWidth : null,
+            frame ? frame.displayHeight : null,
+            w,
+            h
+        );
+        const filter = mode === 'NEAREST' ? gl.NEAREST : gl.LINEAR;
+        if (filter !== this._textureFilter) {
+            gl.bindTexture(gl.TEXTURE_2D, this._texture);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+            this._textureFilter = filter;
+        }
     }
 
     _resizeWebGLCanvas(fbWidth, fbHeight) {

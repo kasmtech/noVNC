@@ -17,6 +17,14 @@ import { encodings } from "./encodings.js";
 import {Canvas2DRenderer} from "./renderers/Canvas2DRenderer";
 import {WebGLRenderer} from "./renderers/WebGLRenderer";
 import { perfLogger } from './util/performance-logger.js';
+import {
+    clampNativeCoordinate,
+    computeScreenLayout,
+    extractDevicePixelSize,
+    isNativeSurfaceActive,
+    normalizePixelRatio,
+    resolveObservedDevicePixelSize
+} from './util/display-scaling.js';
 
 export const MAX_FB_DIMENSION = 8192;
 
@@ -59,6 +67,13 @@ export default class Display {
         this._renderMs = 0;
         this._backbuffer = document.createElement('canvas');
         this._target = target;
+        this._container = target.parentNode || null;
+        this._devicePixelWidth = 0;
+        this._devicePixelHeight = 0;
+        this._devicePixelObserverDpr = 0;
+        this._nativeSurfaceEligible = false;
+        this._nativeSurfaceActive = false;
+        this._devicePixelObserver = null;
 
         const canvas2DRenderer = new Canvas2DRenderer(target, this._backbuffer);
 
@@ -187,6 +202,7 @@ export default class Display {
         this._localDecoderMeta = new Map(); // timestamp → {x, y, width, height, frameId}
         this._localDecoderTs = 0;
         this._rfb = rfb;
+        this._initDevicePixelObserver();
 
         this._damageBounds = { left: 0, top: 0, right: this._backbuffer.width, bottom: this._backbuffer.height };
 
@@ -297,82 +313,59 @@ export default class Display {
         return [x, y];
     }
 
-    getScreenSize(resolutionQuality, max_width, max_height, hiDpi, disableLimit, disableScaling, streamMode, ignoreServerReported = false) {
-        let data = {
+    getScreenSize(resolutionQuality, maxWidth, maxHeight, hiDpi, disableLimit, disableScaling, streamMode, ignoreServerReported = false) {
+        const data = {
             screens: null,
             serverWidth: 0,
             serverHeight: 0
+        };
+
+        const container = this._container || this._target.parentNode;
+        const parentNodeSize = container
+            ? container.getBoundingClientRect()
+            : { width: 0, height: 0 };
+        const screen = this._screens[0];
+        const computed = computeScreenLayout({
+            parentWidth: parentNodeSize.width,
+            parentHeight: parentNodeSize.height,
+            devicePixelWidth: this._devicePixelWidth,
+            devicePixelHeight: this._devicePixelHeight,
+            devicePixelObserverDpr: this._devicePixelObserverDpr,
+            devicePixelRatio: window.devicePixelRatio,
+            resolutionQuality,
+            maxWidth,
+            maxHeight,
+            hiDpi,
+            disableLimit,
+            disableScaling,
+            clipViewport: this._clipViewport,
+            streamMode,
+            ignoreServerReported,
+            serverReportedWidth: screen.serverReportedWidth,
+            serverReportedHeight: screen.serverReportedHeight,
+            currentServerWidth: screen.serverWidth,
+            currentServerHeight: screen.serverHeight,
+            screenCount: this._screens.length,
+            antiAliasing: this._renderer?.antiAliasing
+        });
+
+        if (computed.smallDeviceAutoScale) {
+            const { reportedWidth, reportedHeight, scaleRatio } = computed.smallDeviceAutoScale;
+            Log.Info('Device Pixel ratio: ' + computed.pixelRatio + ' Reported Resolution: ' + reportedWidth + 'x' + reportedHeight);
+            Log.Info('Small device with hDPI screen detected, auto scaling at ' + scaleRatio + ' to ' + computed.serverWidth + 'x' + computed.serverHeight);
         }
 
-        let i = 0;
+        this._nativeSurfaceEligible = computed.nativeEligible;
+        screen.containerHeight = computed.containerHeight;
+        screen.containerWidth = computed.containerWidth;
+        screen.pixelRatio = computed.pixelRatio;
+        screen.height = computed.height;
+        screen.width = computed.width;
+        screen.serverWidth = computed.serverWidth;
+        screen.serverHeight = computed.serverHeight;
+        screen.scale = computed.scale;
 
-
-        //getting parent node size with sub-pixel precision
-        let parentNodeSize = this._target.parentNode.getBoundingClientRect();
-        //recalculate primary display container size
-        this._screens[i].containerHeight = Math.floor(parentNodeSize.height / 2) * 2;
-        this._screens[i].containerWidth = Math.floor(parentNodeSize.width / 2) * 2;
-        this._screens[i].pixelRatio = window.devicePixelRatio;
-        this._screens[i].width = this._screens[i].containerWidth;
-        this._screens[i].height = this._screens[i].containerHeight;
-
-        //calculate server-side and client-side resolution of each screen
-        let width = max_width || this._screens[i].containerWidth;
-        let height = max_height || this._screens[i].containerHeight;
-        let scale = 1;
-
-        //max the resolution of a single screen to 1280
-        if (
-            !ignoreServerReported &&
-            (this._screens[i].serverReportedWidth > 0 && this._screens[i].serverReportedHeight > 0) &&
-            (
-                disableScaling ||
-                (this._screens[i].serverReportedWidth !== this._screens[i].serverWidth || this._screens[i].serverReportedHeight !== this._screens[i].serverHeight)
-            ) &&
-            (!max_width && !max_height)
-        ) {
-            height = this._screens[i].serverReportedHeight;
-            width = this._screens[i].serverReportedWidth;
-        }
-        else if (width > 1280 && !disableLimit && resolutionQuality == 1 && streamMode == encodings.pseudoEncodingStreamingModeJpegWebp) {
-            height = Math.floor(1280 * (height/width)); //keeping the aspect ratio of original resolution, shrink y to match x
-            width = 1280;
-        }
-        //hard coded 720p
-        else if (resolutionQuality == 0 && !disableLimit && streamMode == encodings.pseudoEncodingStreamingModeJpegWebp) {
-            width = 1280;
-            height = 720;
-        }
-        //force full resolution on a high DPI monitor where the OS is scaling
-        else if (hiDpi) {
-            width = Math.floor(width * this._screens[i].pixelRatio);
-            height = Math.floor(height * this._screens[i].pixelRatio);
-            scale = 1 / this._screens[i].pixelRatio;
-        }
-        //physically small device with high DPI
-        else if (this._renderer?.antiAliasing === 0 && this._screens[i].pixelRatio > 1 && width < 1000 & width > 0) {
-            Log.Info('Device Pixel ratio: ' + this._screens[i].pixelRatio + ' Reported Resolution: ' + width + 'x' + height);
-            let targetDevicePixelRatio = 1.5;
-            if (this._screens[i].pixelRatio > 2) { targetDevicePixelRatio = 2; }
-            let scaledWidth = (width * this._screens[i].pixelRatio) * (1 / targetDevicePixelRatio);
-            let scaleRatio = scaledWidth / width;
-            width = width * scaleRatio;
-            height = height * scaleRatio;
-            scale = 1 / scaleRatio;
-            Log.Info('Small device with hDPI screen detected, auto scaling at ' + scaleRatio + ' to ' + width + 'x' + height);
-        }
-
-        let clientServerRatioH = this._screens[i].containerHeight / height;
-        let clientServerRatioW = this._screens[i].containerWidth / width;
-
-        this._screens[i].height = Math.floor(height * clientServerRatioH);
-        this._screens[i].width = Math.floor(width * clientServerRatioW);
-        this._screens[i].serverWidth = width;
-        this._screens[i].serverHeight = height;
-        this._screens[i].scale = Math.min(clientServerRatioH, clientServerRatioW);
-
-
-        for (i = 0; i < this._screens.length; i++) {
+        for (let i = 0; i < this._screens.length; i++) {
             this._screens[i].x2 = this._screens[i].x + this._screens[i].serverWidth;
             this._screens[i].y2 = this._screens[i].y + this._screens[i].serverHeight;
             data.serverWidth = Math.max(data.serverWidth, this._screens[i].x + this._screens[i].serverWidth);
@@ -669,14 +662,22 @@ export default class Display {
         if (this._scale === 0) {
             return 0;
         }
-        return toSigned32bit(x / this._scale + this._screens[0].x);
+        const screen0 = this._screens[0];
+        const coord = toSigned32bit(x / this._scale + screen0.x);
+        return this._nativeSurfaceActive
+            ? clampNativeCoordinate(coord, screen0.x, screen0.serverWidth)
+            : coord;
     }
 
     absY(y) {
         if (this._scale === 0) {
             return 0;
         }
-        return toSigned32bit(y / this._scale + this._screens[0].y);
+        const screen0 = this._screens[0];
+        const coord = toSigned32bit(y / this._scale + screen0.y);
+        return this._nativeSurfaceActive
+            ? clampNativeCoordinate(coord, screen0.y, screen0.serverHeight)
+            : coord;
     }
 
     clientX(x) {
@@ -752,6 +753,10 @@ export default class Display {
     * Cleans up resources, should be called on a disconnect
     */
     dispose() {
+        if (this._devicePixelObserver) {
+            this._devicePixelObserver.disconnect();
+            this._devicePixelObserver = null;
+        }
         if (this._frameStatsInterval) {
             clearInterval(this._frameStatsInterval);
             this._frameStatsInterval = null;
@@ -1830,18 +1835,136 @@ export default class Display {
         rect.screenLocations = indexes;
     }
 
+    _initDevicePixelObserver() {
+        const container = this._container;
+        if (!container || typeof ResizeObserver !== 'function') {
+            return;
+        }
+        this._devicePixelObserver = new ResizeObserver((entries) => {
+            if (!Array.isArray(entries)) {
+                return;
+            }
+            for (const entry of entries) {
+                const currentDpr = normalizePixelRatio(window.devicePixelRatio);
+                const size = extractDevicePixelSize(entry, currentDpr);
+                if (size.width > 0 && size.height > 0) {
+                    const changed = size.width !== this._devicePixelWidth ||
+                        size.height !== this._devicePixelHeight ||
+                        this._devicePixelObserverDpr !== currentDpr;
+                    this._devicePixelWidth = size.width;
+                    this._devicePixelHeight = size.height;
+                    this._devicePixelObserverDpr = currentDpr;
+                    if (changed && this._rfb?.isConnected && typeof this._rfb._windowResize === 'function') {
+                        this._rfb._windowResize();
+                    }
+                }
+            }
+        });
+        try {
+            this._devicePixelObserver.observe(container, { box: 'device-pixel-content-box' });
+        } catch (err) {
+            this._devicePixelObserver.observe(container);
+        }
+    }
+
+    _fillNativePaddingStrip(pw, ph, serverWidth, serverHeight) {
+        if (!this._target || (pw <= serverWidth && ph <= serverHeight)) {
+            return;
+        }
+        const ctx = this._renderer?._visibleCtx ||
+            this._renderer?._canvas2D?._visibleCtx ||
+            this._target.getContext('2d');
+        if (!ctx) {
+            return;
+        }
+        let bgColor = 'rgb(40, 40, 40)';
+        const container = this._container || this._target.parentNode;
+        if (container && typeof getComputedStyle === 'function') {
+            try {
+                const computedBg = getComputedStyle(container).backgroundColor;
+                if (computedBg && computedBg !== 'rgba(0, 0, 0, 0)' && computedBg !== 'transparent') {
+                    bgColor = computedBg;
+                }
+            } catch (err) {
+                // Fall back to default background color
+            }
+        }
+        // Save/restore so Canvas2DRenderer._prevDrawStyle stays in sync with ctx.fillStyle
+        ctx.save();
+        ctx.fillStyle = bgColor;
+        if (pw > serverWidth) {
+            ctx.fillRect(serverWidth, 0, pw - serverWidth, ph);
+        }
+        if (ph > serverHeight) {
+            ctx.fillRect(0, serverHeight, pw, ph - serverHeight);
+        }
+        ctx.restore();
+    }
+
     _rescale(factor) {
         this._scale = factor;
         const vp = this._screens[0];
+        const container = this._container || this._target?.parentNode || null;
+        const dpr = normalizePixelRatio(window.devicePixelRatio);
+        const rect = container
+            ? container.getBoundingClientRect()
+            : { width: 0, height: 0 };
+        const physicalSize = resolveObservedDevicePixelSize(
+            this._devicePixelWidth,
+            this._devicePixelHeight,
+            this._devicePixelObserverDpr,
+            dpr,
+            rect.width,
+            rect.height
+        );
+        const pw = physicalSize.width;
+        const ph = physicalSize.height;
 
-        // NB(directxman12): If you set the width directly, or set the
-        //                   style width to a number, the canvas is cleared.
-        //                   However, if you set the style width to a string
-        //                   ('NNNpx'), the canvas is scaled without clearing.
-        const width = factor * vp.serverWidth + 'px';
-        const height = factor * vp.serverHeight + 'px';
+        const nativeActive = isNativeSurfaceActive({
+            nativeEligible: this._nativeSurfaceEligible,
+            hasContainer: Boolean(container),
+            hasTarget: Boolean(this._target),
+            screenCount: this._screens.length,
+            clipViewport: this._clipViewport,
+            scale: factor,
+            devicePixelRatio: dpr,
+            serverWidth: vp.serverWidth,
+            serverHeight: vp.serverHeight,
+            fbWidth: this._fbWidth,
+            fbHeight: this._fbHeight,
+            devicePixelWidth: pw,
+            devicePixelHeight: ph
+        });
+        this._nativeSurfaceActive = nativeActive;
 
-        this._renderer?.rescale(factor, width, height, vp.serverWidth, vp.serverHeight, vp.width);
+        if (nativeActive) {
+            if (this._target.style.margin !== '0' && this._target.style.margin !== '0px') {
+                this._target.style.margin = '0';
+            }
+            this._renderer?.rescale(factor, '100%', '100%', vp.serverWidth, vp.serverHeight, vp.width);
+            this._renderer?.viewportChangeSize(pw, ph);
+            this._fillNativePaddingStrip(pw, ph, vp.serverWidth, vp.serverHeight);
+        } else {
+            if (this._target && (this._target.style.margin === '0px' || this._target.style.margin === '0')) {
+                this._target.style.margin = 'auto';
+            }
+            const singleUnclipped = !this._clipViewport && this._screens.length === 1;
+            const backingW = (singleUnclipped && this._fbWidth > 0) ? this._fbWidth : vp.serverWidth;
+            const backingH = (singleUnclipped && this._fbHeight > 0) ? this._fbHeight : vp.serverHeight;
+            if (this._renderer && backingW > 0 && backingH > 0 &&
+                (this._target.width !== backingW || this._target.height !== backingH)) {
+                this._renderer.viewportChangeSize(backingW, backingH);
+            }
+
+            // NB(directxman12): If you set the width directly, or set the
+            //                   style width to a number, the canvas is cleared.
+            //                   However, if you set the style width to a string
+            //                   ('NNNpx'), the canvas is scaled without clearing.
+            const width = factor * vp.serverWidth + 'px';
+            const height = factor * vp.serverHeight + 'px';
+
+            this._renderer?.rescale(factor, width, height, vp.serverWidth, vp.serverHeight, vp.width);
+        }
 
         requestAnimationFrame( () => { this._pushAsyncFrame(); });
     }

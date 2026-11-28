@@ -177,11 +177,19 @@ export default class WebRTCController {
                 }
             }
             if (!video || !video.videoHeight) return;
-            const canvas = this._rfb._display && this._rfb._display._target;
+            const display = this._rfb._display;
+            const canvas = display && display._target;
             if (!canvas || !canvas.getContext) return;
             const ctx = canvas.getContext('2d');
             if (!ctx) return;
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const vp = display.screens && display.screens[0];
+            const drawW = (display._nativeSurfaceActive && vp && vp.serverWidth > 0)
+                ? vp.serverWidth
+                : canvas.width;
+            const drawH = (display._nativeSurfaceActive && vp && vp.serverHeight > 0)
+                ? vp.serverHeight
+                : canvas.height;
+            ctx.drawImage(video, 0, 0, drawW, drawH);
         } catch (e) {
             Log.Warn('Freeze-frame capture failed: ' + e);
         }

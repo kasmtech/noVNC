@@ -14,6 +14,7 @@ import {
     computeScreenLayout,
     extractDevicePixelSize,
     floorEvenDimension,
+    isCrispScale,
     isNativeSurfaceActive,
     isOneToOneScale,
     normalizePixelRatio,
@@ -119,8 +120,8 @@ describe('Display fractional-DPR scaling helpers and integration', function () {
         });
     });
 
-    describe('isOneToOneScale & resolveImageRendering', function () {
-        it('should recognize fractional HiDPI 1:1 scales as crisp', function () {
+    describe('isOneToOneScale, isCrispScale & resolveImageRendering', function () {
+        it('should recognize fractional HiDPI 1:1 scales as 1:1 physical pixels', function () {
             const chromeOs110 = 2560 / 2327;
             expect(isOneToOneScale(1 / chromeOs110, chromeOs110)).to.equal(true);
             expect(isOneToOneScale(1 / 1.25, 1.25)).to.equal(true);
@@ -129,16 +130,54 @@ describe('Display fractional-DPR scaling helpers and integration', function () {
             expect(isOneToOneScale(1, 1)).to.equal(true);
             expect(isOneToOneScale(0.8, 1)).to.equal(false);
             expect(isOneToOneScale(1, 1.5)).to.equal(false);
+            expect(isOneToOneScale(1, 2)).to.equal(false);
+            expect(isOneToOneScale(1, 3)).to.equal(false);
         });
 
-        it('should disable smoothing on HiDPI 1:1 in auto mode', function () {
+        it('should recognize both HiDPI 1:1 and unscaled integer DPRs (DPR 2 and 3 at scale 1) as crisp', function () {
+            const chromeOs110 = 2560 / 2327;
+            expect(isCrispScale(1 / chromeOs110, chromeOs110)).to.equal(true);
+            expect(isCrispScale(1 / 1.5, 1.5)).to.equal(true);
+            expect(isCrispScale(0.5, 2)).to.equal(true);
+            expect(isCrispScale(1 / 3, 3)).to.equal(true);
+            expect(isCrispScale(1, 1)).to.equal(true);
+            expect(isCrispScale(1, 2)).to.equal(true);
+            expect(isCrispScale(1, 3)).to.equal(true);
+            expect(isCrispScale(1, undefined)).to.equal(true);
+            expect(isCrispScale(1, 0)).to.equal(true);
+            expect(isCrispScale(1, NaN)).to.equal(true);
+            expect(isCrispScale(1, -2)).to.equal(true);
+            expect(isCrispScale(1, 1.25)).to.equal(false);
+            expect(isCrispScale(1, 1.5)).to.equal(false);
+            expect(isCrispScale(1, 0.8)).to.equal(false);
+            expect(isCrispScale(1, chromeOs110)).to.equal(false);
+            expect(isCrispScale(0.75, 2)).to.equal(false);
+            expect(isCrispScale(2, 1)).to.equal(false);
+            expect(isCrispScale(NaN, 2)).to.equal(false);
+            expect(isCrispScale(0, 2)).to.equal(false);
+            expect(isCrispScale(-1, 2)).to.equal(false);
+            expect(isCrispScale(Infinity, 2)).to.equal(false);
+        });
+
+        it('should disable smoothing on HiDPI 1:1 and on unscaled integer DPR 2 and 3 in auto mode', function () {
             const dpr = 2560 / 2327;
             expect(resolveImageRendering(0, 1 / dpr, dpr, 2326, false)).to.equal('pixelated');
             expect(resolveImageRendering(0, 1 / dpr, dpr, 2326, true)).to.equal('crisp-edges');
+            expect(resolveImageRendering(0, 1, 2, 1920, false)).to.equal('pixelated');
+            expect(resolveImageRendering(0, 1, 2, 1920, true)).to.equal('crisp-edges');
+            expect(resolveImageRendering(0, 1, 3, 1920, false)).to.equal('pixelated');
+            expect(resolveImageRendering(0, 1, 3, 1920, true)).to.equal('crisp-edges');
+            expect(resolveImageRendering(0, 1, 2, 0, false)).to.equal(null);
+            expect(resolveImageRendering(0, 1, 3, 0, false)).to.equal(null);
+            expect(resolveImageRendering(0, 1, 1.5, 1920, false)).to.equal('auto');
+            expect(resolveImageRendering(0, 1, dpr, 2326, false)).to.equal('auto');
             expect(resolveImageRendering(0, 0.75, dpr, 2326, false)).to.equal('auto');
             expect(resolveImageRendering(0, 1 / dpr, dpr, 0, false)).to.equal(null);
             expect(resolveImageRendering(1, 1, 1, 1920, false)).to.equal('auto');
+            expect(resolveImageRendering(1, 1, 2, 1920, false)).to.equal('auto');
+            expect(resolveImageRendering(1, 1, 3, 1920, false)).to.equal('auto');
             expect(resolveImageRendering(2, 0.5, 1, 1920, false)).to.equal('pixelated');
+            expect(resolveImageRendering(2, 0.5, 2, 0, true)).to.equal('crisp-edges');
         });
     });
 
@@ -268,6 +307,48 @@ describe('Display fractional-DPR scaling helpers and integration', function () {
             expect(computeScreenLayout({ ...base, resolutionQuality: 0 }).nativeEligible).to.equal(false);
             expect(computeScreenLayout({ ...base, screenCount: 2 }).nativeEligible).to.equal(false);
             expect(computeScreenLayout({ ...base, hiDpi: false }).nativeEligible).to.equal(false);
+
+            for (const intDpr of [2, 3]) {
+                const unscaledBase = {
+                    parentWidth: 1920,
+                    parentHeight: 1080,
+                    devicePixelWidth: 1920 * intDpr,
+                    devicePixelHeight: 1080 * intDpr,
+                    devicePixelObserverDpr: intDpr,
+                    devicePixelRatio: intDpr,
+                    resolutionQuality: 2,
+                    hiDpi: false,
+                    disableLimit: false,
+                    disableScaling: false,
+                    clipViewport: false,
+                    streamMode: encodings.pseudoEncodingStreamingModeAVCSW,
+                    screenCount: 1
+                };
+                const remoteNonHiDpi = computeScreenLayout(unscaledBase);
+                expect(remoteNonHiDpi.serverWidth).to.equal(1920);
+                expect(remoteNonHiDpi.serverHeight).to.equal(1080);
+                expect(remoteNonHiDpi.scale).to.equal(1);
+                expect(remoteNonHiDpi.nativeEligible).to.equal(false);
+
+                const resizeOff = computeScreenLayout({
+                    ...unscaledBase,
+                    disableScaling: true,
+                    serverReportedWidth: 1920,
+                    serverReportedHeight: 1080,
+                    currentServerWidth: 1920,
+                    currentServerHeight: 1080
+                });
+                expect(resizeOff.serverWidth).to.equal(1920);
+                expect(resizeOff.serverHeight).to.equal(1080);
+                expect(resizeOff.scale).to.equal(1);
+                expect(resizeOff.nativeEligible).to.equal(false);
+
+                const clipped = computeScreenLayout({ ...unscaledBase, clipViewport: true });
+                expect(clipped.serverWidth).to.equal(1920);
+                expect(clipped.serverHeight).to.equal(1080);
+                expect(clipped.scale).to.equal(1);
+                expect(clipped.nativeEligible).to.equal(false);
+            }
         });
     });
 
@@ -296,8 +377,10 @@ describe('Display fractional-DPR scaling helpers and integration', function () {
                 devicePixelWidth: 2560 + MAX_NATIVE_ALIGNMENT_PAD,
                 devicePixelHeight: 1440 + MAX_NATIVE_ALIGNMENT_PAD
             })).to.equal(true);
-            // Non-1:1 scale factor (e.g. scale=1.0 at dpr=1.25 when scaleViewport=false) must NOT activate
+            // Non-1:1 scale factor (e.g. scale=1.0 at dpr=1.25, 2, or 3 when scaleViewport=false) must NOT activate
             expect(isNativeSurfaceActive({ ...base, scale: 1.0 })).to.equal(false);
+            expect(isNativeSurfaceActive({ ...base, scale: 1.0, devicePixelRatio: 2 })).to.equal(false);
+            expect(isNativeSurfaceActive({ ...base, scale: 1.0, devicePixelRatio: 3 })).to.equal(false);
         });
 
         it('should deactivate when leaving native mode or during resize debounce mismatch', function () {
@@ -423,6 +506,14 @@ describe('Display fractional-DPR scaling helpers and integration', function () {
 
             renderer.rescale(0.7, '1600px', '900px', 2560, 1440, 2326);
             expect(target.style.imageRendering).to.equal('auto');
+
+            // Unscaled (factor === 1) at integer DPR 2 and 3 must also select crisp rendering
+            for (const intDpr of [2, 3]) {
+                setWindowDpr(intDpr);
+                target.style.imageRendering = 'auto';
+                renderer.rescale(1, '1920px', '1080px', 1920, 1080, 1920);
+                expect(target.style.imageRendering).to.equal(expectedCrisp);
+            }
         });
 
         it('WebGLRenderer should propagate imageRendering, switch NEAREST/LINEAR filter, and scissor-clear padding strip', function () {
@@ -514,6 +605,28 @@ describe('Display fractional-DPR scaling helpers and integration', function () {
                 close() {}
             }, 0, 0, 2561, 1441);
             expect(glCalls.filter(c => c[0] === 'scissor')).to.deep.equal([]);
+
+            // Unscaled (factor === 1) at integer DPR 2 and 3 propagates crisp imageRendering and NEAREST filter
+            for (const intDpr of [2, 3]) {
+                setWindowDpr(intDpr);
+                renderer.rescale(1, '1920px', '1080px', 1920, 1080, 1920);
+                expect(webglCanvas.style.imageRendering).to.equal(expectedCrisp);
+                renderer.drawVideoFrame({
+                    displayWidth: 1920,
+                    displayHeight: 1080,
+                    close() {}
+                }, 0, 0, 1920, 1080);
+                expect(renderer._textureFilter).to.equal(mockGl.NEAREST);
+
+                // Downscaled VideoFrame at factor === 1 on integer DPR still falls back to LINEAR
+                renderer.drawVideoFrame({
+                    displayWidth: 1280,
+                    displayHeight: 720,
+                    close() {}
+                }, 0, 0, 1920, 1080);
+                expect(renderer._textureFilter).to.equal(mockGl.LINEAR);
+                expect(webglCanvas.style.imageRendering).to.equal(expectedCrisp);
+            }
         });
 
         it('Display._rescale should pin 100%x100% in native 1:1 mode, preserve _prevDrawStyle, and restore multi-monitor/non-1:1 sizing', function () {
@@ -578,6 +691,25 @@ describe('Display fractional-DPR scaling helpers and integration', function () {
             expect(target.style.margin).to.equal('auto');
             expect(target.width).to.equal(2560);
             expect(target.style.width).to.equal('2560px');
+            expect(target.style.imageRendering).to.equal('auto');
+
+            // Unscaled (scale=1.0) on integer DPR 2 and 3 stays out of native 1:1 surface pinning (even if devicePixelWidth matches) but keeps pixelated rendering
+            for (const intDpr of [2, 3]) {
+                setWindowDpr(intDpr);
+                displayStub._devicePixelWidth = 2560;
+                displayStub._devicePixelHeight = 1440;
+                displayStub._devicePixelObserverDpr = intDpr;
+                target.style.imageRendering = 'auto';
+                displayStub._rescale(1.0);
+                expect(displayStub._nativeSurfaceActive).to.equal(false);
+                expect(target.width).to.equal(2560);
+                expect(target.style.width).to.equal('2560px');
+                expect(target.style.imageRendering).to.equal(expectedCrisp);
+            }
+            displayStub._devicePixelWidth = 2561;
+            displayStub._devicePixelHeight = 1440;
+            displayStub._devicePixelObserverDpr = dpr;
+            setWindowDpr(dpr);
 
             // Multi-monitor (!clipViewport && screens.length === 2): target must stay vp.serverWidth (2560), NOT combined _fbWidth (4480)
             displayStub._fbWidth = 4480;

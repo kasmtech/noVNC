@@ -151,6 +151,19 @@ export function isOneToOneScale(factor, devicePixelRatio) {
 }
 
 /**
+ * Return true when framebuffer pixels map cleanly without fractional physical-pixel
+ * resampling: either 1:1 physical pixels (factor * dpr ≈ 1) or unscaled CSS factor 1
+ * on an integer DPR (e.g. 2x or 3x physical-pixel blocks).
+ * @param {number} factor
+ * @param {number} devicePixelRatio
+ * @returns {boolean}
+ */
+export function isCrispScale(factor, devicePixelRatio) {
+    const dpr = normalizePixelRatio(devicePixelRatio);
+    return isOneToOneScale(factor, dpr) || (factor === 1 && Number.isInteger(dpr));
+}
+
+/**
  * Resolve CSS image-rendering mode for Canvas2D/WebGL canvases.
  * Returns null if no change is warranted (e.g. zero viewport width in auto mode).
  * @param {number} antiAliasing - 0 = auto, 1 = smooth, 2 = crisp
@@ -161,13 +174,13 @@ export function isOneToOneScale(factor, devicePixelRatio) {
  * @returns {string|null}
  */
 export function resolveImageRendering(antiAliasing, factor, devicePixelRatio, viewPortWidth, isFirefox) {
-    const isOneToOne = isOneToOneScale(factor, devicePixelRatio);
+    const isCrisp = isCrispScale(factor, devicePixelRatio);
     const crispValue = isFirefox ? 'crisp-edges' : 'pixelated';
 
-    if (antiAliasing === 2 || (antiAliasing === 0 && isOneToOne && viewPortWidth > 0)) {
+    if (antiAliasing === 2 || (antiAliasing === 0 && isCrisp && viewPortWidth > 0)) {
         return crispValue;
     }
-    if (antiAliasing === 1 || (antiAliasing === 0 && !isOneToOne)) {
+    if (antiAliasing === 1 || (antiAliasing === 0 && !isCrisp)) {
         return 'auto';
     }
     return null;
@@ -176,7 +189,7 @@ export function resolveImageRendering(antiAliasing, factor, devicePixelRatio, vi
 /**
  * Resolve WebGL texture min/mag filter ('NEAREST' or 'LINEAR') for a VideoFrame blit.
  * @param {number} antiAliasing
- * @param {boolean} isOneToOne
+ * @param {boolean} isCrisp
  * @param {number|undefined|null} frameDisplayWidth
  * @param {number|undefined|null} frameDisplayHeight
  * @param {number} targetWidth
@@ -185,7 +198,7 @@ export function resolveImageRendering(antiAliasing, factor, devicePixelRatio, vi
  */
 export function resolveWebGLTextureFilter(
     antiAliasing,
-    isOneToOne,
+    isCrisp,
     frameDisplayWidth,
     frameDisplayHeight,
     targetWidth,
@@ -199,7 +212,7 @@ export function resolveWebGLTextureFilter(
     }
     const matchesTarget = frameDisplayWidth == null ||
         (frameDisplayWidth === targetWidth && frameDisplayHeight === targetHeight);
-    return (isOneToOne && matchesTarget) ? 'NEAREST' : 'LINEAR';
+    return (isCrisp && matchesTarget) ? 'NEAREST' : 'LINEAR';
 }
 
 /**

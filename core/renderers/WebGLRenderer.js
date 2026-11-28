@@ -1,7 +1,7 @@
 import * as Log from "../util/logging";
 import {perfLogger} from "../util/performance-logger";
 import { placeOverCanvas, positionHost } from "../util/element.js";
-import { isOneToOneScale, resolveWebGLTextureFilter } from "../util/display-scaling.js";
+import { isCrispScale, resolveWebGLTextureFilter } from "../util/display-scaling.js";
 
 export class WebGLRenderer {
     static vertexShaderSource = `
@@ -31,7 +31,7 @@ export class WebGLRenderer {
         this._lastHeight = 0;
         this._serverWidth = 0;
         this._serverHeight = 0;
-        this._isOneToOne = false;
+        this._isCrispScale = false;
         this._textureFilter = gl.LINEAR;
         this._isWebGL2 = gl instanceof WebGL2RenderingContext;
 
@@ -245,7 +245,7 @@ export class WebGLRenderer {
         this._serverWidth = serverWidth;
         this._serverHeight = serverHeight;
         this._canvas2D.rescale(factor, width, height, serverWidth, serverHeight, viewPortWidth);
-        this._isOneToOne = isOneToOneScale(factor, window.devicePixelRatio);
+        this._isCrispScale = isCrispScale(factor, window.devicePixelRatio);
         if (this._webglCanvas) {
             const targetRendering = this._canvas2D._target.style.imageRendering;
             if (this._webglCanvas.style.imageRendering !== targetRendering) {
@@ -344,7 +344,7 @@ export class WebGLRenderer {
         const gl = this.gl;
         const mode = resolveWebGLTextureFilter(
             this.antiAliasing,
-            this._isOneToOne,
+            this._isCrispScale,
             frame ? frame.displayWidth : null,
             frame ? frame.displayHeight : null,
             w,
